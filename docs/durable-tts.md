@@ -127,8 +127,10 @@ Every line the module speaks (`tts`, `narrate` and `choices`) is also appended t
 the node's speech feed, `~/.local/state/agent-utils/tts/speech.jsonl`
 (`PI_TTS_FEED_PATH`), as interactive Pi does, whether or not it could be played.
 `ag tts` and ag dash's TTS panel read it. A record's `session` is the pi-daemon
-session id and its `agent` is `CACO_AGENT_NAME`, `CACO_SHORT_NAME` or
-`session-<id>`. `PI_INCOGNITO=1` or `PI_TTS_FEED_ENABLED=0` turns it off.
+session id and its `cwd` the session's directory. Its `agent` is
+`CACO_AGENT_NAME`, `CACO_SHORT_NAME` or the Cacophony identity, else
+`pi-daemon-<directory name>` as for the session's [media shares](durable-media.md),
+else `session-<id>`. `PI_INCOGNITO=1` or `PI_TTS_FEED_ENABLED=0` turns it off.
 
 ## Replays and state
 

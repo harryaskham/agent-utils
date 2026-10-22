@@ -5,7 +5,7 @@ use crate::{
     config::{Config, Host},
     gallery,
     model::{Listing, MediaKind, SpeechRecord},
-    paratenic::{self, Endpoint},
+    paratenic::{self, Endpoint, NodeEndpoints},
     speech::{self, MuteReceipt, SpeechKind},
     store, transport,
 };
@@ -52,7 +52,7 @@ impl Status {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Check {
-    /// ssh | paratenic | speech | images | audio
+    /// ssh | local | node | pi-daemon | pi-bridge | paratenic | speech | images | audio
     pub name: String,
     pub status: Status,
     pub summary: String,
@@ -263,8 +263,9 @@ async fn ssh_and_speech(config: &Config, host: &Host) -> Vec<Check> {
     checks
 }
 
-/// Minimal bounded HTTP/1.1 GET for the plaintext Paratenic /status probe.
-async fn http_status(base: &str, timeout: Duration) -> Result<(u16, Value)> {
+/// Minimal bounded HTTP/1.1 GET of an unauthenticated JSON probe (Paratenic
+/// `/status`, pi-daemon `/readyz`).
+async fn http_status(base: &str, path: &str, timeout: Duration) -> Result<(u16, Value)> {
     let url = url::Url::parse(base).map_err(|e| crate::Error::Invalid(e.to_string()))?;
     if url.scheme() != "http" {
         return Err(crate::Error::Invalid(
@@ -276,7 +277,7 @@ async fn http_status(base: &str, timeout: Duration) -> Result<(u16, Value)> {
     let work = async {
         let mut stream = tokio::net::TcpStream::connect((host.as_str(), port)).await?;
         stream
-            .write_all(format!("GET /status HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: application/json\r\nConnection: close\r\n\r\n").as_bytes())
+            .write_all(format!("GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: application/json\r\nConnection: close\r\n\r\n").as_bytes())
             .await?;
         let mut bytes = vec![];
         stream.take(1024 * 1024 + 1).read_to_end(&mut bytes).await?;
@@ -338,7 +339,9 @@ async fn paratenic_check(
     };
     let probe = async {
         match endpoint.http_base() {
-            Some(base) if base.starts_with("http://") => http_status(&base, timeout).await.ok(),
+            Some(base) if base.starts_with("http://") => {
+                http_status(&base, "/status", timeout).await.ok()
+            }
             _ => None,
         }
     };
@@ -377,31 +380,38 @@ async fn paratenic_check(
     }
     match ahp {
         Ok(Ok((connect_ms, sessions))) => {
-            let waiting = sessions
+            let backend_offline = |s: &&ahp_types::state::SessionSummary| {
+                s.meta
+                    .as_ref()
+                    .and_then(|m| m.get("paratenic"))
+                    .and_then(|m| m.get("backendOnline"))
+                    .and_then(Value::as_bool)
+                    == Some(false)
+            };
+            let input_needed: Vec<_> = sessions
                 .iter()
                 .filter(|s| SessionStatus::from_bits(s.status).contains(SessionStatus::InputNeeded))
-                .count();
-            let offline = sessions
-                .iter()
-                .filter(|s| {
-                    s.meta
-                        .as_ref()
-                        .and_then(|m| m.get("paratenic"))
-                        .and_then(|m| m.get("backendOnline"))
-                        .and_then(Value::as_bool)
-                        == Some(false)
-                })
-                .count();
+                .collect();
+            // A waiting session whose backend is gone cannot be answered: stale.
+            let stale = input_needed.iter().filter(|s| backend_offline(s)).count();
+            let waiting = input_needed.len() - stale;
+            let offline = sessions.iter().filter(backend_offline).count();
             detail["connectMs"] = connect_ms.into();
             detail["catalogue"] = sessions.len().into();
-            detail["inputNeeded"] = waiting.into();
+            detail["inputNeeded"] = input_needed.len().into();
+            detail["staleInputNeeded"] = stale.into();
             detail["backendOffline"] = offline.into();
             if connect_ms > 5_000 {
                 warnings.push(format!("slow connect {connect_ms} ms"));
             }
             let mut summary = format!(
-                "{} sessions · {waiting} waiting · {latency} ms",
-                sessions.len()
+                "{} sessions · {waiting} waiting{} · {latency} ms",
+                sessions.len(),
+                if stale > 0 {
+                    format!(" · {stale} stale")
+                } else {
+                    String::new()
+                }
             );
             if !warnings.is_empty() {
                 summary.push_str(&format!(" · {}", warnings.join("; ")));
@@ -459,6 +469,125 @@ async fn paratenic_check(
     }
 }
 
+/// One pi-daemon or bridge `/ahp`: the unauthenticated `/readyz` probe
+/// (version, draining) beside the authenticated session catalogue.
+async fn pi_daemon_check(
+    config: &Config,
+    name: &str,
+    endpoint: Option<Endpoint>,
+    wanted: bool,
+) -> (Check, usize) {
+    let Some(endpoint) = endpoint else {
+        let why = if wanted {
+            "not configured (no pi-client host or Culture entry)"
+        } else {
+            "disabled"
+        };
+        return (check(name, Status::Skip, why), 0);
+    };
+    let timeout = Duration::from_secs(config.paratenic.request_timeout_seconds);
+    let started = Instant::now();
+    let ahp = async {
+        let connect = Duration::from_secs(config.connect_timeout_seconds).min(timeout);
+        let connection = paratenic::Connection::open_with(&endpoint, connect, timeout).await?;
+        let sessions = connection.sessions().await;
+        let connect_ms = connection.connect_ms;
+        connection.close().await;
+        Ok::<_, crate::Error>((connect_ms, sessions?))
+    };
+    let probe = async {
+        match endpoint.http_base() {
+            Some(base) if base.starts_with("http://") => {
+                http_status(&base, "/readyz", timeout).await.ok()
+            }
+            _ => None,
+        }
+    };
+    let (ahp, ready) = tokio::join!(tokio::time::timeout(timeout * 3, ahp), probe);
+    let latency = started.elapsed().as_millis() as u64;
+    let mut detail = serde_json::json!({"url": endpoint.url, "source": endpoint.source});
+    let version = ready
+        .as_ref()
+        .and_then(|(_, body)| body.get("version"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if let Some((code, body)) = &ready {
+        detail["readyz"] = (*code).into();
+        if let Some(instance) = body.get("instance") {
+            detail["instance"] = instance.clone();
+        }
+    }
+    if let Some(version) = &version {
+        detail["version"] = version.clone().into();
+    }
+    let draining = ready.as_ref().is_some_and(|(code, _)| *code == 503);
+    let label = version
+        .as_deref()
+        .map(|v| format!("v{v} · "))
+        .unwrap_or_default();
+    let done = |status, summary: String, detail| Check {
+        latency_ms: Some(latency),
+        detail: Some(detail),
+        ..check(name, status, summary)
+    };
+    match ahp {
+        Ok(Ok((connect_ms, sessions))) => {
+            let waiting = sessions
+                .iter()
+                .filter(|s| SessionStatus::from_bits(s.status).contains(SessionStatus::InputNeeded))
+                .count();
+            detail["connectMs"] = connect_ms.into();
+            detail["catalogue"] = sessions.len().into();
+            detail["inputNeeded"] = waiting.into();
+            let mut warnings = vec![];
+            if draining {
+                warnings.push("draining".to_owned());
+            }
+            if connect_ms > 5_000 {
+                warnings.push(format!("slow connect {connect_ms} ms"));
+            }
+            let noun = if name == "pi-bridge" {
+                "TUI Pi"
+            } else {
+                "session"
+            };
+            let mut summary = format!(
+                "{label}{} {noun}{} · {waiting} waiting · {latency} ms",
+                sessions.len(),
+                if sessions.len() == 1 { "" } else { "s" }
+            );
+            if !warnings.is_empty() {
+                summary.push_str(&format!(" · {}", warnings.join("; ")));
+            }
+            let status = if warnings.is_empty() {
+                Status::Ok
+            } else {
+                Status::Warn
+            };
+            (done(status, summary, detail), waiting)
+        }
+        Ok(Err(error)) => {
+            let text = error.to_string();
+            let (status, summary) = if name == "pi-bridge" && paratenic::not_found(&text) {
+                (
+                    Status::Warn,
+                    format!("{label}no /ahp: TUI Pi questions need pi-daemon ≥ 1.11"),
+                )
+            } else {
+                match paratenic::offline_reason(&text) {
+                    Some(reason) => (Status::Offline, format!("offline · {reason}")),
+                    None => (Status::Error, text),
+                }
+            };
+            (done(status, summary, detail), 0)
+        }
+        Err(_) => (
+            done(Status::Offline, "offline · timed out".into(), detail),
+            0,
+        ),
+    }
+}
+
 fn images_check(config: &Config, host: &Host) -> Check {
     let Ok(root) = gallery::cache_path(config, None) else {
         return check("images", Status::Skip, "no gallery cache");
@@ -483,22 +612,38 @@ fn audio_check(config: &Config, host: &Host) -> Check {
     }
 }
 
-pub async fn report(config: &Config, targets: Vec<(Host, Option<Endpoint>)>) -> DoctorReport {
+/// Reachable enough to serve agents (a warning still answers).
+fn answering(check: &Check) -> bool {
+    matches!(check.status, Status::Ok | Status::Warn)
+}
+
+pub async fn report(config: &Config, targets: Vec<(Host, NodeEndpoints)>) -> DoctorReport {
     let mut jobs = JoinSet::new();
-    for (host, endpoint) in targets {
+    for (host, endpoints) in targets {
         let config = config.clone();
         jobs.spawn(async move {
-            let (mut checks, (paratenic, waiting)) = tokio::join!(
+            let daemon_wanted = paratenic::daemon_enabled(&config, &host);
+            let bridge_wanted = paratenic::bridge_enabled(&config, &host);
+            let (
+                mut link,
+                (mut paratenic, paratenic_waiting),
+                (mut daemon, daemon_waiting),
+                (mut bridge, bridge_waiting),
+            ) = tokio::join!(
                 ssh_and_speech(&config, &host),
-                paratenic_check(&config, &host, endpoint)
+                paratenic_check(&config, &host, endpoints.paratenic),
+                pi_daemon_check(&config, "pi-daemon", endpoints.daemon, daemon_wanted),
+                pi_daemon_check(&config, "pi-bridge", endpoints.bridge, bridge_wanted),
             );
-            let link_offline = checks.first().is_some_and(|c| c.status == Status::Offline);
+            let link_offline = link.first().is_some_and(|c| c.status == Status::Offline);
             let images = images_check(&config, &host);
             let audio = audio_check(&config, &host);
-            let paratenic_down = matches!(paratenic.status, Status::Offline | Status::Skip);
-            let (status, checks) = if link_offline && paratenic_down {
+            let agents_down = [&paratenic, &daemon, &bridge]
+                .iter()
+                .all(|c| matches!(c.status, Status::Offline | Status::Skip));
+            let (status, checks) = if link_offline && agents_down {
                 // A down node is one quiet line: why, plus what is still cached.
-                let reason = checks[0].summary.clone();
+                let reason = link[0].summary.clone();
                 let mut cached = vec![check("node", Status::Offline, reason), images];
                 // Only mention audio for a down node once something was cached.
                 if audio.status == Status::Ok {
@@ -506,20 +651,42 @@ pub async fn report(config: &Config, targets: Vec<(Host, Option<Endpoint>)>) -> 
                 }
                 (Status::Offline, cached)
             } else {
-                let mut paratenic = paratenic;
                 if link_offline {
                     // Agents answer over AHP, so the node is up; SSH is the problem.
-                    checks[0].status = Status::Warn;
-                    checks[0].summary =
-                        checks[0]
+                    link[0].status = Status::Warn;
+                    link[0].summary =
+                        link[0]
                             .summary
                             .replacen("offline", "unreachable over SSH", 1);
+                }
+                let pi_daemon_up = answering(&daemon) || answering(&bridge);
+                if paratenic.status == Status::Offline && (pi_daemon_up || link_offline) {
+                    // Paratenic is optional: pi-daemon serves this node's agents.
+                    paratenic.status = Status::Skip;
+                    paratenic.summary = format!(
+                        "{} · optional",
+                        paratenic.summary.trim_start_matches("offline · ")
+                    );
                 } else if paratenic.status == Status::Offline {
-                    // Reachable over SSH but Paratenic is not answering.
+                    // Reachable over SSH but no agent host answers.
                     paratenic.status = Status::Warn;
                     paratenic.summary = paratenic.summary.replacen("offline", "not answering", 1);
                 }
-                checks.insert(1.min(checks.len()), paratenic);
+                for c in [&mut daemon, &mut bridge] {
+                    if c.status == Status::Offline && !link_offline {
+                        // Configured for this node, which is up, but not answering.
+                        c.status = Status::Warn;
+                        c.summary = c.summary.replacen("offline", "not answering", 1);
+                    }
+                }
+                let mut checks = vec![link.remove(0)];
+                // Explicitly disabled sources stay out of the card.
+                checks.extend(
+                    [daemon, bridge, paratenic]
+                        .into_iter()
+                        .filter(|c| !(c.status == Status::Skip && c.summary == "disabled")),
+                );
+                checks.extend(link);
                 checks.push(images);
                 checks.push(audio);
                 let status = checks
@@ -534,6 +701,13 @@ pub async fn report(config: &Config, targets: Vec<(Host, Option<Endpoint>)>) -> 
                     .max()
                     .unwrap_or(Status::Ok);
                 (status, checks)
+            };
+            // A TUI Pi's question can show through its bridge and Paratenic;
+            // count the larger of the two, plus the daemon's sessions.
+            let waiting = if status == Status::Offline {
+                0
+            } else {
+                daemon_waiting + bridge_waiting.max(paratenic_waiting)
             };
             (
                 NodeHealth {

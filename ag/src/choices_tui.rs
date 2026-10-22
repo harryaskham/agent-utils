@@ -677,6 +677,10 @@ impl App {
                     .unwrap_or_else(|| "unavailable".into()),
                 Color::Yellow,
             ),
+            AnswerState::Failed => (
+                format!("✕ failed: {}", receipt.reason.clone().unwrap_or_default()),
+                Color::Red,
+            ),
         };
         self.status = Some((text, color));
         self.receipts.insert(
@@ -1265,7 +1269,7 @@ pub async fn run(
             }
             Some(Action::Submit(input)) => {
                 let Some(endpoint) = endpoints.get(&input.host).cloned() else {
-                    app.failed(format!("no Paratenic endpoint for {}", input.host));
+                    app.failed(format!("no AHP endpoint for {}", input.host));
                     continue;
                 };
                 let config = config.clone();

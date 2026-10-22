@@ -146,7 +146,24 @@ fn audio_pull_catalogs_valid_clips_with_metadata_and_rejects_everything_else() {
         (offline.clips, offline.hosts[0].state.as_str()),
         (1, "cached")
     );
-    let failed = service.audio_gallery(input()).unwrap();
+    // A node that never archived audio (no directory) is synced and empty,
+    // not a failure; its cached clips are kept.
+    let empty = service.audio_gallery(input()).unwrap();
+    assert_eq!(
+        (empty.clips, empty.hosts[0].state.as_str()),
+        (1, "synced"),
+        "{empty:?}"
+    );
+    assert!(
+        empty.hosts[0].warnings.iter().all(|w| !w.contains("rsync")),
+        "{empty:?}"
+    );
+    // An unreadable archive fails and retains the cache.
+    fs::rename(root.path().join("gone"), &source).unwrap();
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o000)).unwrap();
+    let failed = service.audio_gallery(input());
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o700)).unwrap();
+    let failed = failed.unwrap();
     assert_eq!(
         (failed.clips, failed.hosts[0].state.as_str()),
         (1, "unavailable")

@@ -18,7 +18,7 @@
 
 import { spawn } from "node:child_process";
 import { accessSync, constants as fsConstants } from "node:fs";
-import { delimiter, isAbsolute, join } from "node:path";
+import { basename, delimiter, isAbsolute, join } from "node:path";
 import { parseEnvStyleArgs, expandEnvReferences } from "./env-args.js";
 import {
   applyAgentTtsConfig,
@@ -272,6 +272,7 @@ export function createDurableAgentAudio({
       const session = await entry.loading;
       // A host may begin passing durable state after the first event; prefer it.
       if (!session.durable && stateFor(ctx).durable) { sessions.delete(sessionId); return loadSession(ctx); }
+      if (typeof ctx?.cwd === "string" && ctx.cwd) session.cwd = ctx.cwd;
       return session;
     }
     entry = { loading: (async () => {
@@ -291,6 +292,7 @@ export function createDurableAgentAudio({
       config = assignSessionVoice(config, sessionId, tts.speech);
       const session = {
         sessionId,
+        cwd: typeof ctx?.cwd === "string" && ctx.cwd ? ctx.cwd : undefined,
         store,
         durable,
         tts,
@@ -364,7 +366,13 @@ export function createDurableAgentAudio({
   // record per spoken line, written whether or not playback succeeds.
   const recordFeed = (session, kind, text) => {
     if (!ttsFeedEnabled(env)) return;
-    const identity = artifactIdentity(null, { sessionManager: { getSessionId: () => session.sessionId } }, env);
+    // Named as the session's media shares are (durable-media): a configured agent
+    // name, else `pi-daemon-<directory>`, so ag shows one agent per session.
+    const place = session.cwd ? basename(session.cwd) : "";
+    const identity = artifactIdentity(null, {
+      cwd: session.cwd,
+      sessionManager: { getSessionId: () => session.sessionId, getSessionName: () => (place ? `pi-daemon-${place}` : undefined) },
+    }, env);
     track(Promise.resolve()
       .then(() => appendFeed({ ...identity, text, kind }, { env }))
       .catch((error) => report(session, "tts feed", error)));

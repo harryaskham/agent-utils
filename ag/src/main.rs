@@ -112,7 +112,7 @@ enum Commands {
         #[command(subcommand)]
         command: Option<ChoicesCommand>,
     },
-    /// Check each node: SSH/ag, Paratenic AHP, speech feed and gallery cache.
+    /// Check each node: SSH/ag, pi-daemon, its bridge, Paratenic, speech feed and media caches.
     Doctor,
     /// Serve a live local web dashboard of choices, health, speech, images and audio.
     Dash {
@@ -188,7 +188,7 @@ enum ChoicesCommand {
         #[arg(long)]
         all: bool,
     },
-    /// Answer one question through Paratenic (ids from `ag choices list --json`).
+    /// Answer one question through its AHP host (ids from `ag choices list --json`).
     Answer {
         #[arg(long = "node")]
         node: String,
@@ -872,7 +872,7 @@ fn print_choices(fleet: &ag::paratenic::FleetChoices, color: bool) -> Result<u8>
         color,
         "2",
         &format!(
-            "{} waiting · {reached}/{configured} AHP hosts reached (Paratenic and pi-daemon){}",
+            "{} waiting · {reached}/{configured} AHP hosts reached (pi-daemon, bridge, Paratenic){}",
             fleet.actionable,
             if missing.is_empty() {
                 String::new()
@@ -1657,7 +1657,7 @@ fn execute(cli: Cli) -> Result<u8> {
                     "refresh 10–86400s, image refresh 30–86400s".into(),
                 ));
             }
-            let targets = service.paratenic_targets(&selection)?;
+            let targets = service.node_targets(&selection)?;
             let tts_lines = tts_lines.unwrap_or(service.config.dash.tts_lines);
             ag::store::check_limit(tts_lines)?;
             let options = ag::dash::DashOptions {

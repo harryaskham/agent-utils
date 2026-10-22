@@ -511,10 +511,17 @@ impl Service {
             .into_iter()
             .find(|(h, _)| h.name == host)
             .and_then(|(_, endpoint)| endpoint)
-            .ok_or_else(|| Error::Config(format!("no Paratenic endpoint for host {host}")))
+            .ok_or_else(|| Error::Config(format!("no AHP endpoint for host {host}")))
+    }
+    /// Each selected node with its Paratenic, pi-daemon and bridge endpoints.
+    pub fn node_targets(
+        &self,
+        selection: &Selection,
+    ) -> Result<Vec<(Host, crate::paratenic::NodeEndpoints)>> {
+        crate::paratenic::node_endpoints(&self.config, &self.hosts(selection)?)
     }
     pub fn doctor(&self, input: crate::doctor::DoctorInput) -> Result<crate::doctor::DoctorReport> {
-        let targets = self.paratenic_targets(&input.selection)?;
+        let targets = self.node_targets(&input.selection)?;
         Ok(self
             .runtime
             .block_on(crate::doctor::report(&self.config, targets)))
@@ -534,9 +541,9 @@ pub fn router() -> ToolRouter<Service> {
     router.add_typed_tool_with_output_schema("ag_audio_list", "List recent shared-audio clip metadata across configured nodes (title, description, duration when known). ≤1000 records per node; filter by exact agent name or archive directory. Not the speech/TTS feed.", Service::audio_list);
     router.add_typed_tool_with_output_schema("ag_audio_info", "Get one shared-audio clip's metadata from an explicitly selected node. Use id from ag_audio_list.", Service::audio_info);
     router.add_typed_tool_with_output_schema("ag_sync", "Run every media sync pathway at once (images and shared audio by default; kinds narrows) for selected/all enabled nodes, regenerating both local viewers. Requires confirmed=true. Per-pathway failures are reported without hiding the other pathway.", Service::sync);
-    router.add_typed_tool_with_output_schema("ag_choices_list", "List pending agent elicitations (interactive_choice, async_choice and RPC dialogs) across the fleet from each node's Paratenic AHP SessionState.inputNeeded. Read-only. all=true includes stale and non-chat entries (tool confirmations/auth) with reasons.", Service::choices);
-    router.add_typed_tool_with_output_schema("ag_choices_answer", "Answer one pending elicitation through Paratenic chat/inputCompleted. Requires confirmed=true after operator approval. Pass revision from ag_choices_list to refuse a changed request. state=indeterminate means no authoritative echo arrived; re-list instead of retrying.", Service::answer);
-    router.add_typed_tool_with_output_schema("ag_doctor", "Read-only fleet health: SSH/ag reachability, Paratenic AHP catalogue and /status, speech feed recency and mute policy, gallery cache freshness. Bounded per node; failures are per check.", Service::doctor);
+    router.add_typed_tool_with_output_schema("ag_choices_list", "List pending agent elicitations (interactive_choice, async_choice and RPC dialogs) across the fleet from each node's AHP hosts' SessionState.inputNeeded: its pi-daemon (Durable sessions, ask_user), its pi-daemon bridge (TUI Pis) and Paratenic when it runs; each is independent. Read-only. all=true includes stale and non-chat entries (tool confirmations/auth) with reasons.", Service::choices);
+    router.add_typed_tool_with_output_schema("ag_choices_answer", "Answer one pending elicitation through its AHP host (host = node, <node>-pi-daemon or <node>-pi-bridge) with chat/inputCompleted. Requires confirmed=true after operator approval. Pass revision from ag_choices_list to refuse a changed request. state=indeterminate means no authoritative echo arrived; re-list instead of retrying.", Service::answer);
+    router.add_typed_tool_with_output_schema("ag_doctor", "Read-only fleet health: SSH/ag reachability, pi-daemon and bridge catalogues and /readyz, optional Paratenic catalogue and /status, speech feed recency and mute policy, gallery cache freshness. Bounded per node; failures are per check.", Service::doctor);
     router.add_typed_tool(
         "ag_hosts_list",
         "List configured nodes and effective paths; no network I/O.",

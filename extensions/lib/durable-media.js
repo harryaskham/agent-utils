@@ -201,6 +201,8 @@ export function createDurableMedia({
     }
     const title = optionalText(params.title, MAX_TITLE) || optionalText(params.label, MAX_TITLE) || name;
     const description = optionalText(params.description, MAX_DESCRIPTION);
+    // The gallery's caption: the label, else the title the agent gave.
+    archived.label = optionalText(params.label, MAX_TITLE) || optionalText(params.title, MAX_TITLE);
     const receipts = receiptsFor(sharedImagesEnabled(env) ? sharedImagesRoot(env) : null);
     if (receipts.root !== null) {
       await storeReceipt(receipts, () => archiveImage(archived, {

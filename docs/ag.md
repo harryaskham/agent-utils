@@ -39,7 +39,7 @@ Agents can now share audio deliberately — songs, sound candidates, samples —
 
 ## Fleet choices, health and dashboard (ag 0.4)
 
-`ag choices` answers pending agent questions from every node in one TUI, reading Paratenic's AHP `inputNeeded` state directly and answering with `chat/inputCompleted`. `ag doctor` checks SSH, Paratenic, speech and gallery freshness per node, reporting down nodes quietly as offline. `ag dash` serves them together as one live local page (choices, health, streaming TTS, embedded gallery) with periodic refresh and image pulls while it runs. See the [ag guide](../ag/README.md#fleet-choices-ag-choices) and [`fleet-acceptance.json`](../ag/fleet-acceptance.json).
+`ag choices` answers pending agent questions from every node in one TUI, reading the AHP `inputNeeded` state of each node's pi-daemon (Durable sessions), pi-daemon bridge (TUI Pis) and, when it runs, Paratenic, and answering with `chat/inputCompleted`; none of the three depends on another. `ag doctor` checks SSH, pi-daemon, the bridge, Paratenic (optional), speech and media freshness per node, reporting down nodes quietly as offline. `ag dash` serves them together as one live local page (choices, health, streaming TTS, embedded gallery) with periodic refresh and image pulls while it runs. See the [ag guide](../ag/README.md#fleet-choices-ag-choices) and [`fleet-acceptance.json`](../ag/fleet-acceptance.json).
 
 ![ag dash choices](assets/ag/fleet/choices-dark-1440x900.png)
 

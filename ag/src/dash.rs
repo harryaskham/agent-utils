@@ -18,7 +18,7 @@ use crate::{
     doctor::{self, DoctorReport},
     gallery::{self, SyncInput, SyncReceipt},
     model::MediaKind,
-    paratenic::{self, AnswerInput, AnswerReceipt, Endpoint, FleetChoices},
+    paratenic::{self, AnswerInput, AnswerReceipt, Endpoint, FleetChoices, NodeEndpoints},
     service::Service,
 };
 use axum::{
@@ -107,8 +107,8 @@ pub struct Snapshot {
 
 struct Dash {
     config: Config,
-    /// One per node: doctor and speech.
-    targets: Vec<(Host, Option<Endpoint>)>,
+    /// One per node with its Paratenic, pi-daemon and bridge: doctor and speech.
+    targets: Vec<(Host, NodeEndpoints)>,
     /// Nodes plus their pi-daemons: choices and answers.
     choice_targets: Vec<(Host, Option<Endpoint>)>,
     endpoints: HashMap<String, Endpoint>,
@@ -686,30 +686,58 @@ async fn answer(
             .into_response();
     }
     let host = input.host.clone();
+    let (session, request_id) = (input.session.clone(), input.request_id.clone());
     let result = match dash.endpoints.get(&host) {
         Some(endpoint) => paratenic::answer(&dash.config, endpoint, input).await,
-        None => Err(Error::Config(format!("no Paratenic endpoint for {host}"))),
+        None => Err(Error::Config(format!("no AHP endpoint for {host}"))),
     };
     dash.inflight
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(&key);
-    match result {
-        Ok(receipt) => {
-            {
-                let mut snapshot = lock(&dash);
-                snapshot.receipts.push_front(receipt.clone());
-                snapshot.receipts.truncate(20);
-            }
-            refresh_node(&dash, &host).await;
-            Json(receipt).into_response()
-        }
+    // Every outcome is kept (recent receipts in /api/state) and logged for
+    // the service journal; answers themselves are never logged.
+    let (receipt, failed) = match result {
+        Ok(receipt) => (receipt, false),
         Err(error) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": error.to_string()})),
-        )
-            .into_response(),
+            AnswerReceipt {
+                host: host.clone(),
+                session,
+                request_id,
+                state: paratenic::AnswerState::Failed,
+                reason: Some(error.to_string()),
+                client_id: None,
+                client_seq: None,
+            },
+            true,
+        ),
+    };
+    eprintln!(
+        "ag dash: answer {} {} {}: {:?}{}",
+        receipt.host,
+        receipt.session,
+        receipt.request_id,
+        receipt.state,
+        receipt
+            .reason
+            .as_deref()
+            .map(|r| format!(" · {r}"))
+            .unwrap_or_default()
+    );
+    {
+        let mut snapshot = lock(&dash);
+        snapshot.receipts.push_front(receipt.clone());
+        snapshot.receipts.truncate(20);
     }
+    if failed {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": receipt.reason, "receipt": receipt})),
+        )
+            .into_response();
+    }
+    refresh_node(&dash, &host).await;
+    Json(receipt).into_response()
 }
 
 impl Dash {
@@ -936,11 +964,18 @@ pub struct Started {
 
 /// Bind, start background refreshers, then serve until Ctrl-C or service SIGTERM.
 pub async fn run(
-    config: Config,
-    targets: Vec<(Host, Option<Endpoint>)>,
+    mut config: Config,
+    targets: Vec<(Host, NodeEndpoints)>,
     options: DashOptions,
     ready: impl FnOnce(&Started),
 ) -> Result<()> {
+    // Health reads the caches this dashboard syncs.
+    if let Some(dir) = &options.cache_dir {
+        config.gallery.cache_dir = Some(dir.clone());
+    }
+    if let Some(dir) = &options.audio_cache_dir {
+        config.gallery.audio_cache_dir = Some(dir.clone());
+    }
     let public_origin = options
         .public_origin
         .as_deref()

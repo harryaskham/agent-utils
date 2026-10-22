@@ -48,13 +48,13 @@ const MAX_CULTURE_CONFIG_BYTES: u64 = 1024 * 1024;
 pub fn validate_url(url: &str, allow_plaintext: bool) -> std::result::Result<(), String> {
     let parsed = url::Url::parse(url).map_err(|e| format!("invalid paratenic url: {e}"))?;
     if !matches!(parsed.scheme(), "ws" | "wss") {
-        return Err("paratenic url scheme must be ws or wss".into());
+        return Err("AHP url scheme must be ws or wss".into());
     }
     let loopback = match parsed.host() {
         Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
         Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
         Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        None => return Err("paratenic url needs a host".into()),
+        None => return Err("AHP url needs a host".into()),
     };
     if parsed.scheme() == "ws" && !loopback && !allow_plaintext {
         return Err(
@@ -134,7 +134,12 @@ struct PiClientHost {
 }
 
 fn pi_settings_path(config: &Config) -> Result<PathBuf> {
-    if let Some(path) = &config.paratenic.pi_settings {
+    if let Some(path) = config
+        .pi_daemon
+        .settings
+        .as_ref()
+        .or(config.paratenic.pi_settings.as_ref())
+    {
         return config::expand_home(path);
     }
     let dir = std::env::var_os("PI_CODING_AGENT_DIR")
@@ -279,107 +284,159 @@ fn culture_candidates(host: &Host) -> Vec<String> {
 pub const PI_DAEMON_SUFFIX: &str = "-pi-daemon";
 /// The node's `pi-daemon bridge` serves its TUI Pis over AHP (pi-daemon 1.11).
 pub const PI_BRIDGE_SUFFIX: &str = "-pi-bridge";
+/// Culture's id for a node's bridge (`<node>-pi`, beside `<node>-pi-daemon`).
+const CULTURE_BRIDGE_SUFFIX: &str = "-pi";
 /// Targets that are a node's other AHP endpoints, not configured nodes.
 pub const ENDPOINT_SUFFIXES: [&str; 2] = [PI_DAEMON_SUFFIX, PI_BRIDGE_SUFFIX];
 
-/// Endpoints to list and answer choices on: each node's Paratenic endpoint
-/// (as [`endpoints`]) plus the node's pi-daemon `/ahp` as a target of its own
-/// named `<node>-pi-daemon` (answers route by that name). pi-daemon's
-/// `ask_user` questions, and the TUI Pis it serves, are AHP `chatInput`
-/// entries like Paratenic's, so they list and answer the same way. The daemon
-/// comes from pi-client's `client.hosts` (bearer: the host's `tokenFile`,
-/// else `client.tokenFile`), else from Culture's `<node>-pi-daemon` host.
-/// Doctor, speech and media stay per node and use [`endpoints`].
-pub fn choice_endpoints(config: &Config, hosts: &[Host]) -> Result<Vec<(Host, Option<Endpoint>)>> {
-    let mut targets = endpoints(config, hosts)?;
-    if !config.paratenic.enabled || !config.paratenic.pi_daemon {
-        return Ok(targets);
-    }
-    let culture = culture_hosts(config)?;
-    let (pi_hosts, pi_token) = pi_client_hosts(config)?;
-    for host in hosts {
-        let p = &host.paratenic;
-        if p.enabled == Some(false)
-            || p.pi_daemon == Some(false)
-            || ENDPOINT_SUFFIXES
-                .iter()
-                .any(|suffix| host.name.ends_with(suffix))
-        {
-            continue;
-        }
-        let candidates = culture_candidates(host);
-        let from_pi = pi_hosts
-            .iter()
-            .find(|h| candidates.iter().any(|n| h.name.eq_ignore_ascii_case(n)))
-            .map(|h| {
-                (
-                    ahp_url(&h.url),
-                    h.token_file.clone().or_else(|| pi_token.clone()),
-                    // pi-client's hosts are the operator's own tailnet daemons;
-                    // pi-client itself connects to them over ws://.
-                    true,
-                    "pi-client",
-                )
-            });
-        let names: Vec<String> = candidates
-            .iter()
-            .map(|n| format!("{n}{PI_DAEMON_SUFFIX}"))
-            .collect();
-        let from_culture = || {
-            culture
-                .iter()
-                .find(|c| names.iter().any(|n| c.id.eq_ignore_ascii_case(n)))
-                .map(|c| {
-                    (
-                        c.url.clone(),
-                        c.token_file.clone(),
-                        c.allow_plaintext_non_loopback,
-                        "culture",
-                    )
-                })
-        };
-        let Some((url, token, plaintext, source)) = from_pi.or_else(from_culture) else {
-            continue;
-        };
-        validate_url(&url, plaintext)
-            .map_err(|e| Error::Config(format!("host {}{PI_DAEMON_SUFFIX}: {e}", host.name)))?;
-        let token_file = token
+/// Every AHP endpoint of one node. They are independent: Paratenic may be
+/// disabled or not running while pi-daemon and its bridge serve the node's
+/// Durable sessions and TUI Pis.
+#[derive(Clone, Debug, Default)]
+pub struct NodeEndpoints {
+    /// Paratenic (as [`endpoints`]).
+    pub paratenic: Option<Endpoint>,
+    /// pi-daemon `/ahp` (Durable sessions).
+    pub daemon: Option<Endpoint>,
+    /// pi-daemon bridge `/ahp` (the node's TUI Pis).
+    pub bridge: Option<Endpoint>,
+}
+
+/// This node's pi-daemon is wanted (fleet and node switches, legacy included).
+pub fn daemon_enabled(config: &Config, host: &Host) -> bool {
+    config.pi_daemon.enabled
+        && config.paratenic.pi_daemon
+        && host.paratenic.pi_daemon != Some(false)
+        && host.pi_daemon.enabled != Some(false)
+}
+
+/// This node's pi-daemon bridge is wanted.
+pub fn bridge_enabled(config: &Config, host: &Host) -> bool {
+    config.pi_daemon.bridge
+        && config.paratenic.pi_daemon
+        && host.paratenic.pi_daemon != Some(false)
+        && host.pi_daemon.bridge != Some(false)
+}
+
+/// Resolve each node's Paratenic, pi-daemon and bridge endpoints. pi-daemon
+/// and its bridge come from pi-client's `client.hosts` (bearer: the host's
+/// `tokenFile`, else `client.tokenFile`), else from Culture's
+/// `<node>-pi-daemon` and `<node>-pi` hosts. None of them depends on another.
+pub fn node_endpoints(config: &Config, hosts: &[Host]) -> Result<Vec<(Host, NodeEndpoints)>> {
+    let paratenic = endpoints(config, hosts)?;
+    let wanted = hosts
+        .iter()
+        .any(|h| daemon_enabled(config, h) || bridge_enabled(config, h));
+    let culture = if wanted {
+        culture_hosts(config)?
+    } else {
+        vec![]
+    };
+    let (pi_hosts, pi_token) = if wanted {
+        pi_client_hosts(config)?
+    } else {
+        (vec![], None)
+    };
+    let token_path = |token: Option<String>| {
+        token
             .or_else(|| config.paratenic.token_file.clone())
             .map(|t| config::expand_home(&t))
-            .transpose()?;
-        let mut daemon = host.clone();
-        daemon.name = format!("{}{PI_DAEMON_SUFFIX}", host.name);
-        targets.push((
-            daemon,
-            Some(Endpoint {
-                url,
-                token_file: token_file.clone(),
-                allow_plaintext_non_loopback: plaintext,
-                source: source.into(),
-            }),
-        ));
-        // The node's TUI Pis, through its pi-daemon bridge's /ahp (same bearer).
-        let bridge = pi_hosts
-            .iter()
-            .find(|h| candidates.iter().any(|n| h.name.eq_ignore_ascii_case(n)))
-            .and_then(|h| h.bridge.clone());
-        if let Some(bridge) = bridge {
-            let url = ahp_url(&bridge);
-            validate_url(&url, true)
-                .map_err(|e| Error::Config(format!("host {}{PI_BRIDGE_SUFFIX}: {e}", host.name)))?;
-            let mut tui = host.clone();
-            tui.name = format!("{}{PI_BRIDGE_SUFFIX}", host.name);
-            targets.push((
-                tui,
-                Some(Endpoint {
+            .transpose()
+    };
+    paratenic
+        .into_iter()
+        .map(|(host, paratenic)| {
+            let mut out = NodeEndpoints {
+                paratenic,
+                ..NodeEndpoints::default()
+            };
+            if ENDPOINT_SUFFIXES
+                .iter()
+                .any(|suffix| host.name.ends_with(suffix))
+            {
+                return Ok((host, out));
+            }
+            let candidates = culture_candidates(&host);
+            let pi_host = pi_hosts
+                .iter()
+                .find(|h| candidates.iter().any(|n| h.name.eq_ignore_ascii_case(n)));
+            let culture_named = |suffix: &str| {
+                culture.iter().find(|c| {
+                    candidates
+                        .iter()
+                        .any(|n| c.id.eq_ignore_ascii_case(&format!("{n}{suffix}")))
+                })
+            };
+            let from_culture = |c: &CultureHost| {
+                (
+                    c.url.clone(),
+                    c.token_file.clone(),
+                    c.allow_plaintext_non_loopback,
+                    "culture",
+                )
+            };
+            // pi-client's hosts are the operator's own tailnet daemons; pi-client
+            // itself connects to them over ws://.
+            let pi_token_for = |h: &PiClientHost| h.token_file.clone().or_else(|| pi_token.clone());
+            let endpoint = |found: Option<(String, Option<String>, bool, &str)>,
+                            suffix: &str|
+             -> Result<Option<Endpoint>> {
+                let Some((url, token, plaintext, source)) = found else {
+                    return Ok(None);
+                };
+                validate_url(&url, plaintext)
+                    .map_err(|e| Error::Config(format!("host {}{suffix}: {e}", host.name)))?;
+                Ok(Some(Endpoint {
                     url,
-                    token_file,
-                    allow_plaintext_non_loopback: true,
-                    source: "pi-client".into(),
-                }),
-            ));
+                    token_file: token_path(token)?,
+                    allow_plaintext_non_loopback: plaintext,
+                    source: source.into(),
+                }))
+            };
+            if daemon_enabled(config, &host) {
+                let found = pi_host
+                    .map(|h| (ahp_url(&h.url), pi_token_for(h), true, "pi-client"))
+                    .or_else(|| culture_named(PI_DAEMON_SUFFIX).map(from_culture));
+                out.daemon = endpoint(found, PI_DAEMON_SUFFIX)?;
+            }
+            if bridge_enabled(config, &host) {
+                let found = pi_host
+                    .and_then(|h| {
+                        h.bridge
+                            .as_ref()
+                            .map(|b| (ahp_url(b), pi_token_for(h), true, "pi-client"))
+                    })
+                    .or_else(|| culture_named(CULTURE_BRIDGE_SUFFIX).map(from_culture));
+                out.bridge = endpoint(found, PI_BRIDGE_SUFFIX)?;
+            }
+            Ok((host, out))
+        })
+        .collect()
+}
+
+/// Endpoints to list and answer choices on: each node's Paratenic endpoint
+/// (as [`endpoints`]) plus its pi-daemon and bridge `/ahp` as targets of their
+/// own, `<node>-pi-daemon` and `<node>-pi-bridge` (answers route by those
+/// names). pi-daemon's questions (`ask_user`, `interactive_choice`,
+/// `async_choice`) and the TUI Pis its bridge serves are AHP `chatInput`
+/// entries like Paratenic's, so they list and answer the same way.
+pub fn choice_endpoints(config: &Config, hosts: &[Host]) -> Result<Vec<(Host, Option<Endpoint>)>> {
+    let mut targets = vec![];
+    let mut extra = vec![];
+    for (host, found) in node_endpoints(config, hosts)? {
+        for (suffix, endpoint) in [
+            (PI_DAEMON_SUFFIX, found.daemon),
+            (PI_BRIDGE_SUFFIX, found.bridge),
+        ] {
+            if let Some(endpoint) = endpoint {
+                let mut target = host.clone();
+                target.name = format!("{}{suffix}", host.name);
+                extra.push((target, Some(endpoint)));
+            }
         }
+        targets.push((host, found.paratenic));
     }
+    targets.extend(extra);
     Ok(targets)
 }
 
@@ -526,7 +583,7 @@ impl Connection {
             .url
             .as_str()
             .into_client_request()
-            .map_err(|e| Error::Config(format!("paratenic url: {e}")))?;
+            .map_err(|e| Error::Config(format!("AHP url: {e}")))?;
         if let Some(path) = &endpoint.token_file {
             let token = read_token(path)?;
             let value = HeaderValue::from_str(&format!("Bearer {token}"))
@@ -541,8 +598,8 @@ impl Connection {
             tokio_tungstenite::connect_async_with_config(request, Some(websocket), true),
         )
         .await
-        .map_err(|_| Error::Transport("paratenic connect timed out".into()))?
-        .map_err(|e| Error::Transport(format!("paratenic connect: {}", redact(&e.to_string()))))?;
+        .map_err(|_| Error::Transport("AHP connect timed out".into()))?
+        .map_err(|e| Error::Transport(format!("AHP connect: {}", redact(&e.to_string()))))?;
         let client = Client::connect(
             ahp_ws::WebSocketTransport::from_stream(stream),
             ClientConfig {
@@ -565,7 +622,7 @@ impl Connection {
             ),
         )
         .await
-        .map_err(|_| Error::Transport("paratenic initialize timed out".into()))?
+        .map_err(|_| Error::Transport("AHP initialize timed out".into()))?
         .map_err(rpc)?;
         Ok(Self {
             client,
@@ -594,22 +651,20 @@ impl Connection {
                 .map_err(rpc)?;
             items.extend(page.items);
             if items.len() > MAX_SESSIONS {
-                return Err(Error::Limit(
-                    "paratenic session catalogue exceeds 10000".into(),
-                ));
+                return Err(Error::Limit("AHP session catalogue exceeds 10000".into()));
             }
             match page.next_cursor {
                 Some(next) if seen.insert(next.clone()) => cursor = Some(next),
                 Some(_) => {
                     return Err(Error::Transport(
-                        "paratenic session catalogue repeated a cursor".into(),
+                        "AHP session catalogue repeated a cursor".into(),
                     ));
                 }
                 None => return Ok(items),
             }
         }
         Err(Error::Limit(
-            "paratenic session catalogue exceeds 200 pages".into(),
+            "AHP session catalogue exceeds 200 pages".into(),
         ))
     }
     pub async fn session(&self, uri: &str) -> Result<SessionState> {
@@ -618,7 +673,7 @@ impl Connection {
         match result.snapshot.map(|s| s.state) {
             Some(SnapshotState::Session(state)) => Ok(*state),
             _ => Err(Error::Transport(format!(
-                "paratenic returned no session snapshot for {uri}"
+                "AHP host returned no session snapshot for {uri}"
             ))),
         }
     }
@@ -628,14 +683,15 @@ impl Connection {
 }
 
 fn rpc(error: ahp::ClientError) -> Error {
-    Error::Transport(format!("paratenic: {}", redact(&error.to_string())))
+    Error::Transport(format!("AHP: {}", redact(&error.to_string())))
 }
 
 /// A node that is simply down is a fact, not a fault: classify connection-level
 /// failures (refused, timed out, unknown host, unreachable) so callers can show
 /// one quiet "offline" line instead of a raw transport error.
 /// The WebSocket upgrade was answered 404: the endpoint does not exist there.
-fn not_found(message: &str) -> bool {
+/// An HTTP 404 on the upgrade (an endpoint without `/ahp`).
+pub fn not_found(message: &str) -> bool {
     let m = message.to_ascii_lowercase();
     m.contains("404") || m.contains("not found")
 }
@@ -1304,6 +1360,8 @@ pub enum AnswerState {
     Changed,
     /// Not answerable now (stale catalogue, read-only chat, backend offline).
     Unavailable,
+    /// Never dispatched: the endpoint, connection or answer itself failed.
+    Failed,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

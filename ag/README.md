@@ -32,13 +32,13 @@ ag hosts
 ag choices                           # answer pending agent questions (TUI)
 ag choices list                      # print them; --all adds unanswerable ones
 ag choices answer --node ms-dev --session ahp-session:/… --request choice-1 --option 2
-ag doctor                            # per-node SSH, Paratenic, speech, gallery
+ag doctor                            # per-node SSH, pi-daemon, bridge, Paratenic, speech, media
 ag dash                              # live web view: choices, health, TTS, images, audio
 ```
 
 ## Fleet choices (`ag choices`)
 
-Every pending agent elicitation — blocking `interactive_choice`, non-blocking `async_choice`, and Pi Daemon RPC dialogs — is read from each node's **Paratenic AHP host** (`SessionState.inputNeeded`). `ag` keeps no choices database and adds no Pi-side server: Paratenic is the single fleet surface, the same one Culture uses.
+Every pending agent elicitation — blocking `interactive_choice`, non-blocking `async_choice`, pi-daemon's `ask_user` and RPC dialogs — is read from each node's **AHP hosts** (`SessionState.inputNeeded`): its **pi-daemon** (Durable sessions), its **pi-daemon bridge** (the node's TUI Pis) and, when it runs, **Paratenic**. Each is independent; none needs another, so Paratenic can be disabled or absent. `ag` keeps no choices database and adds no Pi-side server.
 
 `ag choices` is a TUI. The left rail groups questions by node and agent; the right pane is the selected question.
 
@@ -74,13 +74,16 @@ With no extra configuration, each node uses the Culture host with the same id fr
 
 ```yaml
 paratenic:
+  enabled: true                                # false: no Paratenic; pi-daemon is unaffected
   # culture_config: ~/.config/culture/config.yaml
   # token_file: ~/.config/paratenic/token     # default when neither node nor Culture names one
-  request_timeout_seconds: 15
+  request_timeout_seconds: 15                  # every AHP endpoint (Paratenic, pi-daemon, bridge)
   answer_timeout_seconds: 30
   parallelism: 8                               # session snapshots per node
-  pi_daemon: true                              # also each node's pi-daemon (see below)
-  # pi_settings: ~/.pi/agent/settings.json     # pi-client's client.hosts
+pi_daemon:
+  enabled: true                                # each node's pi-daemon /ahp (Durable sessions)
+  bridge: true                                 # each node's bridge /ahp (TUI Pis)
+  # settings: ~/.pi/agent/settings.json        # pi-client's client.hosts
 hosts:
   - name: ms-dev
     address: ms-dev
@@ -89,27 +92,32 @@ hosts:
       token_file: ~/.config/paratenic/token
       allow_plaintext_non_loopback: true       # ws:// off-loopback, e.g. inside a tailnet
       # culture_host: other-id                 # when the Culture id differs
-      # pi_daemon: false                       # skip this node's pi-daemon
-      # enabled: false
+      # enabled: false                         # skip this node's Paratenic only
+    # pi_daemon: { enabled: false, bridge: false }   # skip this node's daemon / bridge
 ```
 
-**pi-daemon agents.** Each node's pi-daemon serves AHP beside Paratenic, and `ag choices`,
-`ag dash` and `ag_choices_answer` query it too:
+`paratenic.pi_daemon: false` (fleet) and `hosts[].paratenic.pi_daemon: false` (one node) still turn
+pi-daemon and its bridge off, as before; `paratenic.pi_settings` still names the Pi settings file.
+
+**pi-daemon agents.** Each node's pi-daemon serves AHP, and `ag choices`, `ag dash`,
+`ag doctor` and `ag_choices_answer` query it whether or not Paratenic is enabled:
 
 - **Durable sessions** (`ask_user`): the daemon's `/ahp` (`client.hosts[].url`, port 7463).
 - **TUI Pis**: the node bridge's `/ahp` (`client.hosts[].bridge`, port 7464; pi-daemon 1.11).
   A bridge without it (older pi-daemon) is listed as `unsupported`, not as a failure.
 - **Where from:** pi-client's host list, `client.hosts[]` in `~/.pi/agent/settings.json`
-  (`$PI_CODING_AGENT_DIR`; `paratenic.pi_settings` overrides), with `/ahp` added to each URL.
+  (`$PI_CODING_AGENT_DIR`; `pi_daemon.settings` overrides), with `/ahp` added to each URL.
   The bearer is the host's `tokenFile`, else `client.tokenFile`. Without a Pi client entry,
-  Culture's `<node>-pi-daemon` host is used for the daemon.
+  Culture's `<node>-pi-daemon` and `<node>-pi` hosts are used for the daemon and the bridge.
 - **Shown as:** groups under the node, `ms-dev · pi-daemon` and `ms-dev · pi-bridge`, each agent
   marked `daemon` or `tui`. Answer with `--node ms-dev-pi-daemon` or `--node ms-dev-pi-bridge`.
   JSON rows carry `node` and `source` (`paratenic`, `pi-daemon` or `pi-bridge`).
 - **Duplicates:** a TUI Pi's question seen through both Paratenic and pi-daemon has one request
   id (agent-utils choice ids are unique across processes); pi-daemon's copy is kept.
-- **Off:** `paratenic.pi_daemon: false`, or `pi_daemon: false` on one host.
-- `ag doctor`, speech and media stay per node.
+- **Off:** `pi_daemon.enabled` / `pi_daemon.bridge`, fleet-wide or on one host.
+- Speech and media stay per node: pi-daemon sessions (with Agent Utils' Durable `tts.mjs` and
+  `media.mjs`) and the bridge's TUI Pis write the same node speech feed and image/audio
+  archives that `ag tts`, `ag image`, `ag audio` and the dash read.
 
 pi-daemon's `ask_user` exists only in profiles that load a module re-exporting
 `InputExtension` (pi-daemon's docs/profiles); without it a session cannot ask.
@@ -133,23 +141,27 @@ One concurrent, bounded, read-only pass per node:
 | Check | What it reads |
 | --- | --- |
 | `ssh` / `local` | `ag` reachability over SSH (or this machine) |
-| `paratenic` | AHP connect + session catalogue (sessions, input-needed, backends offline) and the plaintext `/status` probe when available (uptime, providers, lock contention) |
+| `pi-daemon` | The daemon's `/ahp` session catalogue (sessions, waiting) and its unauthenticated `/readyz` (version, draining) |
+| `pi-bridge` | The bridge's `/ahp` (TUI Pis, waiting) and `/readyz`; a bridge without `/ahp` (pi-daemon < 1.11) is a warning naming the fix |
+| `paratenic` | Optional. AHP connect + session catalogue (sessions, live and stale input-needed, backends offline) and the plaintext `/status` probe when available (uptime, providers, lock contention); omitted when disabled |
 | `speech` | Most recent durable speech request and any muted kinds |
 | `images` | Last successful gallery sync from the local cache (no network) |
 | `audio` | Last successful shared-audio sync from the local cache (no network) |
 
-A node that answers neither SSH nor AHP collapses to one `offline` line. A node reachable over AHP but not SSH is a warning, as is one reachable over SSH whose Paratenic is not answering. Exit 3 only for real errors; offline and warnings exit 0. `--json` and the `ag_doctor` MCP tool return the full report.
+A node that answers neither SSH nor any AHP host collapses to one `offline` line. A node reachable over AHP but not SSH is a warning, as is a configured pi-daemon or bridge that is not answering on a reachable node. Paratenic is optional: when it is not running but pi-daemon serves the node it is shown as `○ … optional`, not a warning. "Sessions waiting" counts the daemon's waiting sessions plus the larger of the bridge's and Paratenic's live ones (a TUI Pi's question can show through both); stale Paratenic sessions whose backend is gone are counted apart. A node that never archived audio or images is synced and empty, not "not pulled yet". Exit 3 only for real errors; offline and warnings exit 0. `--json` and the `ag_doctor` MCP tool return the full report.
 
 ## Live dashboard (`ag dash`)
 
 `ag dash` serves one page with **Choices**, **Health**, **TTS**, **Images** and **Audio** tabs and opens it in the browser (`--no-open` prints the URL; `--json` prints `{url, address}`). It is a live server, not a generated file:
 
-- choices are re-read from Paratenic (and each node's pi-daemon) whenever the page is open and the cached view is older than 20 s, after every answer (that node only), and every `dash.refresh_seconds` (default 300);
+- choices are re-read from each node's pi-daemon, bridge and Paratenic whenever the page is open and the cached view is older than 20 s, after every answer (that node only), and every `dash.refresh_seconds` (default 300);
 - health runs every `dash.refresh_seconds` and after each image pull;
 - TTS starts **one shared collector per dashboard process**, reusing `ag tts`'s local file readers and remote SSH cursor/reconnect path. It starts with 20 recent lines per selected host and follows continuously, even with no browser open. Each browser reads the shared stream over authenticated SSE—not another set of SSH tails. This is the **speech-request text feed**, not an audio player or proof that a request played;
 - the merged media sync (`ag sync`: images and shared audio) runs in the background every `dash.image_refresh_seconds` (default 300) while the dash is running; `--no-images` / `--no-audio` (`dash.audio`) serve that pathway's existing cache only. The Images and Audio tabs embed the same viewers as `ag image` / `ag audio`; `/audio/*` streams with HTTP ranges so clips can seek, and a sync never reloads the player while a clip is playing. See [fleet audio](../docs/ag-audio.md).
 
-The page answers questions through the same path as the TUI and CLI. Keys: `j`/`k` move, `1`–`9` answer, `i` reply, `d` decline (twice), `r` refresh.
+The page answers questions through the same path as the TUI and CLI. Keys: `j`/`k` move, `1`–`9` answer, `i` reply, `d` decline (twice), `r` refresh. Every answer's outcome (including endpoint or connection failures) is kept in `/api/state`'s `receipts` and logged to the service journal as `ag dash: answer <host> <session> <request>: <state>` — never the answer itself.
+
+**Images and Audio** each have **Pause auto-refresh**: the framed gallery or player stays still (scroll, filters, an open preview) while newer syncs wait as "newer images/clips waiting" until **Load new …** or **Resume**; it lasts until the page reloads. Their per-node sync status starts collapsed and remembers being opened or closed (browser storage), and their search/node/agent filters survive the dashboard showing a newer sync.
 
 ```yaml
 dash:

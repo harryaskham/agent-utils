@@ -66,7 +66,9 @@ function options(id,values){for(const value of[...new Set(values)].sort()){const
 options('host',data.hosts.map(h=>h.host));options('agent',data.clips.map(c=>c.agent));
 const stale=data.hosts.filter(h=>h.state!=='synced'||h.invalid);
 $('health').textContent=`${data.hosts.length} nodes · ${data.hosts.filter(h=>h.state==='synced').length} synced · ${stale.length} cached or needs attention`;
-$('nodes').open=stale.length>0;
+// Per-node sync status starts collapsed; opening or closing it is remembered.
+{const key='ag.audio.nodes.open';try{$('nodes').open=localStorage.getItem(key)==='1'}catch{$('nodes').open=false}$('nodes').addEventListener('toggle',()=>{try{localStorage.setItem(key,$('nodes').open?'1':'0')}catch{}})}
+if(stale.length)$('health').classList.add('warning');
 for(const host of data.hosts){const row=text('div','','host'+(host.state==='synced'&&!host.invalid?'':' stale'));row.append(text('strong',host.host),text('small',`${host.clips} clips · ${host.state}${host.invalid?' · '+host.invalid+' invalid':''}`),text('small',host.last_sync_ms?'Last sync '+new Date(host.last_sync_ms).toLocaleString():'Not synced yet'));for(const warning of host.warnings)row.append(text('small',warning,'warning'));$('hosts').append(row)}
 function filter(){const q=$('search').value.toLocaleLowerCase();filtered=data.clips.filter(c=>(!$('host').value||c.host===$('host').value)&&(!$('agent').value||c.agent===$('agent').value)&&(!q||[c.title||'',c.label,c.agent,c.host,c.id,c.description||''].some(v=>v.toLocaleLowerCase().includes(q))));page=0;selected=filtered.length?0:-1;render()}
 function render(){
@@ -104,7 +106,11 @@ player.onloadedmetadata=()=>{if(current&&Number.isFinite(player.duration)){durat
 player.onended=()=>{if($('auto').checked&&current){const at=filtered.indexOf(current);if(at>=0&&at+1<filtered.length)play(at+1)}};
 player.onerror=()=>{if(current)$('np-meta').textContent=`Cannot play ${current.mime_type} here — download it or run ag audio play ${current.id}`};
 $('play').onclick=toggle;$('back').onclick=()=>step(-1);$('fwd').onclick=()=>step(1);
-$('search').oninput=filter;$('host').onchange=filter;$('agent').onchange=filter;
+// Filters survive the dashboard re-framing a newer sync (this tab only).
+const filtersKey='ag.audio.filters';
+function saveFilters(){try{sessionStorage.setItem(filtersKey,JSON.stringify({search:$('search').value,host:$('host').value,agent:$('agent').value}))}catch{}}
+try{const f=JSON.parse(sessionStorage.getItem(filtersKey)||'{}');if(typeof f.search==='string')$('search').value=f.search;for(const id of['host','agent'])if(typeof f[id]==='string'&&[...$(id).options].some(o=>o.value===f[id]))$(id).value=f[id]}catch{}
+$('search').oninput=()=>{saveFilters();filter()};$('host').onchange=()=>{saveFilters();filter()};$('agent').onchange=()=>{saveFilters();filter()};
 $('previous').onclick=()=>{page--;render();$('list').scrollIntoView()};$('nextpage').onclick=()=>{page++;render();$('list').scrollIntoView()};
 $('theme').onclick=()=>{document.body.classList.toggle('light');$('theme').textContent=document.body.classList.contains('light')?'Dark':'Light'};
 document.addEventListener('keydown',e=>{

@@ -94,7 +94,18 @@ fn all_images_incremental_cache_offline_and_no_html_injection() {
         .unwrap();
     assert_eq!(offline.images, 1005);
     assert_eq!(offline.hosts[0].state, "cached");
-    let failed = service.image_gallery(input()).unwrap();
+    // A node with no archive directory is synced and empty; the cache stays.
+    let empty = service.image_gallery(input()).unwrap();
+    assert_eq!(
+        (empty.images, empty.hosts[0].state.as_str()),
+        (1005, "synced")
+    );
+    // An unreadable archive fails and retains the cache.
+    fs::rename(root.path().join("gone"), &source).unwrap();
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o000)).unwrap();
+    let failed = service.image_gallery(input());
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o700)).unwrap();
+    let failed = failed.unwrap();
     assert_eq!(failed.images, 1005);
     assert_eq!(failed.hosts[0].state, "unavailable");
 }

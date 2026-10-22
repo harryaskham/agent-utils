@@ -275,6 +275,10 @@ fn url_path(path: &str) -> String {
         })
         .collect()
 }
+/// The node has never archived this kind of media (its directory does not
+/// exist): an empty archive, synced, not a failure. No remote writes.
+const NO_ARCHIVE: &str = "ag-rsync: no archive yet";
+
 /// The rsync server runs in the remote login environment. Its protocol argv
 /// remains argv at every shell hop; profile stdout is diverted away from rsync.
 pub fn remote_rsync(host: &Host) -> String {
@@ -294,7 +298,7 @@ pub fn remote_media_rsync(kind: MediaKind, host: &Host) -> String {
         .map(|p| format!("root={};", shell_quote(p)))
         .unwrap_or_else(|| default.into());
     let payload = format!(
-        "{root} case \"$root\" in '~') root=\"$HOME\";; '~/'*) root=\"$HOME/${{root#\\~/}}\";; esac; cd -- \"$root\" || exit 23; exec rsync \"$@\" 1>&3 3>&-"
+        "{root} case \"$root\" in '~') root=\"$HOME\";; '~/'*) root=\"$HOME/${{root#\\~/}}\";; esac; [ -e \"$root\" ] || {{ echo \"{NO_ARCHIVE}\" >&2; exit 23; }}; cd -- \"$root\" || exit 23; exec rsync \"$@\" 1>&3 3>&-"
     );
     let login = format!("exec sh -c {} ag-rsync \"$@\"", shell_quote(&payload));
     let outer = format!(
@@ -378,6 +382,9 @@ async fn sync(
     destination: &Path,
     checksum: bool,
 ) -> Result<()> {
+    if host.local && !source_path(kind, host)?.exists() {
+        return Ok(());
+    }
     let mut child = media_rsync_command(config, kind, host, destination, checksum)?.spawn()?;
     let mut group = OwnedSyncGroup(child.id().map(|pid| nix::unistd::Pid::from_raw(pid as i32)));
     let mut stderr = child.stderr.take().expect("stderr pipe");
@@ -398,6 +405,9 @@ async fn sync(
             Ok::<_, std::io::Error>(tail)
         };
         let (status, errors) = tokio::try_join!(child.wait(), errors)?;
+        if !status.success() && String::from_utf8_lossy(&errors).contains(NO_ARCHIVE) {
+            return Ok(());
+        }
         if !status.success() {
             return Err(Error::Transport(format!(
                 "rsync {status}: {}",

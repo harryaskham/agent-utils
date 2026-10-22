@@ -445,6 +445,172 @@ fn pi_daemon_sessions_join_the_node_deduplicated_and_answer_through_the_daemon()
 }
 
 #[test]
+fn pi_daemon_and_bridge_work_and_report_health_without_paratenic() {
+    // Paratenic disabled (or not running) must not hide a node's pi-daemon or
+    // the TUI Pis its bridge serves: they list, answer and report health alone.
+    let (daemon, _) = fake_ahp::fake_host_with(fake_ahp::Fake {
+        pi_daemon: true,
+        bridge: Some(false),
+        ..Default::default()
+    });
+    let (bridge, bridge_fake) = fake_ahp::fake_host_with(fake_ahp::Fake {
+        pi_daemon: true,
+        bridge: Some(true),
+        ..Default::default()
+    });
+    let fixture = Fixture::new(&[("alpha", None)]);
+    let token = fixture.temp.path().join("token");
+    let pi_settings = fixture.temp.path().join("pi-settings.json");
+    std::fs::write(
+        &pi_settings,
+        json!({"client": {"tokenFile": token.display().to_string(), "hosts": [
+            {"name": "alpha", "url": format!("ws://{daemon}"), "bridge": format!("ws://{bridge}")},
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+    let manager = ag::config::manager();
+    let mut config = ag::config::load(Some(&fixture.config)).unwrap();
+    config.paratenic.enabled = false;
+    config.pi_daemon.settings = Some(pi_settings.display().to_string());
+    manager.save(&fixture.config, &config).unwrap();
+
+    let (code, listed) = fixture.json(&["--json", "choices", "list"]);
+    assert_eq!(code, 0, "{listed}");
+    let nodes = listed["data"]["nodes"].as_array().unwrap();
+    let rows: Vec<(&str, &str)> = nodes
+        .iter()
+        .map(|n| (n["host"].as_str().unwrap(), n["state"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("alpha", "disabled"),
+            ("alpha-pi-bridge", "ok"),
+            ("alpha-pi-daemon", "ok")
+        ]
+    );
+    assert_eq!(listed["data"]["actionable"], 2);
+    let tui = &nodes[1]["agents"][0]["choices"][0];
+    let (code, receipt) = fixture.json(&[
+        "--json",
+        "choices",
+        "answer",
+        "--node",
+        "alpha-pi-bridge",
+        "--session",
+        "ahp-session:/tui-0190-pi-session",
+        "--request",
+        "choice-1",
+        "--option",
+        "Hold",
+        "--revision",
+        tui["revision"].as_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{receipt}");
+    assert_eq!(receipt["data"]["state"], "accepted");
+    assert_eq!(bridge_fake.lock().unwrap().dispatches.len(), 1);
+
+    // Health: pi-daemon and bridge rows; a disabled Paratenic stays out of the card.
+    let (code, report) = fixture.json(&["--json", "doctor"]);
+    assert_eq!(code, 0, "{report}");
+    let alpha = &report["data"]["nodes"][0];
+    let names: Vec<&str> = alpha["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names[..3], ["ssh", "pi-daemon", "pi-bridge"], "{alpha}");
+    assert!(!names.contains(&"paratenic"), "{names:?}");
+    assert_eq!(alpha["checks"][1]["status"], "ok");
+    assert!(
+        alpha["checks"][1]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("1 session · 1 waiting"),
+        "{alpha}"
+    );
+    assert!(
+        alpha["checks"][2]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("TUI Pi"),
+        "{alpha}"
+    );
+    assert!(
+        alpha["checks"][0]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("unreachable over SSH"),
+        "agents answer over pi-daemon, so the node is up: {alpha}"
+    );
+    assert_eq!(alpha["status"], "warn");
+    assert_eq!(report["data"]["counts"]["offline"], 0);
+
+    // A bridge before pi-daemon 1.11 (no /ahp) is a warning naming the fix.
+    let (old_bridge, _) = fake_ahp::fake_host_with(fake_ahp::Fake {
+        refuse: Some(404),
+        ..Default::default()
+    });
+    std::fs::write(
+        &pi_settings,
+        json!({"client": {"tokenFile": token.display().to_string(), "hosts": [
+            {"name": "alpha", "url": format!("ws://{daemon}"), "bridge": format!("ws://{old_bridge}")},
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+    let (_, report) = fixture.json(&["--json", "doctor"]);
+    let bridge_check = report["data"]["nodes"][0]["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "pi-bridge")
+        .unwrap()
+        .clone();
+    assert_eq!(bridge_check["status"], "warn", "{bridge_check}");
+    assert!(
+        bridge_check["summary"]
+            .as_str()
+            .unwrap()
+            .contains("need pi-daemon ≥ 1.11")
+    );
+
+    // Without pi-client hosts, Culture's <node>-pi-daemon and <node>-pi serve.
+    std::fs::write(&pi_settings, "{}").unwrap();
+    std::fs::write(
+        fixture.temp.path().join("no-culture.yaml"),
+        format!(
+            "hosts:\n- id: alpha-pi-daemon\n  url: ws://{daemon}/ahp\n  token_file: {t}\n- id: alpha-pi\n  url: ws://{bridge}/ahp\n  token_file: {t}\n",
+            t = token.display()
+        ),
+    )
+    .unwrap();
+    let (_, listed) = fixture.json(&["--json", "choices", "list"]);
+    let hosts: Vec<&str> = listed["data"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["host"].as_str().unwrap())
+        .collect();
+    assert_eq!(hosts, ["alpha", "alpha-pi-bridge", "alpha-pi-daemon"]);
+
+    // Opting the bridge out per node keeps the daemon.
+    let mut config = ag::config::load(Some(&fixture.config)).unwrap();
+    config.hosts[0].pi_daemon.bridge = Some(false);
+    manager.save(&fixture.config, &config).unwrap();
+    let (_, listed) = fixture.json(&["--json", "choices", "list"]);
+    let hosts: Vec<&str> = listed["data"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["host"].as_str().unwrap())
+        .collect();
+    assert_eq!(hosts, ["alpha", "alpha-pi-daemon"]);
+}
+
+#[test]
 fn freeform_validation_revision_fence_rejection_and_read_only_chats() {
     let (address, fake) = fake_host();
     let fixture = Fixture::new(&[("alpha", url(address))]);
@@ -651,11 +817,25 @@ fn doctor_reports_paratenic_catalogue_and_collapses_offline_nodes() {
             .unwrap()
             .contains("unreachable over SSH")
     );
+    let named = |node: &Value, name: &str| {
+        node["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
     assert!(
-        alpha["checks"][1]["summary"]
+        named(alpha, "paratenic")["summary"]
             .as_str()
             .unwrap()
             .contains("3 sessions · 2 waiting")
+    );
+    assert_eq!(
+        named(alpha, "pi-daemon")["status"],
+        "skip",
+        "no pi-client host or Culture entry: not configured, not a failure"
     );
     let down = nodes.iter().find(|n| n["host"] == "down").unwrap();
     assert_eq!(
@@ -701,6 +881,11 @@ fn http(
     let (head, body) = response.split_once("\r\n\r\n").unwrap_or((&response, ""));
     let code = head.split_whitespace().nth(1).unwrap().parse().unwrap();
     (code, head.to_owned(), body.to_owned())
+}
+
+fn body_for_unknown_host() -> String {
+    json!({"host": "nowhere", "session": "ahp-session:/x", "request_id": "r", "answers": {}})
+        .to_string()
 }
 
 struct Dash {
@@ -837,6 +1022,17 @@ fn dash_serves_live_state_and_answers_only_with_token_cookie_and_same_origin_hea
     let state: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(state["choices"]["actionable"], 0);
     assert_eq!(state["receipts"][0]["state"], "accepted");
+
+    // A failure is a receipt too (and is logged), not just an HTTP error.
+    let unknown = body_for_unknown_host();
+    let (code, _, failed) = http(&bind, "POST", "/api/answer", &ok, Some(&unknown));
+    assert_eq!(code, 400, "{failed}");
+    assert!(failed.contains("no AHP endpoint for nowhere"), "{failed}");
+    let (_, _, body) = http(&bind, "GET", "/api/state", &auth, None);
+    let state: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(state["receipts"][0]["state"], "failed");
+    assert_eq!(state["receipts"][0]["host"], "nowhere");
+    assert_eq!(state["receipts"][1]["state"], "accepted");
 
     for path in [
         "/gallery/../config.yaml",

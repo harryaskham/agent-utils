@@ -28,6 +28,8 @@ const baseEnv = () => ({
   PATH: process.env.PATH,
   PI_TTS_MUTE_PATH: join(tmp, `mute-${Math.random().toString(36).slice(2)}.json`),
   PI_TTS_FEED_PATH: join(tmp, `feed-${Math.random().toString(36).slice(2)}.jsonl`),
+  // Hermetic: never import the machine's legacy speech feed into the fixture's.
+  PI_TTS_QUEUE_DIR: join(tmp, `queue-${Math.random().toString(36).slice(2)}`),
   PI_TTS_PROVIDER: "azure",
   AZURE_SPEECH_API_KEY: "fixture-key",
   AZURE_SPEECH_ENDPOINT: "https://example.invalid",
@@ -60,7 +62,7 @@ function stubSpeech(log, sessionId) {
 }
 
 /** A fake pi-daemon worker: one module instance over a durable store. */
-function fakeHost({ store = durableStore(), env = baseEnv(), speech, choices, withState = true, modelRegistry, ...options } = {}) {
+function fakeHost({ store = durableStore(), env = baseEnv(), speech, choices, withState = true, modelRegistry, cwd, ...options } = {}) {
   const spoken = speech || [];
   const choiceLog = choices || [];
   const notifications = [];
@@ -78,6 +80,7 @@ function fakeHost({ store = durableStore(), env = baseEnv(), speech, choices, wi
     conversationId: `${sessionId}-c1`,
     ...(withState ? { state: store.forSession(sessionId) } : {}),
     ...(modelRegistry ? { modelRegistry } : {}),
+    ...(cwd ? { cwd } : {}),
   });
   return {
     audio,
@@ -287,11 +290,22 @@ test("spoken lines reach the node's TTS feed that ag tts and ag dash read", asyn
   for (const record of records) {
     assert.equal(record.version, 1);
     assert.equal(record.session, "s1");
-    assert.equal(record.agent, "session-s1");
+    assert.equal(record.agent, "session-s1", "no directory known: named by session");
     assert.equal(record.host, "fixture-node");
   }
   assert.equal(records.find((r) => r.kind === "tts").text, "Shipped.");
   assert.match(records.find((r) => r.kind === "choices").text, /^Ship it\? Option 1: yes/);
+
+  // With the session's directory (pi-daemon passes it), the agent is named as
+  // the session's media shares are, so ag shows one agent per session.
+  const named = { ...baseEnv(), CACO_NODE: "fixture-node" };
+  const inDir = fakeHost({ env: named, cwd: "/work/agent-utils" });
+  await inDir.command("s3", "/tts on");
+  await inDir.emit("s3", assistantEnd([text("Named.")]));
+  const [namedRecord] = readFileSync(named.PI_TTS_FEED_PATH, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(namedRecord.agent, "pi-daemon-agent-utils");
+  assert.equal(namedRecord.session, "s3");
+  assert.equal(namedRecord.cwd, "/work/agent-utils");
 
   // Incognito sessions never write the feed.
   const quiet = { ...baseEnv(), PI_INCOGNITO: "1" };

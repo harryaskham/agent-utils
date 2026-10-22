@@ -145,6 +145,10 @@ test("image_share shares base64 and data: URLs, sniffing the type", async () => 
   assert.deepEqual(hostShare(plain, cwd).shared[0].bytes, PNG);
   assert.equal(plain.details.sharedImages.count, 1);
   assert.equal(sidecar(plain.details.sharedImages.stored[0]).source.label, "render");
+  // A title alone captions the archived image too (ag's gallery shows the label).
+  writeFileSync(join(cwd, "chart.png"), PNG);
+  const titled = await share.execute({ path: "chart.png", title: "Weekly totals" }, api(cwd));
+  assert.equal(sidecar(titled.details.sharedImages.stored[0]).source.label, "Weekly totals");
 });
 
 test("image_share refuses ambiguous input and skips the archive when incognito", async () => {

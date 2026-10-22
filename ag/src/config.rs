@@ -94,6 +94,18 @@ pub struct Host {
     pub paths: Paths,
     /// Optional Paratenic AHP endpoint for live choices and health.
     pub paratenic: HostParatenic,
+    /// This node's pi-daemon and pi-daemon bridge (independent of Paratenic).
+    pub pi_daemon: HostPiDaemon,
+}
+
+/// Per-node pi-daemon switches; unset follows the fleet's `pi_daemon` section.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct HostPiDaemon {
+    /// Set false to skip this node's pi-daemon (Durable sessions).
+    pub enabled: Option<bool>,
+    /// Set false to skip this node's pi-daemon bridge (TUI Pis).
+    pub bridge: Option<bool>,
 }
 
 /// Per-node Paratenic endpoint. Omitted fields fall back to the Culture host
@@ -112,8 +124,8 @@ pub struct HostParatenic {
     pub allow_plaintext_non_loopback: Option<bool>,
     /// Culture host id when it differs from this node name.
     pub culture_host: Option<String>,
-    /// Set false to skip this node's pi-daemon (Culture `<node>-pi-daemon`)
-    /// when listing and answering choices.
+    /// Legacy switch: false skips this node's pi-daemon and its bridge (prefer
+    /// `pi_daemon.enabled` / `pi_daemon.bridge` on the host).
     pub pi_daemon: Option<bool>,
 }
 
@@ -131,15 +143,38 @@ pub struct ParatenicConfig {
     pub answer_timeout_seconds: u64,
     /// Concurrent session snapshots per node while listing choices.
     pub parallelism: usize,
-    /// Also list and answer the questions of each node's pi-daemon sessions
-    /// (`ask_user`, and TUI Pis it serves): Pi's `client.hosts` (pi-client's
-    /// host list in `~/.pi/agent/settings.json`), else Culture's
-    /// `<node>-pi-daemon` host.
+    /// Legacy switch: false skips every pi-daemon and bridge (prefer
+    /// `pi_daemon.enabled` / `pi_daemon.bridge`). pi-daemon no longer
+    /// depends on Paratenic being enabled.
     pub pi_daemon: bool,
+    /// Legacy alias of `pi_daemon.settings`.
+    pub pi_settings: Option<String>,
+}
+
+/// Each node's pi-daemon (`/ahp` on :7463, Durable sessions) and its bridge
+/// (`/ahp` on :7464, the node's TUI Pis): choices and health, independently of
+/// Paratenic. Endpoints come from pi-client's `client.hosts` (Pi settings,
+/// bearer `hosts[].tokenFile`, else `client.tokenFile`), else Culture's
+/// `<node>-pi-daemon` and `<node>-pi` hosts. Request timeouts and parallelism
+/// are shared with Paratenic (`paratenic.request_timeout_seconds`, ...).
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct PiDaemonConfig {
+    pub enabled: bool,
+    pub bridge: bool,
     /// Pi settings file holding `client.hosts` and `client.tokenFile`
     /// (default `$PI_CODING_AGENT_DIR/settings.json`, else
     /// `~/.pi/agent/settings.json`).
-    pub pi_settings: Option<String>,
+    pub settings: Option<String>,
+}
+impl Default for PiDaemonConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bridge: true,
+            settings: None,
+        }
+    }
 }
 impl Default for ParatenicConfig {
     fn default() -> Self {
@@ -203,6 +238,7 @@ impl Default for Host {
             command: "ag".into(),
             paths: Paths::default(),
             paratenic: HostParatenic::default(),
+            pi_daemon: HostPiDaemon::default(),
         }
     }
 }
@@ -244,6 +280,7 @@ pub struct Config {
     pub paths: Paths,
     pub gallery: GalleryConfig,
     pub paratenic: ParatenicConfig,
+    pub pi_daemon: PiDaemonConfig,
     pub dash: DashConfig,
     pub hosts: Vec<Host>,
     /// SSH executable (primarily useful for an isolated transport fixture).
@@ -261,6 +298,7 @@ impl Default for Config {
             hosts: vec![Host::local()],
             gallery: GalleryConfig::default(),
             paratenic: ParatenicConfig::default(),
+            pi_daemon: PiDaemonConfig::default(),
             dash: DashConfig::default(),
             ssh_command: "ssh".into(),
             connect_timeout_seconds: 10,
@@ -310,10 +348,15 @@ impl AppConfig for Config {
         if !(1..=120).contains(&self.paratenic.request_timeout_seconds)
             || !(1..=300).contains(&self.paratenic.answer_timeout_seconds)
             || !(1..=64).contains(&self.paratenic.parallelism)
-            || [&self.paratenic.culture_config, &self.paratenic.token_file]
-                .into_iter()
-                .flatten()
-                .any(|p| !safe(p, 4096))
+            || [
+                &self.paratenic.culture_config,
+                &self.paratenic.token_file,
+                &self.paratenic.pi_settings,
+                &self.pi_daemon.settings,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|p| !safe(p, 4096))
         {
             return Err(invalid(
                 "paratenic: request 1–120s, answer 1–300s, parallelism 1–64, paths without control characters",
