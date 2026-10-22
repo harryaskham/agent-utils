@@ -559,3 +559,54 @@ test("each pane's git chip is its own directory's, not the focused pane's (pi-cl
   assert.doesNotMatch(a, /feature\/b/);
   assert.ok(execs.includes("/work/a") && execs.includes("/work/b"), "git ran in each pane's directory");
 });
+
+test("the loops chip shows each pane's session's loops: how many and the next one", async () => {
+  const { LOOPS_EVENT, LOOPS_REQUEST } = await import("../extensions/lib/loop-indicator.js");
+  const handlers = new Map();
+  const bus = new Map();
+  const events = { on: (name, listener) => { bus.set(name, [...(bus.get(name) ?? []), listener]); return () => {}; }, emit: (name, data) => (bus.get(name) ?? []).forEach((listener) => listener(data)) };
+  const requests = [];
+  events.on(LOOPS_REQUEST, (data) => requests.push(data.sessionId));
+  let editorFactory;
+  let drawing = "s1";
+  const ctx = {
+    mode: "tui",
+    cwd: "/work",
+    model: { provider: "openai", id: "gpt", contextWindow: 100_000 },
+    getContextUsage: () => ({ percent: 1, contextWindow: 100_000 }),
+    sessionManager: { getEntries: () => [], getSessionId: () => drawing },
+    ui: {
+      getEditorComponent: () => () => ({ render: () => ["top", "editor", "bottom"], handleInput() {}, invalidate() {} }),
+      setEditorComponent: (factory) => { editorFactory = factory; },
+    },
+  };
+  const pi = {
+    registerCommand() {},
+    on(name, handler) { const list = handlers.get(name) || []; list.push(handler); handlers.set(name, list); },
+    getThinkingLevel: () => "off",
+    events,
+    exec: async () => ({ code: 1, stdout: "" }),
+  };
+  await createEditorChipsExtension({
+    settings: { agentUtils: { editorChips: { enabled: true, bottomRight: ["loops", "mcp"] } } },
+    env: { HOME: "/home/u" },
+    host: { CustomEditor: class {} },
+  })(pi);
+  await handlers.get("session_start")[0]({}, ctx);
+  const editor = editorFactory({ requestRender() {} }, { fg: (_c, t) => t, bg: (_c, t) => t, bold: (t) => t }, {});
+  const draw = (session) => {
+    drawing = session;
+    return stripAnsi(editor.render(160).join("\n"));
+  };
+  assert.doesNotMatch(draw("s1"), /⟳/, "no loops: no chip");
+  assert.deepEqual(requests, ["s1"], "it asks for the drawn session's loops");
+  const now = Date.now();
+  events.emit(LOOPS_EVENT, { sessionId: "s1", loops: [{ startedAt: now - 60_000, intervalSecs: 3 * 3600 }, { startedAt: now, intervalSecs: 600 }] });
+  const s1 = draw("s1");
+  assert.match(s1, /⟳ 2/);
+  assert.match(s1, /10m/, "the next one: in 10 minutes");
+  assert.doesNotMatch(s1, /#\d/, "no loop numbers");
+  // Another pane's session has none: no chip there.
+  assert.doesNotMatch(draw("s2"), /⟳/);
+  assert.ok(requests.includes("s2"));
+});

@@ -4,23 +4,13 @@
 // ctx.chord.watchDocument, so pi-daemon knows nothing of loops; /loop list and /loop stop stay
 // loop.mjs's commands. In TUI Pi (no ctx.chord) it does nothing.
 import { LOOPS_DOC, nextFireAt } from "../lib/durable-loop.js";
+import { LOOPS_EVENT, LOOPS_REQUEST, liveLoopSchedules, shortDuration } from "../lib/loop-indicator.js";
+
+export { shortDuration };
 
 const STATUS = "agent-utils-loops";
 /** Redraw the countdowns this often. */
 export const LOOP_STATUS_TICK_MS = 30_000;
-
-/** `5m`, `1h30m`, `45s`: a short duration. */
-export function shortDuration(ms) {
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  if (hours < 24) return rest === 0 ? `${hours}h` : `${hours}h${rest}m`;
-  const days = Math.floor(hours / 24);
-  return hours % 24 === 0 ? `${days}d` : `${days}d${hours % 24}h`;
-}
 
 /** The live loops of a loops document, by number. */
 export function liveLoops(doc) {
@@ -42,46 +32,89 @@ export function loopStatus(doc, now = Date.now()) {
   return `⟳ ${loops.length} loop${loops.length === 1 ? "" : "s"} · ${parts.join(" · ")}`;
 }
 
-export default function loopClient(pi, { tickMs = LOOP_STATUS_TICK_MS, now = () => Date.now(), setTimer = setInterval, clearTimer = clearInterval } = {}) {
-  let doc = null;
-  let stop;
+export default function loopClient(pi, { tickMs = LOOP_STATUS_TICK_MS, now = () => Date.now(), setTimer = setInterval, clearTimer = clearInterval, maxSessions = 16 } = {}) {
+  // Each followed session's loops: sessionId -> { doc, stop, stopped }, the oldest let go beyond
+  // maxSessions. The focused session's always; others when a consumer (the editor chips, drawing
+  // each pane) asks for them.
+  const sessions = new Map();
+  // The live ctx (pi-client's refers to the pane being drawn, else the focused one).
+  let live;
+  let focused;
+  // A consumer draws the loops (a chip): no status line of our own.
+  let consumer = false;
   let ticker;
-  let generation = 0;
 
-  const show = (ctx) => ctx.ui?.setStatus?.(STATUS, loopStatus(doc, now()));
-  const quiet = () => {
-    stop?.();
-    stop = undefined;
+  const sessionIdOf = (ctx) => {
+    try {
+      return ctx?.sessionManager?.getSessionId?.();
+    } catch {
+      return undefined;
+    }
+  };
+  const publish = (sessionId) => pi.events?.emit?.(LOOPS_EVENT, { sessionId, loops: liveLoopSchedules(sessions.get(sessionId)?.doc) });
+  const show = () => live?.ui?.setStatus?.(STATUS, consumer ? undefined : loopStatus(sessions.get(focused)?.doc ?? null, now()));
+
+  // Follow a session's loops document; `ctx` refers to that session now (pi-client binds the
+  // watch to the pane the ctx refers to when it is called).
+  const follow = (ctx, sessionId) => {
+    if (!sessionId || sessions.has(sessionId) || typeof ctx?.chord?.watchDocument !== "function") return;
+    const entry = { doc: null, stop: undefined, stopped: false };
+    sessions.set(sessionId, entry);
+    while (sessions.size > maxSessions) {
+      const [oldest, gone] = sessions.entries().next().value;
+      sessions.delete(oldest);
+      gone.stopped = true;
+      gone.stop?.();
+    }
+    const { definition } = LOOPS_DOC;
+    Promise.resolve(
+      ctx.chord.watchDocument({ kind: definition.kind, version: definition.version, scope: definition.scope }, (value) => {
+        if (entry.stopped) return;
+        entry.doc = value;
+        publish(sessionId);
+        if (sessionId === focused) show();
+      }),
+    ).then(
+      (stopper) => {
+        if (entry.stopped) stopper?.();
+        else entry.stop = stopper;
+      },
+      () => {
+        if (sessions.get(sessionId) === entry) sessions.delete(sessionId);
+      },
+    );
+  };
+
+  // A consumer asks for a session's loops while it draws that session's pane.
+  pi.events?.on?.(LOOPS_REQUEST, (request) => {
+    if (!consumer) {
+      consumer = true;
+      show();
+    }
+    const sessionId = request?.sessionId;
+    if (!sessionId) return;
+    if (sessions.has(sessionId)) return publish(sessionId);
+    if (live !== undefined && sessionIdOf(live) === sessionId) follow(live, sessionId);
+  });
+
+  pi.on("session_start", (_event, ctx) => {
+    if (typeof ctx?.chord?.watchDocument !== "function") return;
+    live = ctx;
+    focused = sessionIdOf(ctx);
+    follow(ctx, focused);
+    show();
+    if (ticker === undefined) {
+      ticker = setTimer(() => show(), tickMs);
+      ticker?.unref?.();
+    }
+  });
+  pi.on("session_shutdown", () => {
+    for (const entry of sessions.values()) {
+      entry.stopped = true;
+      entry.stop?.();
+    }
+    sessions.clear();
     if (ticker !== undefined) clearTimer(ticker);
     ticker = undefined;
-  };
-
-  // Follow the loops of the session ctx refers to now (pi-client's focused pane).
-  const follow = async (ctx) => {
-    if (typeof ctx?.chord?.watchDocument !== "function") return;
-    quiet();
-    const mine = ++generation;
-    doc = null;
-    show(ctx);
-    const { definition } = LOOPS_DOC;
-    try {
-      const stopper = await ctx.chord.watchDocument({ kind: definition.kind, version: definition.version, scope: definition.scope }, (value) => {
-        if (mine !== generation) return;
-        doc = value;
-        show(ctx);
-      });
-      if (mine !== generation) return stopper();
-      stop = stopper;
-    } catch {
-      return;
-    }
-    ticker = setTimer(() => show(ctx), tickMs);
-    ticker?.unref?.();
-  };
-
-  pi.on("session_start", (_event, ctx) => follow(ctx));
-  pi.on("session_shutdown", () => {
-    generation += 1;
-    quiet();
   });
 }

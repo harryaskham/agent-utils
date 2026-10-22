@@ -10,7 +10,7 @@ const DEFAULT_FIELDS = Object.freeze({
   bottomLeft: ["directory"],
   bottomCenter: ["branch", "diff"],
 });
-const KNOWN_FIELDS = new Set(["model", "effort", "mcp", "cost", "context", "directory", "branch", "diff", "speech", "meter", "working", "scrollUp", "scrollDown"]);
+const KNOWN_FIELDS = new Set(["model", "effort", "mcp", "loops", "cost", "context", "directory", "branch", "diff", "speech", "meter", "working", "scrollUp", "scrollDown"]);
 // What the editor itself writes into its borders (pi-client's embedded working status, the
 // "↑ N more" / "↓ N more" scroll markers) becomes chips; unless placed explicitly, they go here.
 const BORDER_FIELDS = Object.freeze([["working", "topLeft", "start"], ["scrollUp", "topRight", "end"], ["scrollDown", "bottomRight", "end"]]);
@@ -248,6 +248,11 @@ function chipFor(field, values, theme) {
     case "branch": return values.inGitRepo ? renderParts([part("", p.blue), ...(values.branchCollapsed ? [] : [part(values.branch, p.nord3)])], { divider: "rounded" }) : "";
     case "diff": return values.inGitRepo ? renderParts([part(`+${values.additions || 0}`, p.green), part(`-${values.deletions || 0}`, p.red)], { divider: "vertical" }) : "";
     case "mcp": return renderParts([part(`${values.mcpCount || 0}`, p.magenta), part("MCP", p.nord3)], { divider: "vertical" });
+    // The session's loops (pi-daemon's /loop, through loop.mjs's client part): how many, and the
+    // time to the next one; none: no chip.
+    case "loops": return values.loopsCount > 0
+      ? renderParts([part(`⟳ ${values.loopsCount}`, p.blue), ...(values.loopsNext ? [part(values.loopsNext, p.nord3)] : [])], { divider: "vertical" })
+      : "";
     case "cost": return renderParts([part(`$${Number(values.cost || 0).toFixed(2)}`, darken(p.green), [248, 248, 248])]);
     case "context": {
       const pct = Number(values.contextPct || 0);

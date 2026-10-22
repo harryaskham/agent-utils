@@ -1,5 +1,6 @@
 // Editor chips extension factory (host-independent core). The Pi entry point
 // is extensions/editor-chips.js, which supplies the running Pi's CustomEditor.
+import { LOOPS_EVENT, LOOPS_REQUEST, nextLoopIn, shortDuration } from "./loop-indicator.js";
 import { readAgentSettings, agentSettingsPath } from "../pi-graphics/agent-io.js";
 import { clampRenderedLineToWidth, clampRenderedRowsToWidth } from "../pi-graphics/ansi-width.js";
 import { getOrCreateEditorChromeRegistry } from "../pi-graphics/fullscreen-contract.js";
@@ -33,6 +34,11 @@ function sanitizeStatus(text) {
 
 const STATUS_FAILURE = /\b(?:unconfigured|errors?|fail(?:ed|ure|ing)?|unavailable|invalid|blocked|denied)\b/i;
 
+/** Redraw the loops chip's countdown this often while any session has loops. */
+const LOOPS_REDRAW_MS = 30_000;
+/** Ask for a session's loops at most this often (loop-client publishes changes as they happen). */
+const LOOPS_REQUEST_MS = 10_000;
+
 /** How old a directory's git branch and diff may be before it is read again. */
 const GIT_STALE_MS = 15_000;
 /** Directories whose git is remembered at once. */
@@ -61,6 +67,11 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       // pane's chips are its own directory's), TUI Pi one.
       git: new Map(),
       refreshingGit: new Set(),
+      // Each session's live loops (loop.mjs's client part publishes them), and when we last asked.
+      loops: new Map(),
+      loopRequests: new Map(),
+      loopTimer: null,
+      loopsUnsubscribe: null,
       footerData: null,
       tui: null,
       editorRegistry: null,
@@ -128,6 +139,43 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       }
     };
 
+    // The loops chip: loop-client publishes each session's loops; the countdown is redrawn
+    // every 30 s while any session has loops.
+    const subscribeLoops = () => {
+      if (state.loopsUnsubscribe || !configuredFields.has("loops") || typeof pi.events?.on !== "function") return;
+      state.loopsUnsubscribe = pi.events.on(LOOPS_EVENT, (data) => {
+        if (state.stopped || !data?.sessionId) return;
+        state.loops.set(String(data.sessionId), Array.isArray(data.loops) ? data.loops : []);
+        const any = [...state.loops.values()].some((loops) => loops.length > 0);
+        if (any && !state.loopTimer) {
+          state.loopTimer = setInterval(() => { try { state.tui?.requestRender?.(); } catch {} }, LOOPS_REDRAW_MS);
+          state.loopTimer.unref?.();
+        } else if (!any && state.loopTimer) {
+          clearInterval(state.loopTimer);
+          state.loopTimer = null;
+        }
+        try { state.tui?.requestRender?.(); } catch {}
+      });
+    };
+    subscribeLoops();
+
+    // The loops of the session this ctx draws: asked for (now and then), the count and next.
+    const loopsFor = (ctx) => {
+      if (!configuredFields.has("loops")) return { loopsCount: 0 };
+      let sessionId;
+      try { sessionId = ctx?.sessionManager?.getSessionId?.(); } catch {}
+      if (!sessionId) return { loopsCount: 0 };
+      sessionId = String(sessionId);
+      const asked = state.loopRequests.get(sessionId) || 0;
+      if (Date.now() - asked > LOOPS_REQUEST_MS) {
+        state.loopRequests.set(sessionId, Date.now());
+        try { pi.events?.emit?.(LOOPS_REQUEST, { sessionId }); } catch {}
+      }
+      const loops = state.loops.get(sessionId) || [];
+      const next = nextLoopIn(loops);
+      return { loopsCount: loops.length, ...(next === undefined ? {} : { loopsNext: shortDuration(next) }) };
+    };
+
     const valuesFor = (ctx) => {
       // This ctx's directory's git, refreshed when missing or stale.
       const git = state.git.get(cwdOf(ctx));
@@ -161,6 +209,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         inGitRepo: Boolean(git?.inGitRepo) || Boolean(footerBranch),
         additions: git?.additions || 0,
         deletions: git?.deletions || 0,
+        ...loopsFor(ctx),
       };
     };
 
@@ -298,6 +347,10 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       state.editorLease = null;
       try { state.speechUnsubscribe?.(); } catch {}
       state.speechUnsubscribe = null;
+      try { state.loopsUnsubscribe?.(); } catch {}
+      state.loopsUnsubscribe = null;
+      if (state.loopTimer) clearInterval(state.loopTimer);
+      state.loopTimer = null;
       state.speech = null;
       state.statusCtx = null;
       if (state.originalSetFooter && state.patchedSetFooter) {
