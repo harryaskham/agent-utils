@@ -167,6 +167,15 @@ os.execv('/bin/sh',['sh','-c',sys.argv[-1]])
             .map(|v| v.parse().unwrap())
             .collect()
     }
+    /// Tails still running. Under heavy load the collector may reconnect a
+    /// timed-out tail (its old process has exited); a browser must never add a
+    /// second concurrent one.
+    fn live_tail_pids(&self) -> Vec<i32> {
+        self.tail_pids()
+            .into_iter()
+            .filter(|pid| nix::sys::signal::kill(nix::unistd::Pid::from_raw(*pid), None).is_ok())
+            .collect()
+    }
     fn stop(&mut self) {
         nix::sys::signal::kill(
             nix::unistd::Pid::from_raw(self.child.id() as i32),
@@ -258,7 +267,7 @@ fn one_collector_fans_out_replays_rotates_and_stops_with_open_sse() {
     assert_eq!(speech(&mut b, "shared new speech"), last);
     assert!(start.elapsed() < Duration::from_millis(1500));
     assert_eq!(
-        server.tail_pids().len(),
+        server.live_tail_pids().len(),
         1,
         "browsers started duplicate tails"
     );
@@ -278,7 +287,7 @@ fn one_collector_fans_out_replays_rotates_and_stops_with_open_sse() {
     fs::write(&replacement, line("rotated")).unwrap();
     fs::rename(replacement, server.dir.path().join("remote.jsonl")).unwrap();
     speech(&mut b, "rotated");
-    assert_eq!(server.tail_pids().len(), 1);
+    assert_eq!(server.live_tail_pids().len(), 1);
     server.stop();
     let mut rest = String::new();
     b.read_to_string(&mut rest).unwrap();
