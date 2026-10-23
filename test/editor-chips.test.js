@@ -610,3 +610,48 @@ test("the loops chip shows each pane's session's loops: how many and the next on
   assert.doesNotMatch(draw("s2"), /⟳/);
   assert.ok(requests.includes("s2"));
 });
+
+test("the branch and diff chips use the session's git as its host reads it (pi-git), running none here", async () => {
+  const { GIT_EVENT, GIT_REQUEST } = await import("../extensions/lib/git-indicator.js");
+  const handlers = new Map();
+  const bus = new Map();
+  const events = { on: (name, listener) => { bus.set(name, [...(bus.get(name) ?? []), listener]); return () => {}; }, emit: (name, data) => (bus.get(name) ?? []).forEach((listener) => listener(data)) };
+  const requests = [];
+  events.on(GIT_REQUEST, (data) => requests.push(data.sessionId));
+  const execs = [];
+  let editorFactory;
+  const ctx = {
+    mode: "tui",
+    cwd: "/remote/only",
+    model: { provider: "openai", id: "gpt", contextWindow: 100_000 },
+    getContextUsage: () => ({ percent: 1, contextWindow: 100_000 }),
+    sessionManager: { getEntries: () => [], getSessionId: () => "s1" },
+    ui: {
+      getEditorComponent: () => () => ({ render: () => ["top", "editor", "bottom"], handleInput() {}, invalidate() {} }),
+      setEditorComponent: (factory) => { editorFactory = factory; },
+    },
+  };
+  const pi = {
+    registerCommand() {},
+    on(name, handler) { const list = handlers.get(name) || []; list.push(handler); handlers.set(name, list); },
+    getThinkingLevel: () => "off",
+    events,
+    exec: async (command, args) => { execs.push([command, ...args].join(" ")); return { code: 1, stdout: "" }; },
+  };
+  await createEditorChipsExtension({
+    settings: { agentUtils: { editorChips: { enabled: true, bottomCenter: ["branch", "diff"] } } },
+    env: { HOME: "/home/u" },
+    host: { CustomEditor: class {} },
+  })(pi);
+  events.emit(GIT_EVENT, { sessionId: "s1", workspace: { repo: true, branch: "feature-remote", additions: 7, deletions: 2 } });
+  await handlers.get("session_start")[0]({}, ctx);
+  execs.length = 0;
+  const editor = editorFactory({ requestRender() {} }, { fg: (_c, t) => t, bg: (_c, t) => t, bold: (t) => t }, {});
+  const drawn = stripAnsi(editor.render(160).join("\n"));
+  assert.match(drawn, /feature-remote/);
+  assert.match(drawn, /\+7/);
+  assert.match(drawn, /-2/);
+  await handlers.get("turn_end")?.[0]?.({}, ctx);
+  assert.deepEqual(execs.filter((line) => line.startsWith("git")), [], "no git run here for a session its host reads");
+  assert.ok(requests.includes("s1"));
+});

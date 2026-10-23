@@ -1,6 +1,7 @@
 // Editor chips extension factory (host-independent core). The Pi entry point
 // is extensions/editor-chips.js, which supplies the running Pi's CustomEditor.
 import { LOOPS_EVENT, LOOPS_REQUEST, nextLoopIn, shortDuration } from "./loop-indicator.js";
+import { GIT_EVENT, GIT_REQUEST } from "./git-indicator.js";
 import { readAgentSettings, agentSettingsPath } from "../pi-graphics/agent-io.js";
 import { clampRenderedLineToWidth, clampRenderedRowsToWidth } from "../pi-graphics/ansi-width.js";
 import { getOrCreateEditorChromeRegistry } from "../pi-graphics/fullscreen-contract.js";
@@ -38,6 +39,8 @@ const STATUS_FAILURE = /\b(?:unconfigured|errors?|fail(?:ed|ure|ing)?|unavailabl
 const LOOPS_REDRAW_MS = 30_000;
 /** Ask for a session's loops at most this often (loop-client publishes changes as they happen). */
 const LOOPS_REQUEST_MS = 10_000;
+/** How often a pane's chips ask pi-git's client part for its session's git state. */
+const GIT_REQUEST_MS = 10_000;
 
 /** How old a directory's git branch and diff may be before it is read again. */
 const GIT_STALE_MS = 15_000;
@@ -67,6 +70,11 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       // pane's chips are its own directory's), TUI Pi one.
       git: new Map(),
       refreshingGit: new Set(),
+      // Sessions' git state as their host reads it (pi-git's git.mjs, through git-client.js in
+      // pi-client): preferred to running git here, which a remote session's directory is not on.
+      hostGit: new Map(),
+      gitRequests: new Map(),
+      gitUnsubscribe: null,
       // Each session's live loops (loop.mjs's client part publishes them), and when we last asked.
       loops: new Map(),
       loopRequests: new Map(),
@@ -115,7 +123,40 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       try { return String(ctx?.cwd || process.cwd()); } catch { return process.cwd(); }
     };
 
+    const sessionIdOf = (ctx) => {
+      try { const id = ctx?.sessionManager?.getSessionId?.(); return id ? String(id) : undefined; } catch { return undefined; }
+    };
+
+    // The session's git state from its host, when pi-git publishes it; asked for now and then.
+    const hostGitFor = (ctx) => {
+      const sessionId = sessionIdOf(ctx);
+      if (!sessionId || typeof pi.events?.emit !== "function") return undefined;
+      const asked = state.gitRequests.get(sessionId) || 0;
+      if (Date.now() - asked > GIT_REQUEST_MS) {
+        state.gitRequests.set(sessionId, Date.now());
+        while (state.gitRequests.size > GIT_DIRECTORIES) state.gitRequests.delete(state.gitRequests.keys().next().value);
+        try { pi.events.emit(GIT_REQUEST, { sessionId }); } catch {}
+      }
+      return state.hostGit.get(sessionId);
+    };
+
+    const subscribeHostGit = () => {
+      if (state.gitUnsubscribe || typeof pi.events?.on !== "function") return;
+      if (!configuredFields.has("branch") && !configuredFields.has("diff")) return;
+      state.gitUnsubscribe = pi.events.on(GIT_EVENT, (data) => {
+        if (state.stopped || !data?.sessionId || !data.workspace || typeof data.workspace !== "object") return;
+        state.hostGit.delete(String(data.sessionId));
+        state.hostGit.set(String(data.sessionId), data.workspace);
+        while (state.hostGit.size > GIT_DIRECTORIES) state.hostGit.delete(state.hostGit.keys().next().value);
+        try { state.tui?.requestRender?.(); } catch {}
+      });
+    };
+    subscribeHostGit();
+
     const refreshGit = async (ctx) => {
+      // Its host reads this session's git (pi-git): none here.
+      const sessionId = sessionIdOf(ctx);
+      if (sessionId && state.hostGit.has(sessionId)) return;
       const cwd = cwdOf(ctx);
       if (state.refreshingGit.has(cwd)) return;
       state.refreshingGit.add(cwd);
@@ -177,9 +218,13 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
     };
 
     const valuesFor = (ctx) => {
-      // This ctx's directory's git, refreshed when missing or stale.
-      const git = state.git.get(cwdOf(ctx));
-      if (!git || Date.now() - git.at > GIT_STALE_MS) void refreshGit(ctx);
+      // The session's git as its host reads it (pi-git), else this ctx's directory's, refreshed
+      // when missing or stale.
+      const hosted = hostGitFor(ctx);
+      const git = hosted
+        ? { inGitRepo: hosted.repo === true, branch: hosted.branch || (hosted.oid ? String(hosted.oid).slice(0, 8) : ""), additions: Number(hosted.additions) || 0, deletions: Number(hosted.deletions) || 0 }
+        : state.git.get(cwdOf(ctx));
+      if (!hosted && (!git || Date.now() - git.at > GIT_STALE_MS)) void refreshGit(ctx);
       let footerBranch = "";
       let statuses = new Map();
       try { footerBranch = state.footerData?.getGitBranch?.() || ""; } catch {}
@@ -348,6 +393,8 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       try { state.speechUnsubscribe?.(); } catch {}
       state.speechUnsubscribe = null;
       try { state.loopsUnsubscribe?.(); } catch {}
+      try { state.gitUnsubscribe?.(); } catch {}
+      state.gitUnsubscribe = null;
       state.loopsUnsubscribe = null;
       if (state.loopTimer) clearInterval(state.loopTimer);
       state.loopTimer = null;
