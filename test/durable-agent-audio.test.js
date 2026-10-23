@@ -477,3 +477,22 @@ test("each session gets its own pool voice and stereo pan, over a configured def
   await host.command("session-c", "/tts voice=en-GB-SoniaNeural");
   assert.equal(controllers.get("session-c").getConfig().voice, "en-GB-SoniaNeural");
 });
+
+test("the spoken ledger stores long keys short, and finds them however they are asked", async () => {
+  const { SpokenLedger, ledgerKey, DURABLE_AUDIO_LEDGER_LIMIT } = await import("../extensions/lib/durable-agent-audio.js");
+  // A Copilot tool call id: an id and an opaque suffix of hundreds of characters.
+  const id = (n) => `call_${n}|${"lAk67UjIlAeoxtu9Ms7Rg2x4xMcF+".repeat(16)}${n}`;
+  const ledger = new SpokenLedger();
+  for (let n = 0; n < DURABLE_AUDIO_LEDGER_LIMIT; n += 1) ledger.add(`start:${id(n)}`);
+  assert.equal(ledger.has(`start:${id(7)}`), true);
+  assert.equal(ledger.has(`start:${id(DURABLE_AUDIO_LEDGER_LIMIT)}`), false);
+  assert.ok([...ledger].every((key) => key.length <= 64), "stored short");
+  assert.ok(JSON.stringify([...ledger]).length < 20_000, `a full ledger is small: ${JSON.stringify([...ledger]).length}`);
+  assert.equal(ledgerKey("short:key"), "short:key");
+  assert.equal(ledgerKey(ledgerKey(`start:${id(1)}`)), ledgerKey(`start:${id(1)}`), "stored keys stay as they are");
+  // A ledger saved before, with long keys, still matches.
+  const loaded = new SpokenLedger([`start:${id(3)}`]);
+  assert.equal(loaded.has(`start:${id(3)}`), true);
+  loaded.delete(`start:${id(3)}`);
+  assert.equal(loaded.size, 0);
+});

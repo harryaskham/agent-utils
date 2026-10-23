@@ -17,6 +17,7 @@
 // never tied to whether a client is attached.
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { accessSync, constants as fsConstants } from "node:fs";
 import { basename, delimiter, isAbsolute, join } from "node:path";
 import { parseEnvStyleArgs, expandEnvReferences } from "./env-args.js";
@@ -47,6 +48,26 @@ import { artifactIdentity } from "./artifact-state.js";
 export const DURABLE_AUDIO_SETTINGS_KEY = "settings";
 export const DURABLE_AUDIO_LEDGER_KEY = "spoken";
 export const DURABLE_AUDIO_LEDGER_LIMIT = 256;
+/** Ledger keys longer than this are stored as a prefix and a hash. */
+const MAX_LEDGER_KEY_CHARS = 64;
+
+/**
+ * The key a once-only speech claim is stored under. A tool call's id can be hundreds of
+ * characters (Copilot's carry an opaque suffix), and the ledger is written whole on each claim:
+ * 256 such keys made each write about 115 KB.
+ */
+export function ledgerKey(key) {
+  const text = String(key);
+  if (text.length <= MAX_LEDGER_KEY_CHARS) return text;
+  return `${text.slice(0, 32)}~${createHash("sha256").update(text).digest("base64url").slice(0, 22)}`;
+}
+
+/** The spoken ledger: a Set whose keys are stored short (ledgerKey), however they are asked. */
+export class SpokenLedger extends Set {
+  add(key) { return super.add(ledgerKey(key)); }
+  has(key) { return super.has(ledgerKey(key)); }
+  delete(key) { return super.delete(ledgerKey(key)); }
+}
 export const DURABLE_AUDIO_MAX_SESSIONS = 64;
 export const DEFAULT_DURABLE_REPLAY_GRACE_MS = 60_000;
 export const ASK_USER_TOOL = "ask_user";
@@ -299,7 +320,7 @@ export function createDurableAgentAudio({
         narrate,
         speech: speechFactory({ sessionId, config, env }),
         choices: null,
-        ledger: new Set(ledger.slice(-DURABLE_AUDIO_LEDGER_LIMIT)),
+        ledger: new SpokenLedger(ledger.slice(-DURABLE_AUDIO_LEDGER_LIMIT)),
         batches: new Map(),
         // Side completions narrating tool batches: a newer batch (or the final answer)
         // supersedes older ones, as in TUI narration.
