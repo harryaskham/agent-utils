@@ -148,6 +148,8 @@
             echo 'export * from "./extensions/durable/tools.mjs";' > $out/tools.mjs
             # interactive_choice and async_choice on pi-daemon's questions (pi-daemon 1.13).
             echo 'export * from "./extensions/durable/choice.mjs";' > $out/choice.mjs
+            # pi-git: each session's git state after each turn, /git (pi-daemon's module observer).
+            echo 'export * from "./extensions/durable/git.mjs";' > $out/git.mjs
             # The modules must load with nothing but Node built-ins.
             HOME=$TMPDIR node --input-type=module -e "
               const m = await import('$out/tts.mjs');
@@ -166,6 +168,10 @@
               if (choice.extension?.tasks?.[0]?.definition?.name !== 'agent-utils.async-choice' || choiceTools !== 'interactive_choice,async_choice,async_choice_status,async_choice_cancel') process.exit(1);
               const choiceClient = await import('$out/extensions/durable/choice-client.js');
               if (typeof choiceClient.default !== 'function') process.exit(1);
+              const git = await import('$out/git.mjs');
+              if (typeof git.observe !== 'function' || typeof git.commands?.git?.run !== 'function') process.exit(1);
+              const gitClient = await import('$out/extensions/durable/git-client.js');
+              if (typeof gitClient.default !== 'function') process.exit(1);
               const loopClient = await import('$out/extensions/durable/loop-client.js');
               if (typeof loopClient.default !== 'function' || typeof loopClient.loopStatus !== 'function') process.exit(1);
               if (caco.extension?.sections?.[0]?.key !== 'cacophony' || typeof caco.commands?.['caco-agent-register']?.run !== 'function' || typeof caco.observe !== 'function') process.exit(1);
