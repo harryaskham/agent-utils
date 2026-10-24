@@ -44,6 +44,8 @@ test("async_choice posts non-blocking questions on background tasks; status and 
   const api = { conversationId: 1, commit: (change) => store.commit(change) };
   const posted = await tools.async_choice.execute({ questions: [{ question: "Ship it?", key: "ship", choices: [{ label: "yes" }, { label: "no" }] }, { question: "Rename?", choices: [{ label: "a" }, { label: "b" }] }] }, api, {});
   assert.match(posted.content[0].text, /^Posted 2 async questions \(2 pending\)/);
+  // pi-durable 1.2 renamed a tool result's `content` to `output`: both, for either host.
+  assert.deepEqual(posted.output, posted.content);
   assert.deepEqual(store.tasks.map((task) => [task.name, task.options.background, task.input.key]), [
     [ASYNC_TASK, true, "ship"],
     [ASYNC_TASK, true, undefined],

@@ -323,11 +323,11 @@ export function createDurableMedia({
       share ? `Shared it with the operator as ${JSON.stringify(title)}.` : "",
       look ? "" : "Image content omitted (mode=share); use mode=look or both to see it.",
     ];
+    const output = [...text(lines), ...(look ? [{ type: "image", data: captured.data, mimeType: PNG_MIME }] : [])];
     return {
-      content: [
-        ...text(lines),
-        ...(look ? [{ type: "image", data: captured.data, mimeType: PNG_MIME }] : []),
-      ],
+      // `output` for pi-durable 1.2 and later (it renamed `content`), `content` for earlier hosts.
+      output,
+      content: output,
       details: {
         mode,
         outputPath: captured.outputPath,

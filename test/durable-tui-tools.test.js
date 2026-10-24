@@ -47,7 +47,8 @@ test("adapted TUI tools run with the call id, the session's directory, signal an
   const abort = new AbortController();
   const context = { abortSignal: abort.signal, marker: "ctx" };
   const result = await tools[0].execute({ word: "hello" }, { callId: "call-7", env: execEnv, conversationId: 1 }, context);
-  assert.deepEqual(result, { content: [{ type: "text", text: "said hello" }], details: { ok: true } });
+  // `output` for pi-durable 1.2 and later, `content` for earlier hosts.
+  assert.deepEqual(result, { output: [{ type: "text", text: "said hello" }], content: [{ type: "text", text: "said hello" }], details: { ok: true } });
   assert.equal(seen[0].toolCallId, "call-7");
   assert.deepEqual(seen[0].params, { word: "hello" });
   assert.equal(seen[0].signal, abort.signal);
@@ -59,7 +60,7 @@ test("adapted TUI tools run with the call id, the session's directory, signal an
   assert.deepEqual(execs, [{ argv: ["echo", "hello"], options: { cwd: undefined, timeout: 3 }, context }]);
 
   // A plain string result becomes text content.
-  assert.deepEqual(await tools[1].execute({}, { callId: "c" }, {}), { content: [{ type: "text", text: "plain text" }] });
+  assert.deepEqual(await tools[1].execute({}, { callId: "c" }, {}), { output: [{ type: "text", text: "plain text" }], content: [{ type: "text", text: "plain text" }] });
 
   // `only` keeps the named tools.
   assert.deepEqual((await adaptTuiToolExtension(fakeExtension([]), { only: ["other"] })).map((tool) => tool.name), ["other"]);

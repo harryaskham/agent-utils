@@ -123,13 +123,17 @@ function describe(definition) {
   return parts.filter(Boolean).join("\n\n");
 }
 
-/** A TUI tool result as a Durable one; a thrown error stays an error. */
+/**
+ * A TUI tool result as a Durable one; a thrown error stays an error. Its text is `output` for
+ * pi-durable 1.2 and later (which renamed `content`) and `content` for earlier hosts.
+ */
 function durableResult(result) {
-  if (result === undefined || result === null) return { content: [{ type: "text", text: "" }] };
-  if (typeof result === "string") return { content: [{ type: "text", text: result }] };
+  const both = (output) => ({ output, content: output });
+  if (result === undefined || result === null) return both([{ type: "text", text: "" }]);
+  if (typeof result === "string") return both([{ type: "text", text: result }]);
   const content = Array.isArray(result.content) ? result.content : [{ type: "text", text: JSON.stringify(result) }];
   return {
-    content,
+    ...both(content),
     ...(result.details === undefined ? {} : { details: result.details }),
     ...(result.isError === true ? { isError: true } : {}),
   };

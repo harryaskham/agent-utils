@@ -370,7 +370,11 @@ export function createLoopCommands({ task, now = () => Date.now(), minSecs = DEF
 /** The agent's own loop tools, as in TUI Pi: create_loop, list_loops, stop_loop. */
 export function createLoopTools({ task, now = () => Date.now(), minSecs = DEFAULT_MIN_INTERVAL_SECS, defaultDelivery = "followUp" } = {}) {
   const ops = loopOperations({ task, now });
-  const text = (value, details) => ({ content: [{ type: "text", text: value }], ...(details === undefined ? {} : { details }) });
+  // `output` for pi-durable 1.2 and later (it renamed `content`), `content` for earlier hosts.
+  const text = (value, details) => {
+    const output = [{ type: "text", text: value }];
+    return { output, content: output, ...(details === undefined ? {} : { details }) };
+  };
   const commitOf = (api, context) => (change) => api.commit(change, context);
   return [
     {

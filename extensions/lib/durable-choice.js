@@ -304,7 +304,11 @@ export function createAsyncChoiceTask() {
   };
 }
 
-const text = (value, details) => ({ content: [{ type: "text", text: value }], ...(details === undefined ? {} : { details }) });
+// `output` for pi-durable 1.2 and later (it renamed `content`), `content` for earlier hosts.
+const text = (value, details) => {
+  const output = [{ type: "text", text: value }];
+  return { output, content: output, ...(details === undefined ? {} : { details }) };
+};
 
 /** The tools: interactive_choice, async_choice, async_choice_status, async_choice_cancel. */
 export function createChoiceTools({ asyncTask = createAsyncChoiceTask(), now = () => Date.now() } = {}) {
