@@ -4,8 +4,18 @@
 // It follows git.mjs's module state (pi-daemon's `pi-daemon.module-state` document, key "git")
 // through pi-client's ctx.chord.watchDocument: the focused session's, and any a consumer asks
 // for while drawing its pane. After /git wt fork, it opens a session in the new worktree,
-// carrying the conversation (pi-client's ctx.sessions). In TUI Pi (no ctx.chord) it does nothing.
+// carrying the conversation (pi-client's ctx.sessions). The focused session's repository shows in
+// pi-client's sidebar (setWidget's placement "sidebar", where ctx.ui.hasSidebar); /repo switches
+// to another session in the same repository or one of its worktrees, on the same host. In TUI Pi
+// (no ctx.chord) it does nothing.
 import { GIT_EVENT, GIT_REQUEST, GIT_STATE_DOC } from "../lib/git-indicator.js";
+import { workspacePanel } from "../lib/durable-git.js";
+
+/** The sidebar panel's key. */
+export const GIT_PANEL = "pi-git";
+
+/** Whether `path` is `root` or inside it. */
+const within = (path, root) => typeof path === "string" && typeof root === "string" && root !== "" && (path === root || path.startsWith(root.endsWith("/") ? root : `${root}/`));
 
 export default function gitClient(pi, { maxSessions = 32 } = {}) {
   // sessionId -> { workspace, forkedAt, stop, stopped }
@@ -19,10 +29,49 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
       return undefined;
     }
   };
+  // The focused session's repository in pi-client's sidebar; set again only when it changes.
+  let panel;
+  const showPanel = () => {
+    if (live?.ui?.hasSidebar !== true || typeof live.ui.setWidget !== "function") return;
+    const lines = workspacePanel(sessions.get(sessionIdOf(live))?.workspace);
+    const key = JSON.stringify(lines ?? null);
+    if (key === panel) return;
+    panel = key;
+    live.ui.setWidget(GIT_PANEL, lines, { placement: "sidebar" });
+  };
   const publish = (sessionId) => {
     const entry = sessions.get(sessionId);
     if (entry?.workspace) pi.events?.emit?.(GIT_EVENT, { sessionId, workspace: entry.workspace });
+    showPanel();
   };
+
+  // /repo: another session in this repository (its worktrees too), on the same host.
+  pi.registerCommand?.("repo", {
+    description: "Switch to another session in this repository or its worktrees",
+    handler: async (_args, ctx) => {
+      const notify = (text) => ctx?.ui?.notify?.(text, "info");
+      if (typeof ctx?.sessions?.list !== "function" || typeof ctx.sessions.open !== "function") return notify("/repo needs pi-client.");
+      const id = sessionIdOf(ctx);
+      const workspace = sessions.get(id)?.workspace;
+      if (!workspace?.repo) return notify("/repo: this session's directory is not a git repository (or its state has not arrived yet).");
+      const roots = [workspace.mainRoot, ...(Array.isArray(workspace.worktrees) ? workspace.worktrees : [])];
+      const rows = ctx.sessions.list();
+      const host = rows.find((row) => row.id === id)?.host;
+      const others = rows
+        .filter((row) => row.id !== id && row.host === host && !row.archived && roots.some((root) => within(row.cwd, root)))
+        .sort((a, b) => (b.activeAt ?? 0) - (a.activeAt ?? 0));
+      if (others.length === 0) return notify(`No other session in ${workspace.project}.`);
+      const labels = others.map((row, index) => {
+        const tree = roots.filter((root) => within(row.cwd, root)).sort((a, b) => b.length - a.length)[0];
+        const where = tree === workspace.mainRoot ? workspace.project : tree.split("/").pop();
+        return `${index + 1}. ${row.title || row.id} · ${where}${row.busy ? " · working" : ""}`;
+      });
+      const chosen = await ctx.ui.select(`Sessions in ${workspace.project}`, labels);
+      const index = labels.indexOf(chosen);
+      if (index < 0) return;
+      await ctx.sessions.open(others[index]);
+    },
+  });
 
   // A /git wt fork in this session: a session in the worktree, with this conversation.
   const openForked = async (forked) => {
@@ -77,6 +126,8 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
   };
 
   pi.events?.on?.(GIT_REQUEST, (data) => {
+    // Panes are drawn as focus moves: the sidebar follows the focused session's repository.
+    showPanel();
     const sessionId = data?.sessionId ? String(data.sessionId) : undefined;
     if (!sessionId) return;
     if (sessions.has(sessionId)) return publish(sessionId);
@@ -91,6 +142,8 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
   });
 
   pi.on("session_shutdown", async () => {
+    if (panel !== undefined && live?.ui?.hasSidebar === true) live.ui.setWidget?.(GIT_PANEL, undefined, { placement: "sidebar" });
+    panel = undefined;
     for (const entry of sessions.values()) {
       entry.stopped = true;
       entry.stop?.();

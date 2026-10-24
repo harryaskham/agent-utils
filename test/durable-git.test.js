@@ -13,6 +13,7 @@ import {
   parseStatus,
   parseWorktrees,
   readWorkspace,
+  workspacePanel,
   workspaceSummary,
 } from "../extensions/lib/durable-git.js";
 import gitClient from "../extensions/durable/git-client.js";
@@ -178,4 +179,88 @@ test("the client part publishes each session's git state, and opens a session fo
   events.emit(GIT_REQUEST, { sessionId: "b" });
   await Promise.resolve();
   assert.equal(watches[1].session, "b");
+});
+
+test("a repository's state lists its worktrees, main first; its panel shows branch, upstream, changes and worktree", async (t) => {
+  const { dir, root } = await repo(t);
+  const tree = join(dir, "feature");
+  git(root, "worktree", "add", "-q", "-b", "feature", tree);
+  const workspace = await readWorkspace(tree);
+  assert.deepEqual(workspace.worktrees, [root, tree]);
+  assert.equal(workspace.worktree, true);
+  assert.deepEqual(workspacePanel(workspace), ["⎇ feature  project", "  clean", "  worktree of project"]);
+  assert.deepEqual(
+    workspacePanel({ repo: true, branch: "main", project: "p", upstream: "origin/main", ahead: 2, behind: 1, unstaged: 3, additions: 4, deletions: 5 }),
+    ["⎇ main  p", "  ↑2 ↓1 origin/main", "  3 modified +4 −5"],
+  );
+  assert.equal(workspacePanel({ repo: false }), undefined);
+});
+
+test("the client part shows the focused session's repository in pi-client's sidebar, and /repo switches within it", async () => {
+  const handlers = new Map();
+  const commands = new Map();
+  const bus = new Map();
+  const events = { on: (name, listener) => bus.set(name, [...(bus.get(name) ?? []), listener]), emit: (name, data) => (bus.get(name) ?? []).forEach((listener) => listener(data)) };
+  const watches = [];
+  const panels = [];
+  const opened = [];
+  let current = "a";
+  let choose = (labels) => labels[0];
+  const rows = [
+    { host: "local", id: "a", title: "This", cwd: "/src/project", activeAt: 5 },
+    { host: "local", id: "b", title: "Feature work", cwd: "/wt/project-feature/sub", activeAt: 4 },
+    { host: "local", id: "c", title: "Older", cwd: "/src/project/docs", activeAt: 1 },
+    { host: "remote", id: "d", title: "Same path elsewhere", cwd: "/src/project", activeAt: 9 },
+    { host: "local", id: "e", title: "Archived", cwd: "/src/project", activeAt: 9, archived: true },
+    { host: "local", id: "f", title: "Unrelated", cwd: "/src/other", activeAt: 9 },
+  ];
+  const ctx = {
+    sessionManager: { getSessionId: () => current },
+    chord: { async watchDocument(address, onValue) { watches.push({ session: current, onValue }); return () => {}; } },
+    sessions: { list: () => rows, open: async (row) => opened.push(row.id), create: async () => {} },
+    ui: {
+      hasSidebar: true,
+      notify() {},
+      setWidget: (key, lines, options) => panels.push({ key, lines, placement: options?.placement }),
+      select: async (_title, labels) => choose(labels),
+    },
+  };
+  gitClient({ on: (type, handler) => handlers.set(type, handler), registerCommand: (name, command) => commands.set(name, command), events });
+  await handlers.get("session_start")({}, ctx);
+  await Promise.resolve();
+  const workspace = { repo: true, branch: "main", project: "project", mainRoot: "/src/project", worktrees: ["/src/project", "/wt/project-feature"], unstaged: 1, additions: 2, deletions: 0 };
+  watches[0].onValue({ values: { workspace } });
+  assert.deepEqual(panels, [{ key: "pi-git", lines: ["⎇ main  project", "  1 modified +2 −0"], placement: "sidebar" }]);
+  // The same state again: not set again.
+  watches[0].onValue({ values: { workspace } });
+  assert.equal(panels.length, 1);
+
+  // /repo: this repository's other sessions on this host, newest first; the chosen one opens.
+  let offered;
+  choose = (labels) => {
+    offered = labels;
+    return labels[1];
+  };
+  await commands.get("repo").handler("", ctx);
+  assert.deepEqual(offered, ["1. Feature work · project-feature", "2. Older · project"]);
+  assert.deepEqual(opened, ["c"]);
+
+  // Focus moves to a session whose state has not arrived: the panel is cleared.
+  current = "z";
+  events.emit(GIT_REQUEST, { sessionId: "z" });
+  assert.deepEqual(panels.at(-1), { key: "pi-git", lines: undefined, placement: "sidebar" });
+
+  // Without pi-client's sidebar (TUI Pi, an earlier pi-client), no panel is set.
+  const plain = [];
+  const handlers2 = new Map();
+  gitClient({ on: (type, handler) => handlers2.set(type, handler), events: { on() {}, emit() {} } });
+  const watches2 = [];
+  await handlers2.get("session_start")({}, {
+    sessionManager: { getSessionId: () => "a" },
+    chord: { async watchDocument(_address, onValue) { watches2.push(onValue); return () => {}; } },
+    ui: { notify() {}, setWidget: (...args) => plain.push(args) },
+  });
+  await Promise.resolve();
+  watches2[0]({ values: { workspace } });
+  assert.deepEqual(plain, []);
 });

@@ -30,6 +30,8 @@ export const MAX_BACKOFF_MS = 10 * 60_000;
 export const MAX_GIT_SESSIONS = 256;
 /** Most bytes read from one git command. */
 const MAX_GIT_OUTPUT = 4 * 1024 * 1024;
+/** Most worktrees a repository's state lists. */
+export const MAX_WORKTREES = 64;
 
 /** The environment git runs with: the session's overrides, never prompting or taking optional locks. */
 export function gitEnv(overrides = {}, base = process.env) {
@@ -108,12 +110,16 @@ export async function readWorkspace(cwd, { env, signal, run = runGit } = {}) {
   if (status.code !== 0) throw new Error("git status failed");
   const parsed = parseStatus(status.stdout);
   const diff = parsed.oid ? await run(["diff", "--numstat", "HEAD", "--"], options) : { code: 0, stdout: "" };
+  // The repository's worktrees (its main one first): /repo's sessions are those in any of them.
+  const trees = await run(["worktree", "list", "--porcelain"], options);
+  const worktrees = trees.code === 0 ? parseWorktrees(trees.stdout).map((tree) => tree.path).filter(Boolean).slice(0, MAX_WORKTREES) : [];
   return {
     repo: true,
     root: top,
     mainRoot,
     worktree: linked,
     project: basename(mainRoot),
+    worktrees,
     ...parsed,
     ...(diff.code === 0 ? parseNumstat(diff.stdout) : { additions: 0, deletions: 0 }),
   };
@@ -208,6 +214,23 @@ export function workspaceSummary(workspace) {
   parts.push(changed.length ? `${changed.join(", ")} (+${workspace.additions} −${workspace.deletions})` : "clean");
   if (workspace.worktree) parts.push(`worktree of ${workspace.mainRoot}`);
   return parts.join(" · ");
+}
+
+/** A repository's state as a sidebar panel's lines: branch and project, upstream, changes, worktree. */
+export function workspacePanel(workspace) {
+  if (!workspace || workspace.repo === false) return undefined;
+  const head = workspace.branch || (workspace.oid ? `detached ${workspace.oid.slice(0, 8)}` : "no commits");
+  const lines = [`⎇ ${head}  ${workspace.project ?? ""}`.trimEnd()];
+  if (workspace.upstream) lines.push(`  ↑${workspace.ahead ?? 0} ↓${workspace.behind ?? 0} ${workspace.upstream}`);
+  const changed = [
+    workspace.staged ? `${workspace.staged} staged` : "",
+    workspace.unstaged ? `${workspace.unstaged} modified` : "",
+    workspace.untracked ? `${workspace.untracked} untracked` : "",
+    workspace.conflicts ? `${workspace.conflicts} conflicted` : "",
+  ].filter(Boolean);
+  lines.push(changed.length ? `  ${changed.join(", ")} +${workspace.additions ?? 0} −${workspace.deletions ?? 0}` : "  clean");
+  if (workspace.worktree) lines.push(`  worktree of ${basename(workspace.mainRoot ?? "")}`);
+  return lines;
 }
 
 /** Where `/git wt fork` puts worktrees: $XDG_STATE_HOME/pi-daemon/worktrees (or ~/.local/state/...). */

@@ -15,6 +15,8 @@ A pi-daemon plugin in two parts. pi-daemon itself knows nothing of git.
 - **Client part:** `extensions/durable/git-client.js`, for pi-client.
   - It follows that document for the focused session, and for each pane the editor chips draw.
   - It publishes the state on Pi's event bus (`agent-utils:git.v1`). The branch and diff chips use it in place of running git themselves, so they work for remote sessions too.
+  - **The repo sidebar:** the focused session's repository shows in pi-client's sidebar, under the sessions: branch and project, upstream with ahead/behind, changes, and whether it is a worktree. It uses Pi's `setWidget` with pi-client's `placement: "sidebar"`, and only where `ctx.ui.hasSidebar`.
+  - **`/repo`:** switch to another session in the same repository or one of its worktrees, on the same host, newest first. The state lists the repository's worktrees for it.
   - In TUI Pi it does nothing, and the chips run git locally as before.
 
 ## Commands
@@ -24,6 +26,7 @@ A pi-daemon plugin in two parts. pi-daemon itself knows nothing of git.
 | `/git` (or `/git status`) | Refresh now and show the state in one line |
 | `/git wt list` | The repository's worktrees |
 | `/git wt fork NAME` | A worktree on a new branch `NAME` from HEAD (or on `NAME` if it exists), under `$XDG_STATE_HOME/pi-daemon/worktrees/<project>/<NAME>` (default `~/.local/state/...`) |
+| `/repo` | pi-client: pick another session in this repository or its worktrees, and open it |
 
 After `/git wt fork`, the client part opens a session in the new worktree, carrying the conversation, where pi-client lets plugins open sessions. Elsewhere it tells you to `/cd` there.
 
