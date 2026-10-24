@@ -216,7 +216,8 @@ export function createGitObserver(refresher, { run = runGit, timeoutMs = GIT_TIM
  * ctx.snapshot). A plain token object, as Durable's defineDoc returns.
  */
 export const TRACKED_DOC = {
-  definition: { kind: "agent-utils.git-tracked", version: 1, scope: "session", initial: () => ({ paths: [] }) },
+  // checkpointWhen: pi-durable 1.4 requires a base policy (earlier versions ignore it); changes stay deltas.
+  definition: { kind: "agent-utils.git-tracked", version: 1, scope: "session", initial: () => ({ paths: [] }), checkpointWhen: () => false },
 };
 /** The module state key of the followed repositories' states. */
 export const TRACKED_KEY = "tracked";

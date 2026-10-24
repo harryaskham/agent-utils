@@ -17,12 +17,14 @@ import { createCacophonyDecisionBridge } from "./cacophony-decision.js";
 
 /** pi-daemon's question document (src/input.ts): any task may carry one. */
 export const INPUT_DOC = {
-  definition: { kind: "pi-daemon.input", version: 1, scope: "task", initial: () => ({ status: "pending", question: "" }) },
+  // checkpointWhen as pi-daemon's own (pi-durable 1.4 requires one; earlier versions ignore it).
+  definition: { kind: "pi-daemon.input", version: 1, scope: "task", initial: () => ({ status: "pending", question: "" }), checkpointWhen: () => false },
 };
 
 /** The session's async questions, for status and cancel (tools cannot inspect tasks). */
 export const ASYNC_DOC = {
-  definition: { kind: "agent-utils.async-choices", version: 1, scope: "session", initial: () => ({ records: {} }) },
+  // checkpointWhen: pi-durable 1.4 requires a base policy (earlier versions ignore it); changes stay deltas.
+  definition: { kind: "agent-utils.async-choices", version: 1, scope: "session", initial: () => ({ records: {} }), checkpointWhen: () => false },
 };
 
 export const ASYNC_TASK = "agent-utils.async-choice";

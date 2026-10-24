@@ -101,6 +101,8 @@ export const LOOPS_DOC = {
     version: 1,
     scope: "session",
     initial: () => ({ last: 0, loops: {} }),
+    // pi-durable 1.4 requires a base policy (earlier versions ignore it); changes stay deltas.
+    checkpointWhen: () => false,
   },
 };
 

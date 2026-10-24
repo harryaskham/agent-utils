@@ -19,7 +19,15 @@ import { explicitCacophonyIdentity, isPiCacoDisabled } from "./cacophony-runtime
 export const MODULE = "cacophony";
 /** pi-daemon's module state document (a session family keyed by module name), as a plain token. */
 export const MODULE_STATE_DOC = {
-  definition: { kind: "pi-daemon.module-state", version: 1, scope: "session", family: true, initial: () => ({ values: {} }) },
+  // checkpointWhen as pi-daemon's own (pi-durable 1.4 requires one; earlier versions ignore it).
+  definition: {
+    kind: "pi-daemon.module-state",
+    version: 1,
+    scope: "session",
+    family: true,
+    initial: () => ({ values: {} }),
+    checkpointWhen: (_value, _ops, info) => (info?.deltasSinceBase ?? 0) >= 32,
+  },
 };
 
 function bool(value, fallback = false) {
