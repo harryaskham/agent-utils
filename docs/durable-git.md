@@ -19,6 +19,17 @@ A pi-daemon plugin in two parts. pi-daemon itself knows nothing of git.
   - **`/repo`:** switch to another session in the same repository or one of its worktrees, on the same host, newest first. The state lists the repository's worktrees for it.
   - In TUI Pi it does nothing, and the chips run git locally as before.
 
+## The agent's tool: `git_track`
+
+`git_track { path, stop? }` lets the agent follow another repository in its session, such as one it works in beside the session's directory.
+
+- **Where it's recorded:** the repository's top level (`path` may be relative to the session's directory) goes into a session document (`agent-utils.git-tracked`), at most 8.
+- **After each turn,** the observer refreshes each followed repository, bounded like the session's own, into the module state's `tracked`. It reads the document with pi-daemon's observer `ctx.snapshot`; on an older pi-daemon a repository's state shows only once, when it's first followed.
+- **The sidebar** lists the followed repositories under the session's own.
+- **Managing them:** `stop: true` stops following one; with no `path`, the tool lists those followed.
+
+No tool is wrapped to guess which repository the agent touched: the agent says so.
+
 ## Commands
 
 | Command | What it does |

@@ -12,7 +12,10 @@ import {
   parseNumstat,
   parseStatus,
   parseWorktrees,
+  createGitTrackTool,
   readWorkspace,
+  refreshTracked,
+  TRACKED_DOC,
   workspacePanel,
   workspaceSummary,
 } from "../extensions/lib/durable-git.js";
@@ -270,4 +273,59 @@ test("/git completes its subcommands as Pi's commands do", () => {
   assert.deepEqual(git.getArgumentCompletions("").map((item) => item.value), ["status", "wt list", "wt fork "]);
   assert.deepEqual(git.getArgumentCompletions("wt f").map((item) => item.value), ["wt fork "]);
   assert.deepEqual(git.getArgumentCompletions("nope"), []);
+});
+
+test("git_track follows another repository: recorded in the session's document, refreshed after a turn, shown in the panel", async (t) => {
+  const { dir, root } = await repo(t);
+  const other = join(dir, "other");
+  execFileSync("mkdir", ["-p", join(other, "sub")]);
+  git(other, "init", "-q", "-b", "trunk");
+  await writeFile(join(other, "b.txt"), "b\n");
+  git(other, "add", "b.txt");
+  git(other, "commit", "-q", "-m", "init");
+  // A Durable session as far as the tool and the observer use it.
+  const docs = new Map();
+  const tx = { async doc(token) { if (!docs.has(token.definition.kind)) docs.set(token.definition.kind, token.definition.initial()); return docs.get(token.definition.kind); } };
+  const api = {
+    env: { absolutePath: async (path) => ({ ok: true, value: path.startsWith("/") ? path : join(root, path) }) },
+    commit: async (change) => JSON.parse(JSON.stringify((await change(tx)) ?? null)),
+  };
+  const tool = createGitTrackTool();
+  const followed = await tool.execute({ path: "../other/sub" }, api, {});
+  assert.equal(followed.isError, undefined);
+  assert.equal(followed.output[0].text, `Following ${other}: trunk · clean.`);
+  assert.deepEqual(followed.content, followed.output);
+  assert.deepEqual(docs.get(TRACKED_DOC.definition.kind).paths, [other]);
+  assert.equal((await tool.execute({}, api, {})).output[0].text, `Following: ${other}`);
+  const outside = await tool.execute({ path: dir }, api, {});
+  assert.equal(outside.isError, true);
+  assert.match(outside.output[0].text, /is not in a git repository/);
+
+  // After a turn: the followed repositories' states, in module state.
+  const state = memoryState();
+  const info = { sessionId: "s", state, snapshot: async (token) => docs.get(token.definition.kind) };
+  const tracked = await refreshTracked(info);
+  assert.equal(tracked.length, 1);
+  assert.deepEqual({ path: tracked[0].path, repo: tracked[0].repo, branch: tracked[0].branch }, { path: other, repo: true, branch: "trunk" });
+  assert.deepEqual(state.values.get("tracked"), tracked);
+
+  // The client part's panel: the session's repository, then the followed one.
+  const handlers = new Map();
+  const panels = [];
+  const watches = [];
+  gitClient({ on: (type, handler) => handlers.set(type, handler), events: { on() {}, emit() {} } });
+  await handlers.get("session_start")({}, {
+    sessionManager: { getSessionId: () => "s" },
+    chord: { async watchDocument(_address, onValue) { watches.push(onValue); return () => {}; } },
+    ui: { hasSidebar: true, notify() {}, setWidget: (key, lines) => panels.push(lines) },
+  });
+  await Promise.resolve();
+  watches[0]({ values: { workspace: { repo: true, branch: "main", project: "project" }, tracked } });
+  assert.deepEqual(panels.at(-1), ["⎇ main  project", "  clean", "⎇ trunk  other", "  clean"]);
+
+  // Stopped: no longer recorded, and the next refresh clears the states.
+  assert.equal((await tool.execute({ path: other, stop: true }, api, {})).output[0].text, `No longer following ${other}.`);
+  assert.deepEqual(docs.get(TRACKED_DOC.definition.kind).paths, []);
+  assert.deepEqual(await refreshTracked(info), []);
+  assert.deepEqual(state.values.get("tracked"), []);
 });

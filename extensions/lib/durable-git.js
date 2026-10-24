@@ -192,10 +192,119 @@ export function createGitRefresher({ run = runGit, now = () => Date.now(), timeo
 }
 
 /** The module's observer: after each turn, the session's git state, refreshed in the background. */
-export function createGitObserver(refresher) {
+export function createGitObserver(refresher, { run = runGit, timeoutMs = GIT_TIMEOUT_MS } = {}) {
+  const tracking = new Map();
   return (event, info) => {
     if (event?.type !== "agent_end") return;
     void refresher.refresh(info?.sessionId, info ?? {}).catch(() => {});
+    // The repositories git_track follows, each bounded; a newer turn's refresh supersedes this one.
+    if (!info?.sessionId) return;
+    tracking.get(info.sessionId)?.abort(new Error("superseded"));
+    const controller = new AbortController();
+    tracking.set(info.sessionId, controller);
+    void refreshTracked(info, { run, timeoutMs, signal: controller.signal })
+      .catch(() => {})
+      .finally(() => {
+        if (tracking.get(info.sessionId) === controller) tracking.delete(info.sessionId);
+      });
+  };
+}
+
+/**
+ * The repositories a session follows besides its own directory (git_track): a Durable session
+ * document the tool commits to, which the observer reads after each turn (pi-daemon's
+ * ctx.snapshot). A plain token object, as Durable's defineDoc returns.
+ */
+export const TRACKED_DOC = {
+  definition: { kind: "agent-utils.git-tracked", version: 1, scope: "session", initial: () => ({ paths: [] }) },
+};
+/** The module state key of the followed repositories' states. */
+export const TRACKED_KEY = "tracked";
+/** Most repositories one session follows. */
+export const MAX_TRACKED = 8;
+
+/** Read the followed repositories' states into module state (`tracked`); nothing when none are followed. */
+export async function refreshTracked(info, { run = runGit, timeoutMs = GIT_TIMEOUT_MS, signal, now = () => Date.now() } = {}) {
+  if (typeof info?.snapshot !== "function" || typeof info?.state?.set !== "function") return undefined;
+  const doc = await Promise.resolve(info.snapshot(TRACKED_DOC)).catch(() => undefined);
+  const paths = Array.isArray(doc?.paths) ? doc.paths.filter((path) => typeof path === "string").slice(0, MAX_TRACKED) : [];
+  if (paths.length === 0) {
+    const previous = await Promise.resolve(info.state.get?.(TRACKED_KEY)).catch(() => undefined);
+    if (Array.isArray(previous) && previous.length > 0) await info.state.set(TRACKED_KEY, []);
+    return [];
+  }
+  const overrides = typeof info.env?.get === "function" ? await info.env.get().catch(() => ({})) : {};
+  const tracked = [];
+  for (const path of paths) {
+    if (signal?.aborted) return undefined;
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(() => controller.abort(new Error("timeout")), timeoutMs);
+    timer.unref?.();
+    try {
+      await stat(path);
+      tracked.push({ path, ...(await readWorkspace(path, { env: gitEnv(overrides), signal: controller.signal, run })), at: now() });
+    } catch (error) {
+      tracked.push({ path, repo: false, error: controller.signal.aborted ? "timeout" : error?.code === "ENOENT" ? "missing" : "error", at: now() });
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+    }
+  }
+  if (signal?.aborted) return undefined;
+  await info.state.set(TRACKED_KEY, tracked);
+  return tracked;
+}
+
+/**
+ * git_track: the agent follows another repository in its session (as when it works in one beside
+ * the session's directory); its branch and changes show beside the session's own (the sidebar),
+ * refreshed after each turn. No tool is wrapped to guess which repository the agent touched.
+ */
+export function createGitTrackTool({ run = runGit, timeoutMs = GIT_TIMEOUT_MS } = {}) {
+  const text = (value, isError = false) => {
+    const output = [{ type: "text", text: value }];
+    // `output` for pi-durable 1.2 and later, `content` for earlier hosts.
+    return { output, content: output, ...(isError ? { isError: true } : {}) };
+  };
+  return {
+    name: "git_track",
+    label: "Git track",
+    description:
+      "Follow another git repository in this session: its branch and changes show beside the session's own and refresh after each turn. path: a directory in the repository (absolute, or relative to the session's directory); stop: true to stop following it. Without a path, lists the repositories followed.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "A directory in the repository" },
+        stop: { type: "boolean", description: "Stop following it" },
+      },
+    },
+    replay: "safe",
+    async execute(args, api, context) {
+      const commit = (change) => api.commit(change, context);
+      const path = typeof args?.path === "string" ? args.path.trim() : "";
+      if (path === "") {
+        const paths = await commit(async (tx) => [...((await tx.doc(TRACKED_DOC)).paths ?? [])]);
+        return text(paths.length ? `Following: ${paths.join(", ")}` : "No other repository is followed.");
+      }
+      const resolved = await Promise.resolve(api.env?.absolutePath?.(path, context)).catch(() => undefined);
+      const absolute = resolved?.ok ? resolved.value : path;
+      if (!isAbsolute(absolute)) return text("git_track: give an absolute path, or one relative to the session's directory.", true);
+      const top = await run(["rev-parse", "--show-toplevel"], { cwd: absolute, env: gitEnv(), signal: AbortSignal.timeout(timeoutMs) }).catch(() => ({ code: 1, stdout: "" }));
+      const root = top.code === 0 ? top.stdout.trim() : "";
+      if (!root) return text(`git_track: ${absolute} is not in a git repository.`, true);
+      const stop = args?.stop === true;
+      await commit(async (tx) => {
+        const doc = await tx.doc(TRACKED_DOC);
+        doc.paths = (doc.paths ?? []).filter((followed) => followed !== root);
+        if (!stop) doc.paths.push(root);
+        if (doc.paths.length > MAX_TRACKED) doc.paths.splice(0, doc.paths.length - MAX_TRACKED);
+      });
+      if (stop) return text(`No longer following ${root}.`);
+      const workspace = await readWorkspace(root, { env: gitEnv(), signal: AbortSignal.timeout(timeoutMs), run }).catch(() => undefined);
+      return text(`Following ${root}: ${workspace ? workspaceSummary(workspace) : "its state shows after this turn"}.`);
+    },
   };
 }
 

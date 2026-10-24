@@ -33,7 +33,13 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
   let panel;
   const showPanel = () => {
     if (live?.ui?.hasSidebar !== true || typeof live.ui.setWidget !== "function") return;
-    const lines = workspacePanel(sessions.get(sessionIdOf(live))?.workspace);
+    const entry = sessions.get(sessionIdOf(live));
+    // The session's repository, then those git_track follows.
+    const followed = (Array.isArray(entry?.tracked) ? entry.tracked : []).flatMap((tracked) =>
+      workspacePanel(tracked) ?? [`✗ ${String(tracked?.path ?? "").split("/").pop()} ${tracked?.error ?? "unavailable"}`],
+    );
+    const own = workspacePanel(entry?.workspace) ?? [];
+    const lines = own.length + followed.length === 0 ? undefined : [...own, ...followed];
     const key = JSON.stringify(lines ?? null);
     if (key === panel) return;
     panel = key;
@@ -103,10 +109,9 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
       ctx.chord.watchDocument(GIT_STATE_DOC, (value) => {
         if (entry.stopped) return;
         const values = value?.values ?? {};
-        if (values.workspace && typeof values.workspace === "object") {
-          entry.workspace = values.workspace;
-          publish(sessionId);
-        }
+        if (values.workspace && typeof values.workspace === "object") entry.workspace = values.workspace;
+        if (Array.isArray(values.tracked)) entry.tracked = values.tracked;
+        if (entry.workspace || entry.tracked) publish(sessionId);
         const forked = values.forked;
         const at = Number(forked?.at);
         // The first value is history: only a fork made while followed opens a session.
