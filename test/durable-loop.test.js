@@ -237,3 +237,24 @@ test("aborting the loop task removes its entry and commits an aborted outcome", 
   assert.deepEqual(commits, [{ status: "terminal", outcome: { status: "aborted", reason: "loop stopped" } }]);
   assert.equal(store.registry().loops["7"], undefined);
 });
+
+test("/loop completes its arguments as Pi's commands do: the verbs, and after stop the live loops", async () => {
+  const task = createLoopTask();
+  const { loop } = createLoopCommands({ task, now: () => 1_000_000 });
+  const store = durable();
+  const { ctx } = commandContext(store);
+  // The registry read without a commit, as completions run per keystroke.
+  ctx.harness.snapshot = async (token) => store.docs.get(token.definition.kind);
+  await loop.run("5m Check the inbox", ctx);
+  await loop.run("1h Tidy the notes", ctx);
+  assert.deepEqual((await loop.getArgumentCompletions("", ctx)).map((item) => item.value), ["list", "stop "]);
+  assert.deepEqual((await loop.getArgumentCompletions("st", ctx)).map((item) => item.value), ["stop "]);
+  assert.deepEqual(await loop.getArgumentCompletions("stop ", ctx), [
+    { value: "stop all", label: "all", description: "Stop every loop" },
+    { value: "stop 1", label: "#1", description: "Check the inbox" },
+    { value: "stop 2", label: "#2", description: "Tidy the notes" },
+  ]);
+  assert.deepEqual((await loop.getArgumentCompletions("off 2", ctx)).map((item) => item.value), ["off 2"]);
+  // An interval and a prompt: nothing to complete.
+  assert.equal(await loop.getArgumentCompletions("5m check", ctx), null);
+});

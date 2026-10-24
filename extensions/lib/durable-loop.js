@@ -320,6 +320,25 @@ export function createLoopCommands({ task, now = () => Date.now(), minSecs = DEF
   return {
     loop: {
       description: "Run a prompt on a recurring interval: /loop <interval> <prompt>, /loop list (or /loops), /loop stop [id|all] (off, end)",
+      // Pi's argument completions (pi-daemon reads them; older hosts ignore them): the verbs, and after stop the live loops (read, not committed).
+      async getArgumentCompletions(prefix, ctx) {
+        const text = String(prefix ?? "").trimStart();
+        const stop = /^(stop|off|end)\s+(\S*)$/i.exec(text);
+        if (stop !== null) {
+          const doc = typeof ctx?.harness?.snapshot === "function" ? await Promise.resolve(ctx.harness.snapshot(LOOPS_DOC, ctx.context)).catch(() => undefined) : undefined;
+          const loops = Object.entries(doc?.loops ?? {}).filter(([, entry]) => entry?.stopped !== true);
+          const items = [
+            { value: `${stop[1]} all`, label: "all", description: "Stop every loop" },
+            ...loops.map(([number, entry]) => ({ value: `${stop[1]} ${number}`, label: `#${number}`, description: summarize(String(entry?.prompt ?? "")) })),
+          ];
+          return items.filter((item) => item.value.slice(stop[1].length + 1).startsWith(stop[2].replace(/^#/, "")));
+        }
+        if (/\s/.test(text)) return null;
+        return [
+          { value: "list", label: "list", description: "The live loops" },
+          { value: "stop ", label: "stop", description: "Stop a loop, or all" },
+        ].filter((item) => item.value.startsWith(text.toLowerCase()));
+      },
       async run(args, ctx) {
         if (!ready(ctx)) return;
         const parts = String(args ?? "").trim().split(/\s+/).filter(Boolean);

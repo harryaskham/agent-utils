@@ -279,6 +279,15 @@ export function createGitCommands(refresher, { run = runGit, root } = {}) {
   return {
     git: {
       description: "Git for this session's directory: /git (status, refreshed now), /git wt list, /git wt fork NAME (a worktree and branch NAME, under ~/.local/state/pi-daemon/worktrees)",
+      // Pi's argument completions (pi-daemon reads them; older hosts ignore them).
+      getArgumentCompletions(prefix) {
+        const text = String(prefix ?? "").trimStart().toLowerCase();
+        return [
+          { value: "status", label: "status", description: "Refresh now and show the state" },
+          { value: "wt list", label: "wt list", description: "The repository's worktrees" },
+          { value: "wt fork ", label: "wt fork NAME", description: "A worktree on a new branch, and a session there" },
+        ].filter((item) => item.value.startsWith(text));
+      },
       async run(args, ctx) {
         const [sub = "status", ...rest] = String(args ?? "").trim().split(/\s+/).filter(Boolean);
         if (!ctx.cwd) return ctx.notify("/git: this session's directory is not known.");

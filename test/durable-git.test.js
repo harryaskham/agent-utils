@@ -264,3 +264,10 @@ test("the client part shows the focused session's repository in pi-client's side
   watches2[0]({ values: { workspace } });
   assert.deepEqual(plain, []);
 });
+
+test("/git completes its subcommands as Pi's commands do", () => {
+  const { git } = createGitCommands(createGitRefresher());
+  assert.deepEqual(git.getArgumentCompletions("").map((item) => item.value), ["status", "wt list", "wt fork "]);
+  assert.deepEqual(git.getArgumentCompletions("wt f").map((item) => item.value), ["wt fork "]);
+  assert.deepEqual(git.getArgumentCompletions("nope"), []);
+});
