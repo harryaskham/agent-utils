@@ -232,8 +232,14 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       const usage = (() => {
         try { return ctx.getContextUsage?.() || {}; } catch { return {}; }
       })();
+      // The whole conversation's spend: pi-client's ledger (it may load only a long conversation's
+      // newest entries), else the entries' (TUI Pi has them all).
       const totals = (() => {
-        try { return summarizeUsage(ctx.sessionManager?.getEntries?.() || ctx.sessionManager?.getBranch?.() || []); } catch { return { cost: 0 }; }
+        try {
+          const ledger = ctx.sessionUsage?.();
+          if (ledger && Number.isFinite(Number(ledger.cost))) return { cost: Number(ledger.cost) };
+          return summarizeUsage(ctx.sessionManager?.getEntries?.() || ctx.sessionManager?.getBranch?.() || []);
+        } catch { return { cost: 0 }; }
       })();
       const contextMax = Number(usage.contextWindow ?? usage.contextWindowSize ?? ctx.model?.contextWindow ?? 0);
       const contextTokens = Number(usage.tokens ?? usage.contextTokens ?? 0);

@@ -655,3 +655,31 @@ test("the branch and diff chips use the session's git as its host reads it (pi-g
   assert.deepEqual(execs.filter((line) => line.startsWith("git")), [], "no git run here for a session its host reads");
   assert.ok(requests.includes("s1"));
 });
+
+test("the cost chip uses pi-client's ledger of the whole conversation when it has one", async () => {
+  const handlers = new Map();
+  let editorFactory;
+  const ctx = {
+    mode: "tui",
+    cwd: "/work",
+    model: { provider: "openai", id: "gpt", contextWindow: 100_000 },
+    getContextUsage: () => ({ percent: 1, contextWindow: 100_000 }),
+    // Only the newest entries are loaded (cost 0.10); the ledger has all of it.
+    sessionManager: { getEntries: () => [{ type: "message", message: { role: "assistant", usage: { cost: { total: 0.1 } } } }], getSessionId: () => "s1" },
+    sessionUsage: () => ({ input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, cost: 12.34 }),
+    ui: {
+      getEditorComponent: () => () => ({ render: () => ["top", "editor", "bottom"], handleInput() {}, invalidate() {} }),
+      setEditorComponent: (factory) => { editorFactory = factory; },
+    },
+  };
+  const pi = {
+    registerCommand() {},
+    on(name, handler) { const list = handlers.get(name) || []; list.push(handler); handlers.set(name, list); },
+    getThinkingLevel: () => "off",
+    exec: async () => ({ code: 1, stdout: "" }),
+  };
+  await createEditorChipsExtension({ settings: { agentUtils: { editorChips: { enabled: true, bottomRight: ["cost"] } } }, env: { HOME: "/home/u" }, host: { CustomEditor: class {} } })(pi);
+  await handlers.get("session_start")[0]({}, ctx);
+  const editor = editorFactory({ requestRender() {} }, { fg: (_c, t) => t, bg: (_c, t) => t, bold: (t) => t }, {});
+  assert.match(stripAnsi(editor.render(120).join("\n")), /12\.3/);
+});
