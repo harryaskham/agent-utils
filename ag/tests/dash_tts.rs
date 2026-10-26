@@ -80,6 +80,8 @@ os.execv('/bin/sh',['sh','-c',sys.argv[-1]])
                 "--no-audio",
                 "--bind",
                 "127.0.0.1:0",
+                "--access",
+                "token",
             ])
             .args(extra)
             .stdin(Stdio::null())

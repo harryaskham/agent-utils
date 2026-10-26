@@ -79,6 +79,8 @@ fn persistent_token_public_hostname_and_service_sigterm() {
                     "127.0.0.1:0",
                     "--public-origin",
                     origin,
+                    "--access",
+                    "token",
                     "--token-file",
                 ])
                 .arg(&token_path)
@@ -195,6 +197,8 @@ fn token_symlinks_are_preserved_and_unsafe_files_fail_without_disclosure() {
                 "--no-audio",
                 "--bind",
                 "127.0.0.1:0",
+                "--access",
+                "token",
                 "--token-file",
             ])
             .arg(&link);

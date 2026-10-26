@@ -7,13 +7,17 @@
 //! command. Answers go through the same
 //! `paratenic::answer` path as the TUI/CLI/MCP.
 //!
-//! Security: every route requires a random token (per-run, or from a private
-//! persistent file), exchanged once for an HttpOnly SameSite=Strict cookie. Mutations also need a
-//! custom header (blocks cross-site forms) and a same-origin Origin. Loopback
-//! binds additionally pin the Host header against DNS rebinding.
+//! Security: on a loopback or Tailscale address the network is the boundary and
+//! no token is needed (`dash.access: auto`, the default). Elsewhere (wildcard
+//! or LAN binds), or with `access: token`, every route requires a random token
+//! (per-run, or from a private persistent file), exchanged once for an HttpOnly
+//! SameSite=Strict cookie. Either way, mutations need a custom header (blocks
+//! cross-site forms) and a same-origin Origin, and a bound address pins the
+//! Host header (its address, this machine's names, the public origin) against
+//! DNS rebinding.
 use crate::{
     Error, Result,
-    config::{Config, Host},
+    config::{Config, DashAccess, Host},
     dash_tts::{self, Delivery, Feed},
     doctor::{self, DoctorReport},
     gallery::{self, SyncInput, SyncReceipt},
@@ -55,6 +59,7 @@ pub struct DashOptions {
     pub selection: crate::model::Selection,
     pub bind: SocketAddr,
     pub public_origin: Option<String>,
+    pub access: DashAccess,
     pub token_file: Option<PathBuf>,
     pub refresh: Duration,
     pub image_refresh: Duration,
@@ -113,7 +118,8 @@ struct Dash {
     choice_targets: Vec<(Host, Option<Endpoint>)>,
     endpoints: HashMap<String, Endpoint>,
     options: DashOptions,
-    token: String,
+    /// None: open access (tailnet or loopback); no cookie is checked.
+    token: Option<String>,
     cookie: String,
     secure_cookie: bool,
     hosts: Option<Vec<String>>,
@@ -258,8 +264,11 @@ impl Dash {
                 (StatusCode::MISDIRECTED_REQUEST, "unexpected Host").into_response(),
             ));
         }
+        let Some(token) = &self.token else {
+            return Ok(());
+        };
         match cookie(headers, &self.cookie) {
-            Some(value) if eq(&value, &self.token) => Ok(()),
+            Some(value) if eq(&value, token) => Ok(()),
             _ => Err(Box::new(
                 (
                     StatusCode::UNAUTHORIZED,
@@ -451,17 +460,20 @@ async fn index(
         if !dash.host_ok(&headers) {
             return (StatusCode::MISDIRECTED_REQUEST, "unexpected Host").into_response();
         }
-        if !eq(token, &dash.token) {
-            return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
-        }
         let mut response = Redirect::to("/").into_response();
-        if let Ok(value) = HeaderValue::from_str(&format!(
-            "{}={}; Path=/; HttpOnly; SameSite=Strict{}",
-            dash.cookie,
-            dash.token,
-            if dash.secure_cookie { "; Secure" } else { "" }
-        )) {
-            response.headers_mut().insert(header::SET_COOKIE, value);
+        // Open access ignores old bookmarked ?token= links: just drop it.
+        if let Some(expected) = &dash.token {
+            if !eq(token, expected) {
+                return (StatusCode::UNAUTHORIZED, "invalid token").into_response();
+            }
+            if let Ok(value) = HeaderValue::from_str(&format!(
+                "{}={}; Path=/; HttpOnly; SameSite=Strict{}",
+                dash.cookie,
+                expected,
+                if dash.secure_cookie { "; Secure" } else { "" }
+            )) {
+                response.headers_mut().insert(header::SET_COOKIE, value);
+            }
         }
         response
             .headers_mut()
@@ -956,10 +968,35 @@ async fn media_file(dash: &Shared, kind: MediaKind, headers: &HeaderMap, path: &
 }
 
 pub struct Started {
-    /// With a persistent token this is the bare public URL: never log the secret.
+    /// With a persistent token or open access this is the bare public URL:
+    /// never log the secret.
     pub url: String,
     pub address: SocketAddr,
+    /// `open` (no token) or `token`.
+    pub access: &'static str,
     pub token_file: Option<PathBuf>,
+}
+
+/// Loopback and Tailscale addresses (100.64.0.0/10, fd7a:115c:a1e0::/48):
+/// reachable only from this machine or the tailnet.
+pub fn private_reach(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback() || (v4.octets()[0] == 100 && v4.octets()[1] & 0xc0 == 64)
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback() || v6.segments()[..3] == [0xfd7a, 0x115c, 0xa1e0]
+        }
+    }
+}
+
+/// Resolved access for a bind: true when no token is required.
+pub fn open_access(access: DashAccess, bind: SocketAddr) -> bool {
+    match access {
+        DashAccess::Open => true,
+        DashAccess::Token => false,
+        DashAccess::Auto => private_reach(bind.ip()),
+    }
 }
 
 /// Bind, start background refreshers, then serve until Ctrl-C or service SIGTERM.
@@ -981,9 +1018,14 @@ pub async fn run(
         .as_deref()
         .map(validate_public_origin)
         .transpose()?;
-    let token = match &options.token_file {
-        Some(path) => persistent_token(path)?,
-        None => uuid::Uuid::new_v4().simple().to_string(),
+    let open = open_access(options.access, options.bind);
+    let token = if open {
+        None
+    } else {
+        Some(match &options.token_file {
+            Some(path) => persistent_token(path)?,
+            None => uuid::Uuid::new_v4().simple().to_string(),
+        })
     };
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let listener = tokio::net::TcpListener::bind(options.bind)
@@ -1010,12 +1052,36 @@ pub async fn run(
         ];
         if address.ip().is_loopback() {
             names.extend([format!("127.0.0.1:{port}"), format!("[::1]:{port}")]);
+        } else {
+            // This machine's names (`helsinki`, `helsinki.<tailnet>.ts.net`), as
+            // MagicDNS serves them; a rebinding attacker's domain is never one.
+            if let Ok(name) = nix::unistd::gethostname() {
+                let name = name.to_string_lossy().to_lowercase();
+                if let Some(short) = name.split('.').next().filter(|s| !s.is_empty()) {
+                    names.push(format!("{short}:{port}"));
+                }
+                names.push(format!("{name}:{port}"));
+            }
         }
         if let Some(origin) = &public_origin {
             names.push(origin[url::Position::BeforeHost..url::Position::AfterPort].to_owned());
+            if let Some(short) = origin
+                .host_str()
+                .and_then(|h| h.split('.').next())
+                .filter(|s| !s.is_empty() && s.parse::<std::net::Ipv4Addr>().is_err())
+            {
+                let port = origin.port_or_known_default().unwrap_or(port);
+                names.push(format!("{short}:{port}"));
+            }
         }
         names
     });
+    if open && hosts.is_none() {
+        eprintln!(
+            "ag dash: open access on a wildcard bind ({}): anyone who can reach this port can read and answer agents",
+            options.bind
+        );
+    }
     let secure_cookie = public_origin
         .as_ref()
         .is_some_and(|u| u.scheme() == "https");
@@ -1082,13 +1148,17 @@ pub async fn run(
         .route("/audio/{*path}", get(audio_file))
         .with_state(dash.clone());
     ready(&Started {
-        url: if options.token_file.is_some() {
-            format!("{public_url}/")
-        } else {
-            format!("{public_url}/?token={token}")
+        url: match &token {
+            Some(token) if options.token_file.is_none() => format!("{public_url}/?token={token}"),
+            _ => format!("{public_url}/"),
         },
         address,
-        token_file: options.token_file.clone(),
+        access: if open { "open" } else { "token" },
+        token_file: if open {
+            None
+        } else {
+            options.token_file.clone()
+        },
     });
     let background = {
         let dash = dash.clone();

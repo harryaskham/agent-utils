@@ -191,15 +191,35 @@ impl Default for ParatenicConfig {
     }
 }
 
+/// Who may use `ag dash`.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum DashAccess {
+    /// No token on loopback and Tailscale addresses (100.64.0.0/10,
+    /// fd7a:115c:a1e0::/48): the network is the boundary. A token elsewhere
+    /// (wildcard and LAN binds).
+    #[default]
+    Auto,
+    /// No token: anyone who can reach the listener may read and answer.
+    Open,
+    /// A token, exchanged once for an HttpOnly cookie.
+    Token,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct DashConfig {
-    /// Listener address. Wildcard binds are allowed; every route still needs
-    /// an access token.
+    /// Listener address. A tailnet or loopback address needs no token (see
+    /// `access`); a wildcard bind does unless `access: open`.
     pub bind: String,
+    /// Token policy: auto (default), open or token.
+    pub access: DashAccess,
     /// Public HTTP(S) origin; also permits this hostname in the Host header.
     pub public_origin: Option<String>,
-    /// Optional persistent access-token file. Created privately when missing.
+    /// Optional persistent access-token file (token access only). Created
+    /// privately when missing.
     pub token_file: Option<String>,
     /// Background refresh for choices and node health.
     pub refresh_seconds: u64,
@@ -216,6 +236,7 @@ impl Default for DashConfig {
     fn default() -> Self {
         Self {
             bind: "127.0.0.1:7795".into(),
+            access: DashAccess::Auto,
             public_origin: None,
             token_file: None,
             refresh_seconds: 300,

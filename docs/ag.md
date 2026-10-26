@@ -47,7 +47,7 @@ Agents can now share audio deliberately — songs, sound candidates, samples —
 
 ### Persistent dashboard service (ag 0.4.1)
 
-Port **7795** is the new default (7790 belongs to Petri). Both flakes export `homeManagerModules.ag-dash`, an opt-in Linux systemd user service with configurable `bindAddress`, `port`, `publicOrigin`, package/config/token/cache paths and five-minute refresh defaults. Helsinki enables it on its Tailscale IP at `http://helsinki.miku-owl.ts.net:7795`. The persistent runtime access token is stored privately outside Nix and omitted from service logs; use `?token=<token>` on the first browser visit. See [the service configuration and operator activation instructions](../ag/README.md#home-manager-service).
+Port **7795** is the new default (7790 belongs to Petri). Both flakes export `homeManagerModules.ag-dash`, an opt-in Linux systemd user service with configurable `bindAddress`, `port`, `publicOrigin`, package/config/token/cache paths and five-minute refresh defaults. Helsinki enables it on its Tailscale IP at `http://helsinki.miku-owl.ts.net:7795`; a tailnet (or loopback) listener needs no token, since the tailnet is the boundary (`access`: `auto` by default, `token` to require one). Host pinning and same-origin checks on answers still apply. See [the service configuration and operator activation instructions](../ag/README.md#home-manager-service).
 
 ### Shared streaming TTS (ag 0.5)
 

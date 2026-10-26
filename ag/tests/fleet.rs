@@ -910,6 +910,12 @@ fn start_dash(fixture: &Fixture, extra: &[&str]) -> (Dash, String, String) {
             "--no-images",
             "--no-audio",
         ])
+        // Token tests opt in; a loopback bind is open by default.
+        .args(if extra.contains(&"--access") {
+            &[][..]
+        } else {
+            &["--access", "token"][..]
+        })
         .args(extra)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -941,6 +947,110 @@ fn session_cookie(address: &str, url: &str) -> String {
         .next()
         .unwrap()
         .to_owned()
+}
+
+#[test]
+fn dash_on_a_private_address_needs_no_token_but_keeps_host_and_csrf_checks() {
+    // Loopback (like a tailnet address) is open by default: the network is the
+    // boundary. DNS-rebinding and cross-site protections still apply.
+    let (address, fake) = fake_host();
+    let fixture = Fixture::new(&[("alpha", url(address))]);
+    let (_dash, url, bind) = start_dash(&fixture, &["--access", "auto"]);
+    assert!(!url.contains("token"), "{url}");
+    assert!(url.ends_with('/'), "{url}");
+
+    let (code, _, page) = http(&bind, "GET", "/", &[], None);
+    assert_eq!(code, 200);
+    assert!(page.contains("ag · fleet"));
+    let (code, head, _) = http(&bind, "GET", "/?token=old-bookmark", &[], None);
+    assert_eq!(code, 303, "an old ?token= link just redirects");
+    assert!(!head.to_ascii_lowercase().contains("set-cookie"), "{head}");
+    assert_eq!(
+        http(
+            &bind,
+            "GET",
+            "/api/state",
+            &[("Host", "evil.example:80")],
+            None
+        )
+        .0,
+        421,
+        "rebinding Host refused"
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let (code, _, body) = http(&bind, "GET", "/api/state", &[], None);
+        assert_eq!(code, 200);
+        let state: Value = serde_json::from_str(&body).unwrap();
+        if state["choices"]["actionable"] == 1 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{state}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let body = json!({"host": "alpha", "session": "ahp-session:/agent-a", "request_id": "choice-1", "answers": {"choice": "opt-a"}}).to_string();
+    assert_eq!(
+        http(&bind, "POST", "/api/answer", &[], Some(&body)).0,
+        403,
+        "a form post without the custom header is refused"
+    );
+    let cross = [("X-Ag-Dash", "1"), ("Origin", "http://evil.example")];
+    assert_eq!(
+        http(&bind, "POST", "/api/answer", &cross, Some(&body)).0,
+        403,
+        "cross-origin refused"
+    );
+    assert!(fake.lock().unwrap().dispatches.is_empty());
+    let (code, _, receipt) = http(
+        &bind,
+        "POST",
+        "/api/answer",
+        &[("X-Ag-Dash", "1")],
+        Some(&body),
+    );
+    assert_eq!(code, 200, "{receipt}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&receipt).unwrap()["state"],
+        "accepted"
+    );
+
+    // --access token still requires one on the same address.
+    let (_locked, url, bind) = start_dash(&fixture, &["--access", "token"]);
+    assert!(url.contains("?token="));
+    assert_eq!(http(&bind, "GET", "/api/state", &[], None).0, 401);
+}
+
+#[test]
+fn private_reach_covers_loopback_and_tailscale_only() {
+    use ag::config::DashAccess;
+    use ag::dash::{open_access, private_reach};
+    for ip in [
+        "127.0.0.1",
+        "::1",
+        "100.83.90.42",
+        "100.64.0.1",
+        "100.127.255.254",
+        "fd7a:115c:a1e0::1",
+    ] {
+        assert!(private_reach(ip.parse().unwrap()), "{ip}");
+    }
+    for ip in [
+        "0.0.0.0",
+        "::",
+        "192.168.1.5",
+        "100.128.0.1",
+        "100.63.255.255",
+        "8.8.8.8",
+        "fd00::1",
+    ] {
+        assert!(!private_reach(ip.parse().unwrap()), "{ip}");
+    }
+    let tailnet = "100.83.90.42:7795".parse().unwrap();
+    let wildcard = "0.0.0.0:7795".parse().unwrap();
+    assert!(open_access(DashAccess::Auto, tailnet));
+    assert!(!open_access(DashAccess::Auto, wildcard));
+    assert!(!open_access(DashAccess::Token, tailnet));
+    assert!(open_access(DashAccess::Open, wildcard));
 }
 
 #[test]

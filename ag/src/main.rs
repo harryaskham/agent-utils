@@ -116,13 +116,18 @@ enum Commands {
     Doctor,
     /// Serve a live local web dashboard of choices, health, speech, images and audio.
     Dash {
-        /// Listener (default dash.bind, 127.0.0.1:7795). Wildcards still need the token.
+        /// Listener (default dash.bind, 127.0.0.1:7795). Loopback and Tailscale
+        /// addresses need no token; wildcard and LAN binds do (see --access).
         #[arg(long)]
         bind: Option<std::net::SocketAddr>,
+        /// Token policy (default dash.access): auto = no token on loopback and
+        /// Tailscale addresses, a token elsewhere; open; token.
+        #[arg(long, value_enum)]
+        access: Option<config::DashAccess>,
         /// Public HTTP(S) origin, e.g. http://helsinki.miku-owl.ts.net:7795.
         #[arg(long)]
         public_origin: Option<String>,
-        /// Persistent access token (created privately if missing; symlinks supported).
+        /// Persistent access token for token access (created privately if missing; symlinks supported).
         #[arg(long)]
         token_file: Option<String>,
         /// Print the URL without opening a browser.
@@ -1629,6 +1634,7 @@ fn execute(cli: Cli) -> Result<u8> {
         }
         Commands::Dash {
             bind,
+            access,
             public_origin,
             token_file,
             no_open,
@@ -1664,6 +1670,7 @@ fn execute(cli: Cli) -> Result<u8> {
                 selection,
                 bind,
                 public_origin: public_origin.or_else(|| service.config.dash.public_origin.clone()),
+                access: access.unwrap_or(service.config.dash.access),
                 token_file: token_file
                     .or_else(|| service.config.dash.token_file.clone())
                     .map(|p| config::expand_home(&p))
@@ -1680,9 +1687,12 @@ fn execute(cli: Cli) -> Result<u8> {
             let as_json = cli.json;
             service.runtime.block_on(ag::dash::run(service.config.clone(), targets, options, |started| {
                 if as_json {
-                    let _ = json(serde_json::json!({"url": started.url, "address": started.address.to_string(), "token_file": started.token_file}));
+                    let _ = json(serde_json::json!({"url": started.url, "address": started.address.to_string(), "access": started.access, "token_file": started.token_file}));
                 } else {
                     let _ = text(&format!("ag dash · {}\nCtrl-C to stop", started.url));
+                    if started.access == "open" {
+                        let _ = text("Open: no token (loopback/tailnet listener; --access token to require one)");
+                    }
                     if let Some(path) = &started.token_file {
                         let _ = text(&format!("Access token: {} (append ?token=<token> on first visit)", terminal_text(&path.display().to_string())));
                     }

@@ -70,6 +70,7 @@ let
       port = 7796;
       publicOrigin = "http://fleet.example.ts.net:7796";
       configFile = "/home/test user/config's 100%.yaml";
+      access = "token";
       tokenFile = "/home/test user/token link";
       cacheDirectory = "/home/test user/gallery";
       audioCacheDirectory = "/home/test user/audio cache";
@@ -116,7 +117,7 @@ assert service.Service.KillMode == "control-group";
 assert service.Service.KillSignal == "SIGTERM";
 assert service.Service.UMask == "0077";
 assert lib.hasInfix "--no-open --bind 127.0.0.1:7795" script;
-assert lib.hasInfix "--token-file '/home/test user/.local/state/ag/dash/token'" script;
+assert lib.hasInfix "--access auto --token-file '/home/test user/.local/state/ag/dash/token'" script;
 assert lib.hasInfix "--refresh 300 --image-refresh 300 --tts-lines 20" script;
 assert !(lib.hasInfix "--no-tts" script);
 assert lib.hasInfix "--no-tts" customScript;
@@ -142,6 +143,8 @@ pkgs.runCommand "ag-dash-home-manager-check" { nativeBuildInputs = [ package ]; 
   --no-open
   --bind
   100.64.1.2:7796
+  --access
+  token
   --token-file
   /home/test user/token link
   --refresh

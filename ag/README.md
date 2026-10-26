@@ -166,8 +166,9 @@ The page answers questions through the same path as the TUI and CLI. Keys: `j`/`
 ```yaml
 dash:
   bind: 127.0.0.1:7795        # --bind overrides; wildcard binds are allowed
+  access: auto                # --access auto|open|token (see Access below)
   # public_origin: http://helsinki.miku-owl.ts.net:7795  # --public-origin
-  # token_file: ~/.local/state/ag/dash/token            # --token-file
+  # token_file: ~/.local/state/ag/dash/token            # --token-file (token access only)
   refresh_seconds: 300        # --refresh
   image_refresh_seconds: 300  # --image-refresh; images and audio share this cadence
   audio: true                 # --no-audio disables audio pulls
@@ -175,7 +176,9 @@ dash:
   tts_lines: 20              # --tts-lines; 0–1000 per host on startup
 ```
 
-Access: by default the printed URL carries a random per-run token that is exchanged once for an `HttpOnly; SameSite=Strict` cookie. `--token-file` / `dash.token_file` instead reads a persistent token, privately creating one if absent; existing managed symlinks are supported, while dangling links and group/world-readable files fail closed. In this mode stdout contains only the bare public URL and token-file path, **never the token**. Append `?token=<file contents>` for the first visit; the browser is redirected to the clean URL. `--public-origin` / `dash.public_origin` accepts a public HTTP(S) origin independently of the bind IP, advertises that URL and permits its hostname in the Host check. HTTPS public origins also mark the cookie Secure. Every route requires it. Answers and refreshes also require a custom request header and a same-origin `Origin`, so other sites cannot submit forms. Loopback binds pin the `Host` header against DNS rebinding. The gallery route serves only the generated index and verified archive files inside the cache (no traversal or symlink escape); images are served `nosniff` with a sandboxing CSP. Ctrl-C or service SIGTERM shuts down the HTTP listener. The Home Manager service supervises the entire process group, including image-pull/SSH children.
+Access: `dash.access` / `--access` chooses the token policy. **`auto`** (the default) needs **no token** when the listener is a loopback or Tailscale address (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`): only this machine or the tailnet can reach it, and the network is the boundary. On a wildcard or LAN bind `auto` requires a token. `open` never asks for one (a wildcard bind then prints a warning); `token` always does. Whatever the mode, a bound address pins the `Host` header to its address, this machine's names (`helsinki`, `helsinki.<tailnet>.ts.net`) and the public origin, so DNS rebinding cannot reach it, and answers and refreshes still need the custom header and a same-origin `Origin`. An old `?token=` link to an open dashboard just redirects to `/`.
+
+With a token, the printed URL carries a random per-run token that is exchanged once for an `HttpOnly; SameSite=Strict` cookie. `--token-file` / `dash.token_file` instead reads a persistent token, privately creating one if absent; existing managed symlinks are supported, while dangling links and group/world-readable files fail closed. In this mode stdout contains only the bare public URL and token-file path, **never the token**. Append `?token=<file contents>` for the first visit; the browser is redirected to the clean URL. `--public-origin` / `dash.public_origin` accepts a public HTTP(S) origin independently of the bind IP, advertises that URL and permits its hostname in the Host check. HTTPS public origins also mark the cookie Secure. In token mode every route requires it. Answers and refreshes also require a custom request header and a same-origin `Origin`, so other sites cannot submit forms. The gallery route serves only the generated index and verified archive files inside the cache (no traversal or symlink escape); images are served `nosniff` with a sandboxing CSP. Ctrl-C or service SIGTERM shuts down the HTTP listener. The Home Manager service supervises the entire process group, including image-pull/SSH children.
 
 ### Streaming speech (ag 0.5)
 
@@ -183,7 +186,7 @@ The **TTS** tab filters by node, speech kind and text/agent. Metadata sits above
 
 - `GET /api/tts` returns a bounded version-1 snapshot, node connection states, collector/subscriber counts, retained bytes and eviction counts.
 - `GET /api/tts/events` sends `snapshot` and `feed` events with process-epoch-qualified IDs. `Last-Event-ID` (or `?after=<event-id>` on a new EventSource) resumes within retained history. `snapshot.reason` reports `initial`, `expired`, `restarted` or `invalid` when a complete replacement is necessary; no gap is silently presented as continuous history.
-- Existing cookie authentication and Host checks protect both endpoints. Cross-origin SSE is refused; keep-alives run every 15 seconds, reconnect retry is 2 seconds, responses are `no-store` / `X-Accel-Buffering: no`. A reverse proxy must pass streaming bodies without buffering. Tokens never enter SSE URLs.
+- The dashboard's access mode (cookie in token mode) and Host checks protect both endpoints. Cross-origin SSE is refused; keep-alives run every 15 seconds, reconnect retry is 2 seconds, responses are `no-store` / `X-Accel-Buffering: no`. A reverse proxy must pass streaming bodies without buffering. Tokens never enter SSE URLs.
 - The in-memory journal keeps at most **500 events / 2 MiB of encoded entries** (whichever fills first), plus bounded node state; text is capped at **16 KiB per entry**, visibly marked when shortened. The original feed remains on its node; the dashboard writes no second transcript. The frontend retains at most 500 entries, batches renders at 100 ms, and keeps paused content stable. There are at most 32 simultaneous SSE connections; surplus requests receive 503 with retry guidance.
 - Offline nodes remain quiet in the node summary; authentication/protocol errors stay visible in its expandable details. Slow readers never block the collector; falling outside retained history produces an explicit reset. Ctrl-C/SIGTERM cancels and reaps owned tails, closes streams, and bounds HTTP draining to four seconds even when a browser has stopped reading.
 
@@ -202,6 +205,7 @@ Both the root flake and `./ag` export `homeManagerModules.ag-dash` (also `defaul
     bindAddress = "100.83.90.42";              # configurable IP; IPv6/wildcards supported
     port = 7795;
     publicOrigin = "http://helsinki.miku-owl.ts.net:7795";
+    # access = "auto";                         # tailnet IP: no token; "token" to require one
     # configFile = "${config.xdg.configHome}/ag/config.yaml";
     # refreshSeconds = 300;
     # imageRefreshSeconds = 300;
@@ -215,16 +219,15 @@ Both the root flake and `./ag` export `homeManagerModules.ag-dash` (also `defaul
 }
 ```
 
-The service uses an immutable executable, runs without opening a browser, starts under `default.target`, and retries after five seconds if the configured IP is not yet available. User lingering must already be enabled to run while logged out. State and the generated token default to `$XDG_STATE_HOME/ag` and `$XDG_STATE_HOME/ag/dash/token`; `stateDirectory`, `tokenFile`, and `cacheDirectory` are configurable. Tokens stay outside the Nix store and journal. Do not put secret contents in `environment`.
+The service uses an immutable executable, runs without opening a browser, starts under `default.target`, and retries after five seconds if the configured IP is not yet available. User lingering must already be enabled to run while logged out. State defaults to `$XDG_STATE_HOME/ag`. With `access = "token"` (or `auto` on a non-tailnet address) the token is `$XDG_STATE_HOME/ag/dash/token`; `stateDirectory`, `tokenFile`, and `cacheDirectory` are configurable. Tokens stay outside the Nix store and journal. Do not put secret contents in `environment`.
 
 After the operator activates Home Manager:
 
 ```sh
 systemctl --user status ag-dash
 journalctl --user -u ag-dash -n 30
-# Read the private token on the server for the first browser visit:
-cat ~/.local/state/ag/dash/token
-# Open http://helsinki.miku-owl.ts.net:7795/?token=<token>
+# A tailnet bind needs no token: open http://helsinki.miku-owl.ts.net:7795/
+# (with access = "token": cat ~/.local/state/ag/dash/token, then /?token=<token>)
 ```
 
 The scoped service and runtime checks are `nix build .#checks.<system>.ag-dash-module` and `cargo test --test dash_service`; they cover defaults, disabled mode, IPv6/wildcard/custom listeners, argument quoting, persistent tokens and managed symlinks, named Host admission, and SIGTERM cleanup. Enabling the service is declarative: builds and pin updates do not start it; apply it with your usual Home Manager/system switch.

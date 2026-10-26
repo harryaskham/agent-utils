@@ -18,6 +18,8 @@ let
     "--no-open"
     "--bind"
     "${ip}:${toString cfg.port}"
+    "--access"
+    cfg.access
     "--token-file"
     cfg.tokenFile
     "--refresh"
@@ -96,10 +98,19 @@ in
       default = "${config.xdg.stateHome}/ag";
       description = "Private collector state (AHP client identities and default access token).";
     };
+    access = lib.mkOption {
+      type = lib.types.enum [
+        "auto"
+        "open"
+        "token"
+      ];
+      default = "auto";
+      description = "Token policy. auto: no token on loopback and Tailscale addresses (the tailnet is the boundary), a token on wildcard/LAN binds. open: never a token. token: always a token. Host pinning and same-origin checks on answers apply in every mode.";
+    };
     tokenFile = lib.mkOption {
       type = lib.types.str;
       default = "${cfg.stateDirectory}/dash/token";
-      description = "Private persistent dashboard token, generated at runtime if absent. An existing SOPS/managed symlink is read without replacement. Contents never enter the Nix store or service log. Append ?token=<contents> on the first browser visit.";
+      description = "Private persistent dashboard token, used only when access requires one; generated at runtime if absent. An existing SOPS/managed symlink is read without replacement. Contents never enter the Nix store or service log. Append ?token=<contents> on the first browser visit.";
     };
     cacheDirectory = lib.mkOption {
       type = lib.types.nullOr lib.types.str;

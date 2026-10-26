@@ -137,6 +137,15 @@
       "tests": [
         "manual Playwright QA against a live local dash (docs/assets/ag/fleet-ahp/review.md)"
       ]
+    },
+    {
+      "id": "DASH-ACCESS-1",
+      "contract": "dash.access auto (default) needs no token on loopback and Tailscale listeners (100.64.0.0/10, fd7a:115c:a1e0::/48) and requires one on wildcard/LAN binds; open never, token always. In every mode a bound address pins Host (its address, this machine's short and full names, the public origin and its short name), and answers/refreshes need X-Ag-Dash plus a same-origin Origin; an old ?token= link redirects without a cookie.",
+      "tests": [
+        "ag/tests/fleet.rs::dash_on_a_private_address_needs_no_token_but_keeps_host_and_csrf_checks",
+        "ag/tests/fleet.rs::private_reach_covers_loopback_and_tailscale_only",
+        "ag/nix/module-test.nix"
+      ]
     }
   ],
   "visual_review": {
