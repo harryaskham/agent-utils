@@ -391,3 +391,44 @@ test("pi-client shows the focused session's call as the speech chip and a status
   assert.deepEqual(clients[0].statuses.slice(-2), [["agent-utils-voice", "☎ call · vad · on-air · mic-a @ tcp:mac:4713 · 2 sent · “turn the lights on please”"], ["agent-utils-voice", undefined]]);
   assert.deepEqual(clients[1].statuses, clients[0].statuses);
 });
+
+test("Ctrl-Space sends /ptt talk to the focused session's daemon when it runs voice input", async () => {
+  const { default: voiceClient } = await import("../extensions/durable/voice-client.js");
+  const { offerDaemonPtt } = await import("../extensions/lib/voice-ptt.js");
+  const handlers = new Map();
+  const bus = new Map();
+  const pi = {
+    on: (name, handler) => handlers.set(name, handler),
+    events: { on: (name, listener) => { bus.set(name, [...(bus.get(name) ?? []), listener]); return () => {}; }, emit: (name, data) => (bus.get(name) ?? []).forEach((listener) => listener(data)) },
+  };
+  voiceClient(pi);
+  const calls = [];
+  const sessionCommands = { voice: [{ name: "tts" }, { name: "call" }, { name: "ptt" }], plain: [{ name: "tts" }] };
+  let current = "voice";
+  const ctx = {
+    sessionManager: { getSessionId: () => current },
+    ui: { setStatus() {}, notify() {} },
+    chord: {
+      async call(method, params) {
+        if (method === "session.commands") return { items: sessionCommands[current] };
+        calls.push({ session: current, method, content: params.content, requestId: params.requestId });
+        return { command: "ptt", status: "done" };
+      },
+      async watchDocument() { return () => {}; },
+    },
+  };
+  assert.equal(offerDaemonPtt(pi), false, "no session yet");
+  handlers.get("session_start")({}, ctx);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(offerDaemonPtt(pi), true);
+  assert.equal(offerDaemonPtt(pi), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls.map(({ session, method, content }) => [session, method, content]), [["voice", "conversation.submit", "/ptt talk"], ["voice", "conversation.submit", "/ptt talk"]]);
+  assert.notEqual(calls[0].requestId, calls[1].requestId, "each press is its own request");
+
+  current = "plain";
+  handlers.get("session_start")({}, ctx);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(offerDaemonPtt(pi), false, "a daemon without voice input: the press stays local");
+  assert.equal(calls.length, 2);
+});

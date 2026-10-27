@@ -2011,6 +2011,30 @@ test("Ctrl-Space starts and finishes the same PTT pipeline exactly once without 
   } finally { await h.handlers.get("session_shutdown")?.({}, h.ctx); __setLocalVadHooksForTest({}); }
 });
 
+test("Ctrl-Space goes to the daemon's voice input when a client part takes it, else stays local PTT (bd-6ffaf9)", async () => {
+  const { VOICE_PTT_EVENT } = await import("../extensions/lib/voice-ptt.js");
+  const captures = [];
+  __setLocalVadHooksForTest({ capture: () => { const p = new EventEmitter(); p.stdout = new EventEmitter(); p.stderr = new EventEmitter(); p.kill = () => { p.killed = true; }; captures.push(p); return p; }, transcribe: async () => "local" });
+  const h = makeHarness();
+  try {
+    realtimeAgentExtension(h.pi); h.handlers.get("session_start")?.({}, h.ctx);
+    const toggle = () => h.shortcuts.get("ctrl+space").handler(h.ctx);
+    let daemon = true;
+    const offers = [];
+    h.pi.events.on(VOICE_PTT_EVENT, (offer) => { offers.push(offer.version); if (daemon) offer.take(); });
+    await toggle();
+    assert.deepEqual(offers, [1]);
+    assert.equal(captures.length, 0, "the daemon took the press: no local microphone");
+    daemon = false;
+    await toggle();
+    assert.equal(captures.length, 1, "nobody took it: local PTT");
+    daemon = true;
+    await toggle();
+    assert.equal(offers.length, 2, "while local PTT is on air the press finishes it, unoffered");
+    assert.equal(captures[0].killed, true);
+  } finally { await h.handlers.get("session_shutdown")?.({}, h.ctx); __setLocalVadHooksForTest({}); }
+});
+
 test("Ctrl-Space respects disabled shortcuts, active voice modes and blocking prompts", async () => {
   let captures = 0;
   __setLocalVadHooksForTest({ capture: () => { captures++; const p = new EventEmitter(); p.stdout = new EventEmitter(); p.stderr = new EventEmitter(); p.kill = () => {}; return p; }, transcribe: async () => "fixture" });

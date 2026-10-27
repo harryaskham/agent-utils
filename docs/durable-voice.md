@@ -71,3 +71,10 @@ for pi-client: list it in `client.extensions`. It follows the focused session's 
 
 Every client of a session shows the same call. With no call live, the chip is left to the local
 `/stt` and `/ptt`.
+
+**Ctrl-Space** controls the daemon's voice input in pi-client whenever the focused session's
+daemon runs it (its commands include `/call`). With no local voice mode on, `realtime-agent.js`
+offers the press first, `voice-client.js` takes it and sends `/ptt talk`. The first press opens
+the daemon's microphone and the second sends what was said; with a live call, the press toggles
+that call. Elsewhere, including TUI Pi and daemons without `voice.mjs`, Ctrl-Space stays the local
+push-to-talk.

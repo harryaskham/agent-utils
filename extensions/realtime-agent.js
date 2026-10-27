@@ -84,6 +84,7 @@ import { spawnSync } from "node:child_process";
 import { parseEnvStyleArgs } from "./lib/env-args.js";
 import { sttEnvUpdates } from "./lib/stt-session-values.js";
 import { labelUntrustedTranscript } from "./lib/untrusted-transcript.js";
+import { offerDaemonPtt } from "./lib/voice-ptt.js";
 import { isKeyRelease, isKeyRepeat } from "./lib/kitty-key-events.js";
 import { isAssistantSpeaking, markAssistantSpeaking } from "./lib/half-duplex-state.js";
 import { withSpeechControl } from "./lib/speech-control.js";
@@ -4274,6 +4275,9 @@ export default function realtimeAgentExtension(pi) {
     handler: async (ctx) => {
       if (speechSessionClosed || pttShortcutBusy || pttShortcutNonPress || !localSttShortcutsEnabled() || activeChoiceSessionId || blockingPromptDepth) return;
       if (localPttFinishing || (!localVad.active && batchSttRequests.size > 0)) return;
+      // With no local voice mode on, the daemon's voice input takes the press when the focused
+      // session has it (pi-client's voice-client.js sends /ptt talk there; bd-6ffaf9).
+      if (!localVad.active && !session.connected && !session.connecting && !session.mic && !cascade.active && offerDaemonPtt(pi)) return;
       if (session.connected || session.connecting || session.mic || cascade.active || (localVad.active && !localVad.hold)) {
         ctx.ui.notify("Stop the active voice mode before starting PTT with Ctrl-Space.", "info");
         return;

@@ -3,9 +3,12 @@
 // /ptt light: 🎙 CALL listening, on air, transcribing, armed, muted), and a status line with the
 // call's settings and what is being said. It follows voice.mjs's document through pi-client's
 // ctx.chord.watchDocument, so every client shows the same call; /call talk and the other verbs
-// stay voice.mjs's commands, which any client can send. In TUI Pi (no ctx.chord) it does nothing.
+// stay voice.mjs's commands, which any client can send. Ctrl-Space (realtime-agent.js's PTT key)
+// controls the daemon's voice input when the focused session's daemon has it: the press sends
+// /ptt talk there (open the microphone, then send). In TUI Pi (no ctx.chord) it does nothing.
 import { createSpeechIndicatorPublisher } from "../lib/speech-indicator.js";
 import { VOICE_DOC } from "../lib/voice-doc.js";
+import { VOICE_PTT_EVENT } from "../lib/voice-ptt.js";
 
 const STATUS = "agent-utils-voice";
 const PHASES = new Set(["listening", "on-air", "transcribing", "armed", "muted"]);
@@ -50,7 +53,8 @@ export function voiceStatusLine(doc) {
 }
 
 export default function voiceClient(pi, { maxSessions = 16 } = {}) {
-  // Each followed session's document: sessionId -> { doc, stop, stopped }.
+  // Each followed session's document: sessionId -> { doc, stop, stopped, voice }, `voice` once
+  // its daemon is known to run voice input (its commands include /call).
   const sessions = new Map();
   let live;
   let focused;
@@ -80,8 +84,11 @@ export default function voiceClient(pi, { maxSessions = 16 } = {}) {
 
   const follow = (ctx, sessionId) => {
     if (!sessionId || sessions.has(sessionId) || typeof ctx?.chord?.watchDocument !== "function") return;
-    const entry = { doc: null, stop: undefined, stopped: false };
+    const entry = { doc: null, stop: undefined, stopped: false, voice: false };
     sessions.set(sessionId, entry);
+    Promise.resolve(ctx.chord.call?.("session.commands", {}))
+      .then((result) => { entry.voice = Array.isArray(result?.items) && result.items.some((command) => command?.name === "call"); })
+      .catch(() => {});
     while (sessions.size > maxSessions) {
       const [oldest, gone] = sessions.entries().next().value;
       sessions.delete(oldest);
@@ -105,6 +112,17 @@ export default function voiceClient(pi, { maxSessions = 16 } = {}) {
       },
     );
   };
+
+  // Ctrl-Space: the daemon's push-to-talk, when the focused session's daemon has voice input.
+  let presses = 0;
+  pi.events?.on?.(VOICE_PTT_EVENT, (offer) => {
+    const ctx = live;
+    if (!sessions.get(focused)?.voice || typeof ctx?.chord?.call !== "function") return;
+    offer?.take?.();
+    presses += 1;
+    Promise.resolve(ctx.chord.call("conversation.submit", { requestId: `voice-ptt-${Date.now()}-${presses}`, content: "/ptt talk" }))
+      .catch((error) => ctx.ui?.notify?.(`/ptt talk: ${error?.message || error}`, "error"));
+  });
 
   pi.on("session_start", (_event, ctx) => {
     if (typeof ctx?.chord?.watchDocument !== "function") return;
