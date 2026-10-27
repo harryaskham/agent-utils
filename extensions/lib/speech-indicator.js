@@ -4,7 +4,8 @@
 export const SPEECH_INDICATOR_EVENT = "agent-utils:speech-indicator.v1";
 export const SPEECH_INDICATOR_REQUEST = "agent-utils:speech-indicator-request.v1";
 export const SPEECH_PHASES = Object.freeze(["disabled", "armed", "listening", "on-air", "transcribing", "sent", "muted", "error"]);
-const SURFACES = new Set(["PTT", "STT", "RT", "NOTE"]);
+// CALL: a pi-daemon voice call (durable/voice-client.js).
+const SURFACES = new Set(["PTT", "STT", "RT", "NOTE", "CALL"]);
 const METER_INTERVAL_MS = 100;
 
 const finite = (value, min, max, fallback) => {

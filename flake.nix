@@ -142,6 +142,8 @@
             echo 'export * from "./extensions/durable/image-budget.mjs";' > $out/image-budget.mjs
             # /loop as Durable background tasks.
             echo 'export * from "./extensions/durable/loop.mjs";' > $out/loop.mjs
+            # /call, /stt and /ptt run by the daemon (bd-6ffaf9).
+            echo 'export * from "./extensions/durable/voice.mjs";' > $out/voice.mjs
             # Cacophony visiting registration (needs pi-daemon's per-session environment).
             echo 'export * from "./extensions/durable/cacophony.mjs";' > $out/cacophony.mjs
             # agent-utils' TUI tool extensions (search_web, xvfb, firecracker, app-automation, android, slack).

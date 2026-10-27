@@ -416,6 +416,17 @@ export function createDurableAgentAudio({
     return tracked;
   };
 
+  /** sessionId -> speech requests queued or playing; voice input mutes while any are (bd-6ffaf9). */
+  const speaking = new Map();
+  const whileSpeaking = (session, promise) => {
+    const id = session.sessionId;
+    speaking.set(id, (speaking.get(id) ?? 0) + 1);
+    return Promise.resolve(promise).finally(() => {
+      const left = (speaking.get(id) ?? 1) - 1;
+      if (left > 0) speaking.set(id, left); else speaking.delete(id);
+    });
+  };
+
   // The node's speech feed (~/.local/state/agent-utils/tts/speech.jsonl), as
   // interactive Pi writes it: `ag tts` and ag dash's TTS panel read it. One
   // record per spoken line, written whether or not playback succeeds.
@@ -437,8 +448,8 @@ export function createDurableAgentAudio({
     const body = String(text ?? "");
     if (disposed || !body.trim()) return;
     recordFeed(session, kind === "tts" ? "tts" : "narrate", body);
-    track(Promise.resolve()
-      .then(() => session.speech.speak(body, { ...overrides, speechKind: kind, streamName: `/${kind}` }))
+    track(whileSpeaking(session, Promise.resolve()
+      .then(() => session.speech.speak(body, { ...overrides, speechKind: kind, streamName: `/${kind}` })))
       .then((result) => { for (const warning of result?.warnings || []) report(session, `${kind} daemon`, new Error(warning)); })
       .catch((error) => report(session, kind, error)));
   };
@@ -479,7 +490,7 @@ export function createDurableAgentAudio({
     recordFeed(session, "choices", String(text));
     session.choices ||= choiceFactory({ sessionId: session.sessionId, env, routing: session.routing });
     try { session.choices.assignSession?.({ sessionManager: { getSessionId: () => session.sessionId } }); } catch {}
-    track(Promise.resolve().then(() => session.choices.speak(text)).catch((error) => report(session, "choices", error)));
+    track(whileSpeaking(session, Promise.resolve().then(() => session.choices.speak(text))).catch((error) => report(session, "choices", error)));
   };
 
   const narrateOverrides = (session) => ({
@@ -784,6 +795,8 @@ export function createDurableAgentAudio({
     loadedAt,
     /** Settle every in-flight speech request (tests and orderly shutdown). */
     async idle() { while (pending.size) await Promise.allSettled([...pending]); },
+    /** Whether a session's speech is queued or playing (voice input mutes meanwhile). */
+    isSpeaking(sessionId) { return (speaking.get(String(sessionId)) ?? 0) > 0; },
     async dispose() {
       disposed = true;
       const loaded = await Promise.allSettled([...sessions.values()].map((entry) => entry.loading));
