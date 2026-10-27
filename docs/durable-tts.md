@@ -106,7 +106,20 @@ Narration works as in interactive Pi when the host offers the profile's models
   ("Running bash and read.", then "Finished …" or "… failed."); `/narrate status` shows the
   last error.
 
-`text=`, `/tts focus` and `/tts solo` are refused with an explanation.
+`text=` is refused with an explanation.
+
+## Focus and solo
+
+`/tts focus [on|off|toggle|status]` and `/tts solo […]` work as in TUI Pi, for one session at a
+time. Each session has its own routing over the worker's environment:
+- **Default output:** `PULSE_SERVER` and `PULSE_SINK` are every session's default.
+- **Focus** sends that session's speech to the focus sink (`agentUtils.tts.focus`, default
+  `vsink_focus`).
+- **Solo** gives the session a Pulse sink of its own, named after the session.
+
+The routing applies to each utterance, so sessions in one worker play to different sinks at the
+same time. A session's focus and solo are saved with its settings and come back after a worker
+restart. Its solo sink is removed when the worker lets the session go.
 
 ## Events
 

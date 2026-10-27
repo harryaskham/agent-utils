@@ -376,9 +376,61 @@ test("command errors reply through notify and change nothing", async () => {
   assert.match(host.notifications.at(-1).text, /^\/narrate: text= is not available in Durable sessions/);
   await host.command("s1", "/narrate phases=sideways");
   assert.match(host.notifications.at(-1).text, /phases must be before, after or both/);
-  await host.command("s1", "/tts focus on");
-  assert.match(host.notifications.at(-1).text, /^\/tts: focus and solo/);
+  await host.command("s1", "/tts focus sideways");
+  assert.match(host.notifications.at(-1).text, /^\/tts: Usage: \/tts focus \[on\|off\|toggle\|status\]/);
   assert.equal(await host.store.forSession("s1").get(DURABLE_AUDIO_SETTINGS_KEY), undefined);
+});
+
+/** A speech output routing that records its calls: focus and solo, no Pulse. */
+function fakeRouting(sessionId, calls) {
+  let focus = false, solo = false;
+  const snapshot = () => ({ focus, solo, mode: solo ? "solo" : focus ? "focus" : "normal",
+    focusOutput: focus ? { device: "vsink_focus" } : null, soloOutput: solo ? { sink: `pi_${sessionId}` } : null, cleanupPending: false, error: null });
+  return {
+    snapshot,
+    assertPlayable() {},
+    async setMode(mode, enabled, options) {
+      calls.push({ sessionId, mode, enabled, identity: options.identity, base: options.base.voice });
+      const on = enabled === undefined ? !(mode === "focus" ? focus : solo) : enabled;
+      if (mode === "focus") focus = on; else solo = on;
+      return snapshot();
+    },
+    async acquire(options) { return { options, mode: snapshot().mode, release() {} }; },
+    async shutdown() { calls.push({ sessionId, shutdown: true }); focus = false; solo = false; return snapshot(); },
+  };
+}
+
+test("/tts focus and solo route each session's speech on its own, and are kept across a restart", async () => {
+  const calls = [];
+  const routings = new Map();
+  const createRouting = ({ sessionId }) => { const routing = fakeRouting(sessionId, calls); routings.set(sessionId, routing); return routing; };
+  const given = [];
+  const host = fakeHost({
+    createRouting,
+    createSpeech: ({ sessionId, routing }) => { given.push({ sessionId, routing }); return stubSpeech(host.spoken, sessionId); },
+  });
+  await host.command("s1", "/tts focus on");
+  assert.equal(host.notifications.at(-1).text, "audio:focus · focus:on · solo:off · sink:vsink_focus · server:inherit");
+  await host.command("s2", "/tts solo");
+  assert.match(host.notifications.at(-1).text, /^audio:solo · focus:off · solo:on · sink:pi_s2/);
+  await host.command("s1", "/tts focus status");
+  assert.match(host.notifications.at(-1).text, /^audio:focus · focus:on · solo:off/, "s2's solo left s1 alone");
+  assert.deepEqual(given.map(({ sessionId, routing }) => [sessionId, routing === routings.get(sessionId)]), [["s1", true], ["s2", true]], "each session's speech has its own routing");
+  assert.deepEqual(calls.map(({ sessionId, mode, enabled, identity, base }) => [sessionId, mode, enabled, identity.session, base]),
+    [["s1", "focus", true, "s1", "stub-voice"], ["s2", "solo", undefined, "s2", "stub-voice"]]);
+  assert.deepEqual((await host.store.forSession("s1").get(DURABLE_AUDIO_SETTINGS_KEY)).tts.routing, { focus: true, solo: false });
+  assert.deepEqual((await host.store.forSession("s2").get(DURABLE_AUDIO_SETTINGS_KEY)).tts.routing, { focus: false, solo: true });
+
+  // A restarted worker: each session's routing comes back as it was.
+  await host.audio.dispose();
+  assert.deepEqual(calls.filter((call) => call.shutdown).map((call) => call.sessionId).sort(), ["s1", "s2"], "dispose ends every session's routing");
+  calls.length = 0;
+  const restarted = fakeHost({ store: host.store, createRouting });
+  await restarted.command("s2", "/tts status");
+  await restarted.command("s1", "/tts focus off");
+  assert.deepEqual(calls.map(({ sessionId, mode, enabled }) => [sessionId, mode, enabled]), [["s2", "solo", true], ["s1", "focus", true], ["s1", "focus", false]]);
+  assert.match(restarted.notifications.at(-1).text, /^audio:normal · focus:off · solo:off/);
+  assert.deepEqual((await restarted.store.forSession("s1").get(DURABLE_AUDIO_SETTINGS_KEY)).tts.routing, { focus: false, solo: false });
 });
 
 test("missing credentials or playback degrade quietly with one notify", async () => {

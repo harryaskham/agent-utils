@@ -39,7 +39,7 @@ import { createChoiceSpeaker, formatChoiceIntroduction } from "./choice.js";
 import { resolveSessionSpeechAssignment, resolveSessionSpeechPolicy } from "./tts-identity.js";
 import { DEFAULT_TTS_EMBEDDING, DEFAULT_TTS_VOICE, isAzureSpeechProvider, usesDaemonPlayback, createInterruptiblePcmPlayer } from "./tts.js";
 import { speechCredentialStatus } from "./tts-provider-config.js";
-import { createSpeechOutputRouting } from "./speech-output-routing.js";
+import { createSpeechOutputRouting, speechRoutingStatus } from "./speech-output-routing.js";
 import { createAudioProviders, rejectSurfaceAuthKeys } from "./audio-providers.js";
 import { appendTtsFeed } from "./tts-feed.js";
 import { ttsFeedEnabled } from "./privacy.js";
@@ -217,16 +217,27 @@ function memoryStateStore(map, sessionId) {
  * Create the agent audio core for one host process.
  *
  * Options are injection points for tests and adaptors:
- * - `createSpeech({ sessionId, config, env })` returns a controller shaped like
+ * - `createSpeech({ sessionId, config, env, routing })` returns a controller shaped like
  *   createAgentSpeechController (speak/interrupt/apply/getConfig/setConfig/dispose).
- * - `createChoiceSpeech({ sessionId, env })` returns { speak, interrupt, dispose }.
+ * - `createChoiceSpeech({ sessionId, env, routing })` returns { speak, interrupt, dispose }.
+ * - `createRouting({ sessionId, env })` returns a session's speech output routing
+ *   (createSpeechOutputRouting): its /tts focus and /tts solo, overlaid on each utterance.
  * - `persistedSettings` is the immutable startup `{ tts, narrate, choice }` slice.
  */
+const ROUTING_MODES = ["focus", "solo"];
+
+/** A session's saved routing: focus and solo, each on or off. */
+function savedRouting(value) {
+  const saved = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return { focus: saved.focus === true, solo: saved.solo === true };
+}
+
 export function createDurableAgentAudio({
   env = process.env,
   persistedSettings = {},
   createSpeech,
   createChoiceSpeech,
+  createRouting = () => createSpeechOutputRouting({ env }),
   executables = {},
   spawnImpl,
   which = findExecutable,
@@ -246,12 +257,13 @@ export function createDurableAgentAudio({
     ? Number(replayGraceMs ?? env.PI_DURABLE_AUDIO_REPLAY_GRACE_MS)
     : DEFAULT_DURABLE_REPLAY_GRACE_MS;
   const audioProviders = createAudioProviders({});
-  let routing;
-  const sharedRouting = () => (routing ||= createSpeechOutputRouting({ env }));
   const speechPolicy = resolveSessionSpeechPolicy(persistedTts, env);
   const makePlayer = () => createInterruptiblePcmPlayer({ queue: true, ...(spawnImpl || Object.keys(executables).length ? { spawnImpl: spawnWithExecutables(spawnImpl || spawn, executables) } : {}) });
-  const speechFactory = createSpeech || (({ config }) => createAgentSpeechController({ env, initialConfig: config, routing: sharedRouting(), player: makePlayer() }));
-  const choiceFactory = createChoiceSpeech || (() => createChoiceSpeaker({ env, persisted: persistedTts, routing: sharedRouting(), audioProviders, player: makePlayer() }));
+  // Each session routes its own speech (/tts focus, /tts solo): the worker's environment
+  // (PULSE_SERVER, PULSE_SINK) is every session's default, and a session's routing overlays
+  // the output of each of its utterances.
+  const speechFactory = createSpeech || (({ config, routing }) => createAgentSpeechController({ env, initialConfig: config, routing, player: makePlayer() }));
+  const choiceFactory = createChoiceSpeech || (({ routing }) => createChoiceSpeaker({ env, persisted: persistedTts, routing, audioProviders, player: makePlayer() }));
 
   /** sessionId -> runtime record; bounded, least recently used first. */
   const sessions = new Map();
@@ -280,7 +292,10 @@ export function createDurableAgentAudio({
     while (sessions.size > maxSessions) {
       const [oldest, record] = sessions.entries().next().value;
       sessions.delete(oldest);
-      void Promise.resolve(record.loading).then((loaded) => { try { loaded?.speech?.dispose?.(); loaded?.choices?.dispose?.(); } catch {} }).catch(() => {});
+      void Promise.resolve(record.loading).then((loaded) => {
+        try { loaded?.speech?.dispose?.(); loaded?.choices?.dispose?.(); } catch {}
+        void Promise.resolve(loaded?.routing?.shutdown?.()).catch(() => {});
+      }).catch(() => {});
     }
   };
 
@@ -305,12 +320,14 @@ export function createDurableAgentAudio({
       try { const value = await store.get(DURABLE_AUDIO_LEDGER_KEY); ledger = Array.isArray(value) ? value.map(String) : Array.isArray(value?.ids) ? value.ids.map(String) : []; } catch {}
       const tts = { ...base.tts, ...plainObject(saved.tts) };
       tts.speech = durableSpeechValues(plainObject(saved.tts?.speech));
+      tts.routing = savedRouting(saved.tts?.routing);
       const narrate = { ...base.narrate, ...plainObject(saved.narrate) };
       if (!NARRATE_PHASES.includes(narrate.phases)) narrate.phases = base.narrate.phases;
       let config = base.config;
       try { if (Object.keys(tts.speech).length) config = applyAgentTtsConfig(config, tts.speech, env); }
       catch (error) { log(`agent-utils durable audio: saved speech settings ignored: ${error?.message || error}`); }
       config = assignSessionVoice(config, sessionId, tts.speech);
+      const routing = createRouting({ sessionId, env });
       const session = {
         sessionId,
         cwd: typeof ctx?.cwd === "string" && ctx.cwd ? ctx.cwd : undefined,
@@ -318,7 +335,8 @@ export function createDurableAgentAudio({
         durable,
         tts,
         narrate,
-        speech: speechFactory({ sessionId, config, env }),
+        routing,
+        speech: speechFactory({ sessionId, config, env, routing }),
         choices: null,
         ledger: new SpokenLedger(ledger.slice(-DURABLE_AUDIO_LEDGER_LIMIT)),
         batches: new Map(),
@@ -329,6 +347,15 @@ export function createDurableAgentAudio({
         lastError: null,
         reported: new Set(),
       };
+      // The session's saved focus and solo, as before the worker restarted.
+      for (const mode of ROUTING_MODES) {
+        if (!tts.routing[mode]) continue;
+        try { await routing.setMode(mode, true, routingOptions(session)); }
+        catch (error) {
+          session.lastError = `/tts ${mode}: ${error?.message || error}`;
+          log(`agent-utils durable audio: /tts ${mode} not restored: ${error?.message || error}`);
+        }
+      }
       return session;
     })() };
     sessions.set(sessionId, entry);
@@ -349,6 +376,13 @@ export function createDurableAgentAudio({
       panSource: config.pan !== undefined ? config.panSource || "explicit" : "session",
     };
   };
+
+  /** What a session's routing needs to switch focus or solo on. */
+  const routingOptions = (session) => ({
+    base: { ...(session.speech.getConfig?.() ?? {}), env },
+    focus: plainObject(persistedTts.focus),
+    identity: { session: session.sessionId },
+  });
 
   const saveSettings = async (session) => {
     await session.store.set(DURABLE_AUDIO_SETTINGS_KEY, {
@@ -443,7 +477,7 @@ export function createDurableAgentAudio({
   const speakChoice = (session, text) => {
     if (disposed || !String(text || "").trim()) return;
     recordFeed(session, "choices", String(text));
-    session.choices ||= choiceFactory({ sessionId: session.sessionId, env });
+    session.choices ||= choiceFactory({ sessionId: session.sessionId, env, routing: session.routing });
     try { session.choices.assignSession?.({ sessionManager: { getSessionId: () => session.sessionId } }); } catch {}
     track(Promise.resolve().then(() => session.choices.speak(text)).catch((error) => report(session, "choices", error)));
   };
@@ -629,7 +663,16 @@ export function createDurableAgentAudio({
     const raw = String(args ?? "").trim();
     const simple = raw.toLowerCase();
     try {
-      if (/^(focus|solo)(?:\s|$)/.test(simple)) throw new Error("focus and solo are Pulse routing for an interactive Pi; set PULSE_SERVER/PULSE_SINK in the host's environment instead");
+      if (/^(focus|solo)(?:\s|$)/.test(simple)) {
+        // This session's speech only: the focus sink, or a sink of its own.
+        const [mode, action, ...extra] = simple.split(/\s+/);
+        if (extra.length || (action && !["on", "off", "toggle", "status"].includes(action))) throw new Error(`Usage: /tts ${mode} [on|off|toggle|status]`);
+        if (action === "status") return reply(ctx, speechRoutingStatus(session.routing.snapshot()));
+        const state = await session.routing.setMode(mode, action === "on" ? true : action === "off" ? false : undefined, routingOptions(session));
+        session.tts.routing = { focus: !!state.focus, solo: !!state.solo };
+        await saveSettings(session);
+        return reply(ctx, speechRoutingStatus(state));
+      }
       if (simple === "status") return reply(ctx, ttsStatus(session, { check: true }));
       if (simple === "off") {
         session.tts.enabled = false;
@@ -725,7 +768,7 @@ export function createDurableAgentAudio({
 
   const commands = {
     tts: {
-      description: "Speak this session's final assistant messages on the daemon host. /tts [on|off|status|harry|key=value …]; choices=on|off speaks ask_user questions; prefix=/suffix= wrap speech.",
+      description: "Speak this session's final assistant messages on the daemon host. /tts [on|off|status|harry|key=value …]; choices=on|off speaks ask_user questions; prefix=/suffix= wrap speech; /tts focus|solo [on|off|toggle|status] routes this session's speech to the focus sink, or a sink of its own.",
       run: runTts,
     },
     narrate: {
@@ -749,8 +792,8 @@ export function createDurableAgentAudio({
         if (result.status !== "fulfilled") continue;
         try { await result.value.speech?.dispose?.(); } catch {}
         try { await result.value.choices?.dispose?.(); } catch {}
+        try { await result.value.routing?.shutdown?.(); } catch {}
       }
-      try { await routing?.shutdown?.(); } catch {}
     },
   };
 }
