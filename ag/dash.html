@@ -135,7 +135,7 @@ const $=id=>document.getElementById(id);
 const el=(tag,props={},...kids)=>{const e=document.createElement(tag);for(const[k,v]of Object.entries(props)){if(k==='class')e.className=v;else if(k==='text')e.textContent=v;else if(k.startsWith('on'))e[k]=v;else if(v!==undefined&&v!==null&&v!==false)e.setAttribute(k,v===true?'':v)}e.append(...kids.filter(k=>k!==null&&k!==undefined));return e};
 const ago=ms=>{if(!ms)return'never';const s=Math.max(0,Math.round((Date.now()-ms)/1000));return s<60?s+'s ago':s<3600?Math.round(s/60)+'m ago':Math.round(s/3600)+'h ago'};
 const keyOf=c=>c.host+'\u001f'+c.session+'\u001f'+c.request_id;
-let data=null,last='',selected=null,shown=null,tab='choices',drafts={},armed=null,sending=false,offline=false,expired=false,pollTimer,liveTimer;
+let data=null,last='',selected=null,wanted=null,shown=null,tab='choices',drafts={},armed=null,sending=false,offline=false,expired=false,pollTimer,liveTimer;
 
 async function api(path,body){
   const r=await fetch(path,body===undefined?{credentials:'same-origin',cache:'no-store'}:{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','x-ag-dash':'1'},body:JSON.stringify(body)});
@@ -180,6 +180,7 @@ function render(){
   $('b-audio').textContent=data?.audio?.clips||'·';
   window.agTts?.status(data.tts);
   document.title=(waiting?`(${waiting}) `:'')+'ag · fleet';
+  if(wanted){const hit=items.find(i=>i.choice.host===wanted.host&&i.choice.request_id===wanted.request);if(hit){selected=keyOf(hit.choice);wanted=null}}
   if(!items.some(i=>keyOf(i.choice)===selected))selected=items.find(i=>i.choice.actionable)?.choice?keyOf(items.find(i=>i.choice.actionable).choice):items[0]?keyOf(items[0].choice):null;
   renderRail(items);renderDetail(items);renderHealth();renderImages();renderAudio();live();
 }
@@ -198,7 +199,7 @@ function renderRail(items){
       rail.append(el('div',{class:'agent',title:a.title},a.title,el('small',{text:a.kind&&a.kind!==a.provider?`${a.provider} · ${a.kind}`:a.provider})));
       for(const c of a.choices){
         const k=keyOf(c);
-        rail.append(el('button',{class:'item'+(c.actionable?'':' stale'),'aria-current':String(k===selected),title:c.title,onclick:()=>{selected=k;armed=null;renderRail(items);renderDetail(items)}},el('span',{class:'mark',text:c.actionable?'◆':'◇'}),el('span',{class:'t',text:c.title})));
+        rail.append(el('button',{class:'item'+(c.actionable?'':' stale'),'aria-current':String(k===selected),title:c.title,onclick:()=>{pick(c);renderRail(items);renderDetail(items)}},el('span',{class:'mark',text:c.actionable?'◆':'◇'}),el('span',{class:'t',text:c.title})));
       }
     }
   }
@@ -330,7 +331,14 @@ function renderAudio(){
 }
 const views=['choices','health','tts','images','audio'];
 function show(name){tab=name;for(const t of views){$('tab-'+t).setAttribute('aria-selected',String(t===name));$(t).hidden=t!==name}window.agTts?.visibility(name==='tts')}
-for(const t of views){$('tab-'+t).onclick=()=>show(t);$('tab-'+t).onkeydown=e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();e.stopPropagation();const i=views.indexOf(t),next=e.key==='Home'?0:e.key==='End'?views.length-1:(i+(e.key==='ArrowRight'?1:-1)+views.length)%views.length;show(views[next]);$('tab-'+views[next]).focus()}}}
+// Deep links: #choices, #health, #tts, #images, #audio, and
+// #choices/<host>/<request id> for one question (selected once it is listed).
+function parseHash(){const parts=location.hash.slice(1).split('/').map(p=>{try{return decodeURIComponent(p)}catch{return p}});return{view:views.includes(parts[0])?parts[0]:'choices',host:parts[1],request:parts.slice(2).join('/')}}
+function go(name){if(location.hash.split('/')[0]!=='#'+name)history.pushState(null,'','#'+name);show(name)}
+function pick(c){selected=keyOf(c);armed=null;history.replaceState(null,'',`#choices/${encodeURIComponent(c.host)}/${encodeURIComponent(c.request_id)}`)}
+function fromHash(){const h=parseHash();if(h.view==='choices'&&h.host&&h.request)wanted={host:h.host,request:h.request};show(h.view);if(wanted&&data)render()}
+window.addEventListener('popstate',fromHash);window.addEventListener('hashchange',fromHash);
+for(const t of views){$('tab-'+t).onclick=()=>go(t);$('tab-'+t).onkeydown=e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();e.stopPropagation();const i=views.indexOf(t),next=e.key==='Home'?0:e.key==='End'?views.length-1:(i+(e.key==='ArrowRight'?1:-1)+views.length)%views.length;go(views[next]);$('tab-'+views[next]).focus()}}}
 $('refresh').onclick=()=>api('/api/refresh',{what:['choices','doctor']}).then(()=>setTimeout(poll,300)).catch(()=>{});
 $('pull').onclick=()=>api('/api/refresh',{what:['images']}).then(()=>setTimeout(poll,300)).catch(()=>{});
 $('audpull').onclick=()=>api('/api/refresh',{what:['audio']}).then(()=>setTimeout(poll,300)).catch(()=>{});
@@ -343,13 +351,13 @@ document.addEventListener('keydown',e=>{
   if(expired)return;
   if(e.target.matches('input,textarea,select')||e.metaKey||e.ctrlKey||e.altKey)return;
   if(e.key==='r'){$('refresh').click();return}
-  if(tab!=='choices'){if(e.key==='c')show('choices');return}
+  if(tab!=='choices'){if(e.key==='c')go('choices');return}
   const items=flat(),at=items.findIndex(i=>keyOf(i.choice)===selected);
-  if(e.key==='j'||e.key==='ArrowDown'){const n=items[Math.min(items.length-1,at+1)];if(n){selected=keyOf(n.choice);armed=null;renderRail(items);renderDetail(items)}e.preventDefault()}
-  else if(e.key==='k'||e.key==='ArrowUp'){const n=items[Math.max(0,at-1)];if(n){selected=keyOf(n.choice);armed=null;renderRail(items);renderDetail(items)}e.preventDefault()}
+  if(e.key==='j'||e.key==='ArrowDown'){const n=items[Math.min(items.length-1,at+1)];if(n){pick(n.choice);renderRail(items);renderDetail(items)}e.preventDefault()}
+  else if(e.key==='k'||e.key==='ArrowUp'){const n=items[Math.max(0,at-1)];if(n){pick(n.choice);renderRail(items);renderDetail(items)}e.preventDefault()}
   else if(/^[1-9]$/.test(e.key)){document.querySelector(`#detail .opt[data-k="${e.key}"]`)?.click()}
   else if(e.key==='i'){const input=document.querySelector('#detail input');if(input){input.focus();e.preventDefault()}}
   else if(e.key==='d'){document.querySelector('#detail .danger')?.click()}
 });
-poll();pollTimer=setInterval(poll,4000);liveTimer=setInterval(live,1000);
+fromHash();poll();pollTimer=setInterval(poll,4000);liveTimer=setInterval(live,1000);
 </script></body></html>
