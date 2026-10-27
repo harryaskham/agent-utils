@@ -106,19 +106,82 @@ test("manual registration works with auto-registration off and deduplicates conc
   await restored.emit("session_shutdown");
 });
 
-test("manual command preserves global disable and project requirements", async () => {
-  for (const [env, warning] of [
-    [{ DISABLE_PI_CACO: "1", CACO_PROJECT: "p", TMUX: "yes" }, /disabled by DISABLE_PI_CACO/],
-    [{ TMUX: "yes" }, /requires CACO_PROJECT/],
-  ]) {
-    clearCacophonyRuntimeIdentity();
-    const h = harness();
-    let calls = 0;
-    createCacophonyRuntimeExtension({ env, settings: {}, execFileImpl() { calls++; } })(h.pi);
-    await h.commands.get("caco-agent-register").handler("", h.ctx);
-    assert.equal(calls, 0);
-    assert.match(h.notifications.at(-1).message, warning);
-  }
+test("manual command preserves the global disable; without a project it infers one or refuses", async () => {
+  clearCacophonyRuntimeIdentity();
+  const off = harness();
+  let calls = 0;
+  createCacophonyRuntimeExtension({ env: { DISABLE_PI_CACO: "1", CACO_PROJECT: "p", TMUX: "yes" }, settings: {}, execFileImpl() { calls++; } })(off.pi);
+  await off.commands.get("caco-agent-register").handler("", off.ctx);
+  assert.equal(calls, 0);
+  assert.match(off.notifications.at(-1).message, /disabled by DISABLE_PI_CACO/);
+
+  // A directory whose remotes match no configured project is never registered under its path.
+  clearCacophonyRuntimeIdentity();
+  const bare = harness();
+  const previews = [];
+  createCacophonyRuntimeExtension({
+    env: { TMUX: "yes" }, settings: {},
+    execFileImpl(_command, args, _options, callback) {
+      previews.push(args);
+      setImmediate(() => callback(null, JSON.stringify({ ok: true, preview: true, project: "--projects-actual-project", project_source: "derived path name" }), ""));
+    },
+  })(bare.pi);
+  await bare.commands.get("caco-agent-register").handler("", bare.ctx);
+  await settle();
+  assert.deepEqual(previews, [["agent", "register", "--preview", "--checkout-root", "/projects/actual-project", "--session-id", "pi-session", "--json"]]);
+  assert.match(bare.notifications.at(-1).message, /registration failed: no configured Cacophony project matches the git remotes/);
+  assert.equal(getCacophonyRuntimeIdentity({}, bare.ctx).agentId, "");
+
+  // Auto-registration never infers: it needs a configured project.
+  clearCacophonyRuntimeIdentity();
+  const auto = harness();
+  let autoCalls = 0;
+  createCacophonyRuntimeExtension({ env: { TMUX: "yes" }, settings: { agentUtils: { cacophony: { autoRegister: true } } }, execFileImpl() { autoCalls++; } })(auto.pi);
+  await auto.emit("session_start");
+  await settle();
+  assert.equal(autoCalls, 0);
+});
+
+test("/caco-agent-register infers the checkout's project and replaces a refused one with the sole match", async () => {
+  clearCacophonyRuntimeIdentity();
+  const h = harness();
+  const calls = [];
+  createCacophonyRuntimeExtension({
+    env: { TMUX: "yes" }, settings: {},
+    execFileImpl(_command, args, _options, callback) {
+      calls.push(args);
+      const project = args.includes("--project") ? args[args.indexOf("--project") + 1] : null;
+      setImmediate(() => {
+        if (args.includes("--preview")) return callback(null, JSON.stringify({ ok: true, project: "android-utils", project_source: "cwd git remote" }), "");
+        if (project === "tools") return callback(new Error("exit 1"), "", "error: visiting project 'tools' conflicts with caller checkout git remotes; matching configured projects: android-utils. Pass --project with one of these candidates");
+        callback(null, JSON.stringify({ id: `visiting-${project}`, project }), "");
+      });
+    },
+  })(h.pi);
+  await h.commands.get("caco-agent-register").handler("", h.ctx);
+  await settle();
+  assert.deepEqual(calls.map((args) => args.includes("--preview") ? "preview" : args[args.indexOf("--project") + 1]), ["preview", "android-utils"]);
+  assert.equal(getCacophonyRuntimeIdentity({}, h.ctx).project, "android-utils");
+  assert.ok(h.notifications.some((n) => n.message === "Cacophony project android-utils: inferred from this checkout's git remotes."), JSON.stringify(h.notifications));
+
+  clearCacophonyRuntimeIdentity();
+  const named = harness({ sessionId: "pi-named" });
+  calls.length = 0;
+  createCacophonyRuntimeExtension({
+    env: { TMUX: "yes" }, settings: {},
+    execFileImpl(_command, args, _options, callback) {
+      calls.push(args);
+      const project = args[args.indexOf("--project") + 1];
+      setImmediate(() => project === "tools"
+        ? callback(new Error("exit 1"), "", "error: visiting project 'tools' conflicts with caller checkout git remotes; matching configured projects: android-utils. Pass --project with one of these candidates")
+        : callback(null, JSON.stringify({ id: `visiting-${project}`, project }), ""));
+    },
+  })(named.pi);
+  await named.commands.get("caco-agent-register").handler("project=tools", named.ctx);
+  await settle();
+  assert.deepEqual(calls.map((args) => args[args.indexOf("--project") + 1]), ["tools", "android-utils"]);
+  assert.equal(getCacophonyRuntimeIdentity({}, named.ctx).project, "android-utils");
+  assert.ok(named.notifications.some((n) => /tools does not match this checkout's git remotes; android-utils is the only configured project they match/.test(n.message)), JSON.stringify(named.notifications));
 });
 
 test("global Cacophony disable and explicit identity resolution are fail closed", () => {

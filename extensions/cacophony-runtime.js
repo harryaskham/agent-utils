@@ -10,6 +10,7 @@ import {
   ownCacophonyRuntimeSession,
   setCacophonyRuntimeIdentity,
 } from "./lib/cacophony-runtime.js";
+import { inferVisitingProject, registerInferringProject } from "./lib/cacophony-project.js";
 
 export const CACO_VISITOR_ENTRY_TYPE = "agent-utils-cacophony-visitor";
 export const CACO_VISITOR_MESSAGE_TYPE = "agent-utils-cacophony-registration";
@@ -151,41 +152,52 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
         if (manual) ctx.ui?.notify?.(`Restored visiting agent ${restored.agentId} in ${restored.project}.`, "info");
         return;
       }
-      if (!project) {
-        if (manual) ctx.ui?.notify?.("Cacophony registration requires CACO_PROJECT (or CACOPHONY_PROJECT), or /caco-agent-register project=<name>.", "warning");
-        return;
-      }
+      // Auto-registration needs a configured project; the operator's command infers one
+      // from the checkout's git remotes instead (registerInferringProject).
+      if (!project && !manual) return;
       if (!manual && !config.autoRegister) return;
       if (registration) {
         if (registration.project !== project && manual) ctx.ui?.notify?.(`Registration is already in progress for ${registration.project}; wait before choosing another project.`, "warning");
         return registration.promise;
       }
 
-      const pending = { project };
+      const pending = { project: project || "this checkout's project" };
       registration = pending;
       const current = () => active === owner && owner.isCurrent() && registration === pending &&
         cacophonySessionId(ctx) === sessionId && !isPiCacoDisabled(env);
-      const args = ["agent", "register", "--project", project, "--session-id", sessionId];
-      // Pi's /name metadata, read at registration time from this live runtime.
-      // An absent name is not the session UUID, external ID, or inherited env.
-      try {
-        const name = pi.getSessionName?.();
-        if (typeof name === "string" && name.trim()) args.push("--session-name", name.trim());
-      } catch { /* Older/unavailable metadata leaves naming to Cacophony. */ }
-      if (config.runtimeAgentId) args.push("--runtime-agent-id", config.runtimeAgentId);
-      args.push("--json");
-      pending.promise = execJson(execFileImpl, config.command, args, ctx.cwd)
-        .then((response) => {
+      const argsFor = (chosen) => {
+        const args = ["agent", "register", "--project", chosen, "--session-id", sessionId];
+        // Pi's /name metadata, read at registration time from this live runtime.
+        // An absent name is not the session UUID, external ID, or inherited env.
+        try {
+          const name = pi.getSessionName?.();
+          if (typeof name === "string" && name.trim()) args.push("--session-name", name.trim());
+        } catch { /* Older/unavailable metadata leaves naming to Cacophony. */ }
+        if (config.runtimeAgentId) args.push("--runtime-agent-id", config.runtimeAgentId);
+        args.push("--json");
+        return args;
+      };
+      const run = (args) => execJson(execFileImpl, config.command, args, ctx.cwd);
+      const attempt = (chosen) => run(argsFor(chosen));
+      pending.promise = (manual
+        ? registerInferringProject({
+          requested: project,
+          infer: () => inferVisitingProject({ run, cwd: ctx.cwd, sessionId }),
+          attempt,
+        })
+        : attempt(project).then((result) => ({ result, project, note: "" })))
+        .then(({ result: response, project: chosen, note }) => {
           if (!current()) return null;
           const data = response?.data || response;
           const agentId = String(data?.id || data?.agent_id || data?.agentId || "").trim();
-          const registeredProject = String(data?.project || project).trim();
-          if (!agentId || registeredProject !== project) throw new Error("caco agent register returned no durable visiting-agent identity for the requested project");
+          const registeredProject = String(data?.project || chosen).trim();
+          if (!agentId || registeredProject !== chosen) throw new Error("caco agent register returned no durable visiting-agent identity for the requested project");
           if (data.session_id != null && data.session_id !== sessionId) throw new Error("caco agent register returned a different session identity");
           if (data.runtime_agent_id != null && data.runtime_agent_id !== config.runtimeAgentId) throw new Error("caco agent register returned a different runtime identity");
-          const identity = { version: 2, status: "registered", agentId, project, sessionId, runtimeAgentId: config.runtimeAgentId, registeredAt: Date.now() };
+          const identity = { version: 2, status: "registered", agentId, project: chosen, sessionId, runtimeAgentId: config.runtimeAgentId, registeredAt: Date.now() };
           if (!setCacophonyRuntimeIdentity({ ...identity, source: "registration", visiting: true }, sessionId, owner)) return null;
           pi.appendEntry?.(CACO_VISITOR_ENTRY_TYPE, identity);
+          if (note) { try { ctx.ui?.notify?.(`Cacophony project ${chosen}: ${note}.`, "info"); } catch {} }
           announce(ctx, identity, String(response?.guidance?.text || "").trim());
           try { pi.events?.emit?.("agent-utils:cacophony-identity", { ...identity, visiting: true }); } catch {}
           return identity;
@@ -201,12 +213,12 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
     };
 
     pi.registerCommand("caco-agent-register", {
-      description: "Register this session as a Cacophony visiting agent; optionally project=<name>.",
+      description: "Register this session as a Cacophony visiting agent; the project comes from the checkout's git remotes unless project=<name> is given.",
       handler: async (args, ctx) => {
         const text = String(args || "").trim();
         const match = /^project=([^\s=]+)$/.exec(text);
         if (text && !match) {
-          ctx.ui?.notify?.("Usage: /caco-agent-register [project=<name>] (defaults to CACO_PROJECT or CACOPHONY_PROJECT)", "warning");
+          ctx.ui?.notify?.("Usage: /caco-agent-register [project=<name>] (defaults to CACO_PROJECT or CACOPHONY_PROJECT, else the project this checkout's git remotes match)", "warning");
           return;
         }
         await ensureRegistration(ctx, { manual: true, project: match?.[1] });

@@ -4,20 +4,29 @@ import assert from "node:assert/strict";
 
 import { MODULE, MODULE_STATE_DOC, createCacophonyModule, identitySection } from "../extensions/lib/durable-cacophony.js";
 
-/** A fake `caco agent register --json`, recording its calls. */
-function fakeCaco({ id = "visiting-abc", guidance = "Visiting agents coordinate through beads.", fail } = {}) {
+/**
+ * A fake `caco agent register --json`, recording its calls. `--preview` answers with
+ * `preview` ({ project, source }); a `--project` listed in `conflicts` is refused as caco
+ * refuses a project the checkout's remotes do not match.
+ */
+function fakeCaco({ id = "visiting-abc", guidance = "Visiting agents coordinate through beads.", fail, preview = { project: "derived", source: "derived path name" }, conflicts = {} } = {}) {
   const calls = [];
   const cwds = [];
   const execFileImpl = (command, args, options, callback) => {
     calls.push([command, ...args]);
     cwds.push(options?.cwd);
-    const project = args[args.indexOf("--project") + 1];
+    const project = args.includes("--project") ? args[args.indexOf("--project") + 1] : undefined;
     const sessionId = args[args.indexOf("--session-id") + 1];
-    setImmediate(() =>
-      fail
-        ? callback(new Error("exit 1"), "", "caco: daemon unavailable\nmore")
-        : callback(null, JSON.stringify({ data: { id: typeof id === "function" ? id(sessionId) : id, project, session_id: sessionId }, guidance: { text: guidance } }), ""),
-    );
+    setImmediate(() => {
+      if (fail) return callback(new Error("exit 1"), "", "caco: daemon unavailable\nmore");
+      if (args.includes("--preview")) {
+        return callback(null, JSON.stringify({ ok: true, preview: true, project: preview.project, project_source: preview.source, session_id: sessionId }), "");
+      }
+      if (conflicts[project]) {
+        return callback(new Error("exit 1"), "", `error: visiting project '${project}' conflicts with caller checkout git remotes; matching configured projects: ${conflicts[project].join(", ")}. Pass --project with one of these candidates`);
+      }
+      callback(null, JSON.stringify({ data: { id: typeof id === "function" ? id(sessionId) : id, project, session_id: sessionId }, guidance: { text: guidance } }), "");
+    });
   };
   return { calls, cwds, execFileImpl };
 }
@@ -97,7 +106,8 @@ test("/caco-agent-register registers the session, keeps its identity and sets it
   await module.commands["caco-agent-register"].run("", sessionContext().ctx);
   const other = sessionContext("s2");
   await module.commands["caco-agent-register"].run("", other.ctx);
-  assert.match(other.notices.at(-1), /^No project/);
+  assert.match(other.notices.at(-1), /registration failed: no configured Cacophony project matches the git remotes of \/work\/project/,
+    "a directory whose remotes match no project is never registered under its path name");
   const failing = createCacophonyModule({ env: { HOME: "/nonexistent" }, settings: {}, execFileImpl: fakeCaco({ fail: true }).execFileImpl });
   const failed = sessionContext("s3");
   await failing.commands["caco-agent-register"].run("project=p", failed.ctx);
@@ -107,6 +117,35 @@ test("/caco-agent-register registers the session, keeps its identity and sets it
   const disabled = sessionContext("s4");
   await off.commands["caco-agent-register"].run("project=p", disabled.ctx);
   assert.match(disabled.notices.at(-1), /disabled/);
+});
+
+test("/caco-agent-register infers the project from the checkout, and replaces a refused one with the sole match", async () => {
+  // No project named or configured: caco's preview names it from the checkout's remotes.
+  const inferring = fakeCaco({ preview: { project: "android-utils", source: "cwd git remote" } });
+  const module = createCacophonyModule({ env: { HOME: "/nonexistent" }, settings: {}, execFileImpl: inferring.execFileImpl });
+  const session = sessionContext("pd-infer", {}, "/work/android-utils");
+  await module.commands["caco-agent-register"].run("", session.ctx);
+  assert.deepEqual(inferring.calls[0], ["caco", "agent", "register", "--preview", "--checkout-root", "/work/android-utils", "--session-id", "pd-infer", "--json"]);
+  assert.deepEqual(inferring.calls[1].slice(0, 5), ["caco", "agent", "register", "--project", "android-utils"]);
+  assert.equal(session.notices.at(-1), "Registered as Cacophony visiting agent visiting-abc in project android-utils (inferred from this checkout's git remotes).");
+  assert.equal(session.env.CACO_PROJECT, "android-utils");
+
+  // A named project the checkout cannot be: the only project its remotes match is used.
+  const refusing = fakeCaco({ conflicts: { tools: ["android-utils"] } });
+  const retrying = createCacophonyModule({ env: { HOME: "/nonexistent" }, settings: {}, execFileImpl: refusing.execFileImpl });
+  const named = sessionContext("pd-conflict", {}, "/work/android-utils");
+  await retrying.commands["caco-agent-register"].run("project=tools", named.ctx);
+  assert.deepEqual(refusing.calls.map((call) => call[call.indexOf("--project") + 1]), ["tools", "android-utils"]);
+  assert.equal(named.notices.at(-1), "Registered as Cacophony visiting agent visiting-abc in project android-utils (tools does not match this checkout's git remotes; android-utils is the only configured project they match).");
+
+  // Several candidates stay a refusal naming them: the operator chooses.
+  const ambiguous = fakeCaco({ conflicts: { tools: ["mono", "health"] } });
+  const strict = createCacophonyModule({ env: { HOME: "/nonexistent" }, settings: {}, execFileImpl: ambiguous.execFileImpl });
+  const several = sessionContext("pd-several", {}, "/work/mono");
+  await strict.commands["caco-agent-register"].run("project=tools", several.ctx);
+  assert.equal(ambiguous.calls.length, 1);
+  assert.match(several.notices.at(-1), /registration failed: error: visiting project 'tools' conflicts .*mono, health/);
+  assert.deepEqual(several.env, {});
 });
 
 test("manual registration reads live /name once and does not rename a visitor on retry or reload", async () => {
