@@ -74,11 +74,12 @@ function execJson(execFileImpl, command, args, options = {}) {
 }
 
 /** Register a pi-daemon session as a visiting agent; the identity and guidance. */
-export async function registerVisiting({ config, project, sessionId, cwd, execFileImpl = execFile, now = () => Date.now() }) {
+export async function registerVisiting({ config, project, sessionId, sessionName, cwd, execFileImpl = execFile, now = () => Date.now() }) {
   // The visitor's checkout is the session's directory (bd-8c8f5f): never the pi-daemon worker's,
   // whose directory (the home directory) contains managed agents' checkouts.
   if (!cwd) throw new Error("the session's directory is unknown (pi-daemon passes it to modules from 1.13)");
   const args = ["agent", "register", "--project", project, "--session-id", sessionId, "--checkout-root", cwd];
+  if (typeof sessionName === "string" && sessionName.trim()) args.push("--session-name", sessionName.trim());
   if (config.runtimeAgentId) args.push("--runtime-agent-id", config.runtimeAgentId);
   args.push("--json");
   const response = await execJson(execFileImpl, config.command, args, { cwd });
@@ -122,12 +123,23 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
   const pending = new Map();
 
   /** Register (once at a time per session), keep the identity and set the session's variables. */
-  const register = (sessionId, state, sessionEnv, project, cwd) => {
+  const register = (scope, project) => {
+    const { sessionId, state, env: sessionEnv, cwd } = scope;
     const running = pending.get(sessionId);
     if (running) return running;
     const work = (async () => {
-      const identity = await registerVisiting({ config, project, sessionId, cwd, execFileImpl, now });
-      await state.set("identity", identity);
+      let identity = await state.get("identity");
+      // A receipt belongs to a session, not its mutable name or conversation.
+      if (!identity?.agentId || identity.sessionId !== sessionId) {
+        let sessionName;
+        try {
+          // Generic pi-daemon metadata API (bd-5fbc06), absent on older hosts.
+          // Read live /name only; never use an auto title, env, or session ID.
+          sessionName = await scope.getSessionName?.();
+        } catch { /* Unavailable metadata leaves naming to Cacophony. */ }
+        identity = await registerVisiting({ config, project, sessionId, sessionName, cwd, execFileImpl, now });
+        await state.set("identity", identity);
+      }
       await sessionEnv.set({ CACO_AGENT_ID: identity.agentId, CACO_PROJECT: identity.project });
       return identity;
     })().finally(() => pending.delete(sessionId));
@@ -154,7 +166,8 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
           const project = match?.[1] || config.project;
           if (!project) return ctx.notify("No project: /caco-agent-register project=<name>, or set CACO_PROJECT or agentUtils.cacophony.project.");
           try {
-            const identity = await register(ctx.sessionId, ctx.state, ctx.env, project, ctx.cwd);
+            if (await preset(ctx.env)) return ctx.notify("This session already has a Cacophony identity; use /caco-runtime.");
+            const identity = await register(ctx, project);
             ctx.notify(`Registered as Cacophony visiting agent ${identity.agentId} in project ${identity.project}.`);
           } catch (error) {
             ctx.notify(`Cacophony visiting-agent registration failed: ${error.message}`);
@@ -184,7 +197,9 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
       if (typeof info.env?.set !== "function") return;
       // A session migrated from TUI Pi carries its visiting agent's identity in its variables
       // (pi-daemon's /migrate, bd-737651): it is that agent, as if registered here.
-      if (!(await info.state.get("identity"))?.agentId) {
+      const identity = await info.state.get("identity");
+      const registered = identity?.agentId && identity.sessionId === info.sessionId;
+      if (!registered) {
         const vars = (await info.env.get?.()) ?? {};
         const agentId = String(vars.CACO_AGENT_ID || "").trim();
         const project = String(vars.CACO_PROJECT || "").trim();
@@ -194,8 +209,8 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
         }
       }
       if (!config.autoRegister || !config.project) return;
-      if ((await info.state.get("identity"))?.agentId || (await preset(info.env))) return;
-      await register(info.sessionId, info.state, info.env, config.project, info.cwd).catch(() => undefined);
+      if (registered || (await preset(info.env))) return;
+      await register(info, config.project).catch(() => undefined);
     },
   };
 }

@@ -16,22 +16,24 @@ function fakeCaco({ id = "visiting-abc", guidance = "Visiting agents coordinate 
     setImmediate(() =>
       fail
         ? callback(new Error("exit 1"), "", "caco: daemon unavailable\nmore")
-        : callback(null, JSON.stringify({ data: { id, project, session_id: sessionId }, guidance: { text: guidance } }), ""),
+        : callback(null, JSON.stringify({ data: { id: typeof id === "function" ? id(sessionId) : id, project, session_id: sessionId }, guidance: { text: guidance } }), ""),
     );
   };
   return { calls, cwds, execFileImpl };
 }
 
 /** A module command / observer context: module state and the session's variables. */
-function sessionContext(sessionId = "s1", vars = {}, cwd = "/work/project") {
+function sessionContext(sessionId = "s1", vars = {}, cwd = "/work/project", sessionName) {
   const values = new Map();
   const env = { ...vars };
   const notices = [];
   return {
     notices,
     env,
+    setSessionName(name) { sessionName = name; },
     ctx: {
       sessionId,
+      getSessionName: async () => sessionName,
       ...(cwd === null ? {} : { cwd }),
       notify: (text) => notices.push(text),
       state: { get: async (key) => values.get(key), set: async (key, value) => void values.set(key, value) },
@@ -105,6 +107,100 @@ test("/caco-agent-register registers the session, keeps its identity and sets it
   const disabled = sessionContext("s4");
   await off.commands["caco-agent-register"].run("project=p", disabled.ctx);
   assert.match(disabled.notices.at(-1), /disabled/);
+});
+
+test("manual registration reads live /name once and does not rename a visitor on retry or reload", async () => {
+  const caco = fakeCaco();
+  const options = { env: { HOME: "/nonexistent", PI_SESSION_NAME: "server-name" }, settings: {}, execFileImpl: caco.execFileImpl };
+  const module = createCacophonyModule(options);
+  const session = sessionContext("pd-named", {}, "/work/named", "Old name");
+  session.setSessionName("  Parser / café; $(not-a-shell)  ");
+  await Promise.all([
+    module.commands["caco-agent-register"].run("project=p", session.ctx),
+    module.commands["caco-agent-register"].run("project=p", session.ctx),
+  ]);
+  assert.deepEqual(caco.calls, [["caco", "agent", "register", "--project", "p", "--session-id", "pd-named", "--checkout-root", "/work/named", "--session-name", "Parser / café; $(not-a-shell)", "--json"]]);
+  assert.deepEqual(caco.cwds, ["/work/named"]);
+  const receipt = await session.ctx.state.get("identity");
+  session.setSessionName("Renamed after registration");
+  await module.commands["caco-agent-register"].run("project=p", session.ctx);
+  // Even if environment overrides need restoring, the session's receipt wins.
+  delete session.env.CACO_AGENT_ID;
+  delete session.env.CACO_PROJECT;
+  await createCacophonyModule(options).commands["caco-agent-register"].run("project=p", session.ctx);
+  assert.equal(caco.calls.length, 1);
+  assert.deepEqual(await session.ctx.state.get("identity"), receipt);
+  assert.equal(session.env.CACO_AGENT_ID, receipt.agentId);
+});
+
+test("Durable unnamed and older hosts never borrow a display name from environment or IDs", async () => {
+  for (const getSessionName of [undefined, async () => undefined, async () => "", async () => " \t ", async () => null, async () => 42, async () => { throw new Error("unavailable"); }]) {
+    const caco = fakeCaco();
+    const env = { HOME: "/nonexistent", PI_SESSION_NAME: "server name", PI_SESSION_TITLE: "server title", PI_SESSION_ID: "parent", PI_CACO_RUNTIME_AGENT_ID: "pd-external" };
+    const module = createCacophonyModule({ env, settings: {}, execFileImpl: caco.execFileImpl });
+    const { ctx } = sessionContext("37e41c34-558f-4bb5-b31c-e1bd4d3956c5", { PI_SESSION_NAME: "parent name" });
+    ctx.getSessionName = getSessionName;
+    ctx.title = "Not explicit name metadata";
+    await module.commands["caco-agent-register"].run("project=p", ctx);
+    assert.deepEqual(caco.calls, [["caco", "agent", "register", "--project", "p", "--session-id", ctx.sessionId, "--checkout-root", ctx.cwd, "--runtime-agent-id", "pd-external", "--json"]]);
+  }
+});
+
+test("concurrent Durable sessions use their own names, while forks in one session retain its visitor", async () => {
+  const caco = fakeCaco({ id: (id) => `visiting-${id}` });
+  const env = { HOME: "/nonexistent", CACO_PROJECT: "p", PI_CACO_AUTO_REGISTER: "1", PI_SESSION_NAME: "server name" };
+  const module = createCacophonyModule({ env, settings: {}, execFileImpl: caco.execFileImpl });
+  const names = ["Same name", "Same name", "Child task", undefined];
+  const sessions = names.map((name, i) => sessionContext(`s${i}`, {}, "/same-checkout", name));
+  const resolveName = [];
+  for (const { ctx } of sessions) ctx.getSessionName = () => new Promise(resolve => resolveName.push(resolve));
+  const flights = sessions.map(({ ctx }) => module.observe({ type: "agent_start" }, ctx));
+  // Metadata is asynchronous and completions may interleave across sessions.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(resolveName.length, 4);
+  for (let i = 3; i >= 0; i--) resolveName[i](names[i]);
+  await Promise.all(flights);
+  assert.equal(caco.calls.length, 4);
+  for (let i = 0; i < 4; i++) {
+    const { ctx, env: vars } = sessions[i];
+    const args = caco.calls.find(call => call[call.indexOf("--session-id") + 1] === ctx.sessionId);
+    if (names[i]) assert.equal(args[args.indexOf("--session-name") + 1], names[i]);
+    else assert.equal(args.includes("--session-name"), false);
+    assert.equal(vars.CACO_AGENT_ID, `visiting-s${i}`);
+    assert.equal((await ctx.state.get("identity")).sessionId, ctx.sessionId);
+    // /fork is a child conversation of the same Durable session, not a new identity.
+    await module.observe({ type: "agent_start" }, { ...ctx, conversationId: `fork-${i}` });
+  }
+  assert.equal(caco.calls.length, 4);
+  assert.equal(env.CACO_AGENT_ID, undefined, "worker environment is unchanged");
+
+  // A new logical session (/clone), even with a copied receipt, is not its parent.
+  const clone = sessionContext("clone", {}, "/same-checkout", "Clone's own name");
+  await clone.ctx.state.set("identity", await sessions[0].ctx.state.get("identity"));
+  await module.observe({ type: "agent_start" }, clone.ctx);
+  assert.equal(caco.calls.length, 5);
+  assert.equal(caco.calls[4][caco.calls[4].indexOf("--session-name") + 1], "Clone's own name");
+  assert.equal(clone.env.CACO_AGENT_ID, "visiting-clone");
+  assert.equal(sessions[0].env.CACO_AGENT_ID, "visiting-s0");
+});
+
+test("named Durable sessions preserve managed and disable precedence for manual and automatic registration", async () => {
+  for (const [env, vars] of [
+    [{ DISABLE_PI_CACO: "1" }, {}],
+    [{}, { CACO_AGENT_ID: "managed", CACO_PROJECT: "p" }],
+    [{ CACO_AGENT_ID: "managed", CACO_PROJECT: "p" }, {}],
+    [{}, { CACO_AGENT_ID: "visiting-migrated", CACO_PROJECT: "p" }],
+  ]) {
+    const caco = fakeCaco();
+    const module = createCacophonyModule({ env: { HOME: "/nonexistent", PI_CACO_AUTO_REGISTER: "1", CACO_PROJECT: "p", ...env }, settings: {}, execFileImpl: caco.execFileImpl });
+    const { ctx } = sessionContext("preserved", vars);
+    let nameReads = 0;
+    ctx.getSessionName = async () => { nameReads++; return "Human name"; };
+    await module.commands["caco-agent-register"].run("project=p", ctx);
+    await module.observe({ type: "agent_start" }, ctx);
+    assert.equal(nameReads, 0);
+    assert.deepEqual(caco.calls, []);
+  }
 });
 
 test("the cacophony section names the registered agent and carries the guidance", async () => {

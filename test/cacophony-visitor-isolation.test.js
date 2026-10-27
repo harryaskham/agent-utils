@@ -10,10 +10,11 @@ import { resolveCacophonyDecisionConfig } from "../extensions/lib/cacophony-deci
 import { artifactIdentity } from "../extensions/lib/artifact-state.js";
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
-function host(sessionId, entries = []) {
+function host(sessionId, entries = [], sessionName) {
   const handlers = new Map(), commands = new Map();
   const messages = [], notifications = [], events = [];
   const pi = {
+    getSessionName() { return sessionName; },
     on(name, fn) { const list = handlers.get(name) || []; list.push(fn); handlers.set(name, list); },
     registerCommand(name, def) { commands.set(name, def); },
     registerMessageRenderer() {},
@@ -29,6 +30,7 @@ function host(sessionId, entries = []) {
   return {
     pi, ctx, entries, messages, notifications, events,
     setSessionId(id) { sessionId = id; },
+    setSessionName(name) { sessionName = name; },
     async fire(name, event = {}) { for (const fn of handlers.get(name) || []) await fn({ type: name, ...event }, ctx); },
     register(args = "") { return commands.get("caco-agent-register").handler(args, ctx); },
     identity(env = {}) { return getCacophonyRuntimeIdentity(env, ctx); },
@@ -95,12 +97,13 @@ test("no argument keeps configured project; malformed arguments never invoke CLI
 });
 
 test("fork does not inherit a parent's receipt or PI session environment", async () => {
-  const h = host("fork", [receipt()]), c = cli();
-  const env = { CACO_PROJECT: "p", PI_SESSION_ID: "parent", PI_SESSION_FILE: "/parent/session.jsonl" };
+  const h = host("fork", [receipt({ sessionName: "Parent name" })], "Fork's own name"), c = cli();
+  const env = { CACO_PROJECT: "p", PI_SESSION_ID: "parent", PI_SESSION_FILE: "/parent/session.jsonl", PI_SESSION_NAME: "Parent name" };
   createCacophonyRuntimeExtension({ env, settings: {}, execFileImpl: c.execFileImpl })(h.pi);
   const request = h.register();
   assert.equal(c.calls.length, 1);
   assert.equal(c.calls[0].args[c.calls[0].args.indexOf("--session-id") + 1], "fork");
+  assert.equal(c.calls[0].args[c.calls[0].args.indexOf("--session-name") + 1], "Fork's own name");
   c.finish(0);
   await request;
   assert.equal(h.identity().agentId, "visitor-fork");
@@ -129,12 +132,15 @@ test("missing live session ID fails closed even with inherited PI_SESSION_ID", a
 
 for (const reason of ["new", "resume", "fork"]) {
   test(`session_start(${reason}) invalidates visitor fallback and fences old async completion/finalizer`, async () => {
-    const h = host("old"), c = cli();
+    const h = host("old", [], "Old name"), c = cli();
     createCacophonyRuntimeExtension({ env: { CACO_PROJECT: "p", PI_CACO_AUTO_REGISTER: "1" }, settings: {}, execFileImpl: c.execFileImpl })(h.pi);
     await h.fire("session_start");
     h.setSessionId("new");
+    h.setSessionName("New name");
     await h.fire("session_start", { reason });
     assert.equal(c.calls.length, 2);
+    assert.equal(c.calls[0].args[c.calls[0].args.indexOf("--session-name") + 1], "Old name");
+    assert.equal(c.calls[1].args[c.calls[1].args.indexOf("--session-name") + 1], "New name");
     c.finish(0);
     await settle();
     assert.equal(h.entries.length, 0);
@@ -188,8 +194,8 @@ test("four concurrent logical sessions in one cwd keep runtime identity, consume
   const c = cli();
   const extension = createCacophonyRuntimeExtension({ env, settings: {}, execFileImpl: c.execFileImpl });
   const sessions = Array.from({ length: 4 }, (_, index) => {
-    const h = host(`foreign-${index}`);
-    const values = { CACO_PROJECT: "p", PI_CACO_AUTO_REGISTER: "1", PI_CACO_RUNTIME_AGENT_ID: `pd-${index}`, PI_SESSION_ID: "inherited-parent" };
+    const h = host(`foreign-${index}`, [], index === 3 ? undefined : `Human name ${index}`);
+    const values = { CACO_PROJECT: "p", PI_CACO_AUTO_REGISTER: "1", PI_CACO_RUNTIME_AGENT_ID: `pd-${index}`, PI_SESSION_ID: "inherited-parent", PI_SESSION_NAME: "server-name" };
     const registrations = [], disposals = [];
     const run = fn => storage.run(values, fn);
     run(() => {
@@ -210,6 +216,8 @@ test("four concurrent logical sessions in one cwd keep runtime identity, consume
     const { h, run, registrations, values } = sessions[i];
     const args = c.calls[i].args;
     assert.equal(args[args.indexOf("--runtime-agent-id") + 1], `pd-${i}`);
+    if (i === 3) assert.equal(args.includes("--session-name"), false);
+    else assert.equal(args[args.indexOf("--session-name") + 1], `Human name ${i}`);
     assert.equal(c.calls[i].options.cwd, "/same-checkout");
     run(() => {
       assert.equal(h.identity(env).agentId, `visitor-foreign-${i}`);
@@ -266,7 +274,7 @@ test("MCP invalidation disposes only its scoped child and a slow adapter load ca
 });
 
 test("managed environment wins over visiting receipts, project arg, and runtime provenance", async () => {
-  const h = host("managed", [receipt({ sessionId: "managed" })]), c = cli();
+  const h = host("managed", [receipt({ sessionId: "managed" })], "Managed session name"), c = cli();
   const env = { CACO_PROJECT: "managed-project", CACO_AGENT_ID: "managed-agent", PI_CACO_RUNTIME_AGENT_ID: "external-pd" };
   createCacophonyRuntimeExtension({ env, settings: {}, execFileImpl: c.execFileImpl })(h.pi);
   await h.register("project=other");
@@ -277,7 +285,7 @@ test("managed environment wins over visiting receipts, project arg, and runtime 
 });
 
 test("DISABLE_PI_CACO blocks explicit project and late registration without affecting a foreign session", async () => {
-  const h = host("disabled"), c = cli(), env = { DISABLE_PI_CACO: "1" };
+  const h = host("disabled", [], "Disabled session name"), c = cli(), env = { DISABLE_PI_CACO: "1" };
   createCacophonyRuntimeExtension({ env, settings: {}, execFileImpl: c.execFileImpl })(h.pi);
   await h.register("project=p");
   assert.equal(c.calls.length, 0);

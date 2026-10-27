@@ -31,7 +31,7 @@ Consequently, the same Agent Utils package can run concurrently for sessions A a
 
 Pi conversation identity and an external Pi-Daemon logical session ID are **not interchangeable**. In the classic Pi-Daemon adapter, the host's `request.sessionId` is separate from the Pi `SessionManager` conversation ID and is not published through classic `ExtensionContext`. The Durable module API used by Pi-Daemon 1.x has a different context with a `sessionId`; this classic Pi extension is not a Durable module.
 
-A host/operator that knows the actual external ID can explicitly supply `PI_CACO_RUNTIME_AGENT_ID=<external-id>` in that logical session's environment. Registration then passes `--runtime-agent-id <external-id>` as provenance; Cacophony stores it as an annotation/default short name, not as a managed identity. The extension never invents this ID from the conversation UUID, cwd, profile name, inherited Pi metadata, or Cacophony agent variables. Without an explicit external ID the flag is omitted. Automatic discovery of the host's external PD ID requires a host-provided identity contract; it is not claimed here.
+A host/operator that knows the actual external ID can explicitly supply `PI_CACO_RUNTIME_AGENT_ID=<external-id>` in that logical session's environment. Registration then passes `--runtime-agent-id <external-id>` as provenance; Cacophony stores it as an annotation, not as a managed identity or a display-name fallback. The extension never invents this ID from the conversation UUID, cwd, profile name, inherited Pi metadata, or Cacophony agent variables. Without an explicit external ID the flag is omitted. Automatic discovery of the host's external PD ID requires a host-provided identity contract; it is not claimed here.
 
 ## Visiting-agent auto-registration
 
@@ -61,10 +61,12 @@ Registration supports Herdr and other hosts supported by the Caco CLI; the plugi
 After session startup, registration runs asynchronously:
 
 ```text
-caco agent register --project <project> --session-id <current-pi-session-id> [--runtime-agent-id <explicit-external-id>] --json
+caco agent register --project <project> --session-id <current-pi-session-id> [--session-name <human-name>] [--runtime-agent-id <explicit-external-id>] --json
 ```
 
-Registration requires `ctx.sessionManager.getSessionId()` even if the parent environment names another session. It fails closed when the live ID is unavailable. Use a Caco build containing the `--session-id` and `--runtime-agent-id` registration flags (Cacophony PR #4505); there is no fallback to cwd-based registration on older builds.
+Registration requires `ctx.sessionManager.getSessionId()` even if the parent environment names another session. It fails closed when the live ID is unavailable. Use a Caco build containing the `--session-id` and `--runtime-agent-id` registration flags (Cacophony PR #4505), plus `--session-name` for named sessions (Cacophony bd-ab5288); there is no fallback to cwd-based registration on older builds.
+
+At registration time, classic Pi reads `pi.getSessionName()`, the live session metadata set by `/name`, `--name`, or `pi.setSessionName()`. A nonempty string is trimmed and passed as one `--session-name` argument. Missing, empty, or unavailable metadata omits the option. The integration never derives a display name from the session UUID, external runtime ID, a parent/server environment variable, a receipt, or a first-prompt preview. Cacophony owns sanitization and unique suffix allocation; its explicit `--short-name` option takes precedence over `--session-name`. Names are not identity: changing `/name` after registration does not rename the existing visitor or invalidate its receipt.
 
 Only a response containing a non-empty durable agent ID for the requested project is accepted; session/runtime provenance, when returned, must match the request. Success writes a version-2 custom session receipt including the Pi session ID and explicit external provenance, publishes the scoped runtime identity, and adds one visible/context message explaining that the session is registered as a visiting agent. Failure leaves Pi functional and emits one bounded warning.
 
@@ -81,6 +83,14 @@ Use `/caco-agent-register` to register the current session explicitly, including
 Manual and startup registration share the same in-flight request, durable receipt, identity publication, and downstream MCP notification. Repeated commands reuse the existing identity. Receipts restore on reload/restart even with auto-registration off.
 
 `/caco-runtime` distinguishes **unregistered; auto-registration off** from **disabled by DISABLE_PI_CACO** and points to the manual command. The latter is a global kill switch and still blocks manual registration; use `PI_CACO_AUTO_REGISTER=0`, not `DISABLE_PI_CACO=1`, when only boot registration should be disabled.
+
+## Durable / pi-daemon registration
+
+`extensions/durable/cacophony.mjs` provides the equivalent `/caco-agent-register` and `/caco-runtime` commands for Durable sessions. With auto-registration enabled, it registers on the session's first agent run. It passes the session's `cwd` as both the CLI working directory and `--checkout-root`, never the worker/server directory. It requires per-session environment support (pi-daemon 1.12+) and session directory metadata (1.13+).
+
+For names it feature-detects and awaits `getSessionName(): Promise<string | undefined>` on the command context or observer info (pi-daemon bd-5fbc06). This generic host API returns the current session's **explicit** name, not an automatically generated title. Hosts without that API, including pi-daemon 1.13.0, continue to register without `--session-name`; no environment, catalog-file, or ID fallback is attempted. Named sessions also require the Cacophony bd-ab5288 CLI option described above.
+
+Commands and observers share one registration flight per logical session, including asynchronous metadata reads. A same-session receipt or an existing environment identity is reused without asking the CLI to rename it. Child conversations (`/fork` within a Durable session) share that session's visitor; a different logical session cannot restore its parent's receipt. The module stores identity in session-local state and sets only that session's `CACO_AGENT_ID` / `CACO_PROJECT` overrides. Disable policy and managed identities take precedence in both manual and automatic registration.
 
 ## Transient Cacophony MCP
 

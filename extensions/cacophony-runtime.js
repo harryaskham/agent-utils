@@ -166,6 +166,12 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
       const current = () => active === owner && owner.isCurrent() && registration === pending &&
         cacophonySessionId(ctx) === sessionId && !isPiCacoDisabled(env);
       const args = ["agent", "register", "--project", project, "--session-id", sessionId];
+      // Pi's /name metadata, read at registration time from this live runtime.
+      // An absent name is not the session UUID, external ID, or inherited env.
+      try {
+        const name = pi.getSessionName?.();
+        if (typeof name === "string" && name.trim()) args.push("--session-name", name.trim());
+      } catch { /* Older/unavailable metadata leaves naming to Cacophony. */ }
       if (config.runtimeAgentId) args.push("--runtime-agent-id", config.runtimeAgentId);
       args.push("--json");
       pending.promise = execJson(execFileImpl, config.command, args, ctx.cwd)

@@ -13,7 +13,7 @@ import {
 } from "../extensions/lib/cacophony-runtime.js";
 import { createCacophonyChoiceBridge } from "../extensions/lib/cacophony-choice.js";
 
-function harness({ entries = [], sessionId = "pi-session" } = {}) {
+function harness({ entries = [], sessionId = "pi-session", sessionName } = {}) {
   const commands = new Map();
   const handlers = new Map();
   const messages = [];
@@ -22,6 +22,7 @@ function harness({ entries = [], sessionId = "pi-session" } = {}) {
   const events = [];
   const bus = new Map();
   const pi = {
+    getSessionName() { return sessionName; },
     registerCommand(name, def) { commands.set(name, def); },
     registerMessageRenderer() {},
     on(name, fn) { const list = handlers.get(name) || []; list.push(fn); handlers.set(name, list); },
@@ -38,7 +39,9 @@ function harness({ entries = [], sessionId = "pi-session" } = {}) {
     ui: { notify(message, level) { notifications.push({ message, level }); } },
   };
   const emit = async (name) => { for (const fn of handlers.get(name) || []) await fn({}, ctx); };
-  return { pi, ctx, commands, handlers, messages, appended, notifications, events, emit };
+  return { pi, ctx, commands, handlers, messages, appended, notifications, events, emit,
+    setSessionName(name) { sessionName = name; },
+  };
 }
 
 const settle = async () => { await Promise.resolve(); await new Promise((resolve) => setImmediate(resolve)); };
@@ -65,12 +68,16 @@ test("/migrate into pi-daemon carries the registered visitor's identity (bd-7376
 test("manual registration works with auto-registration off and deduplicates concurrent requests and reload", async () => {
   clearCacophonyRuntimeIdentity();
   const env = { CACO_PROJECT: "p", TMUX: "yes", PI_CACO_AUTO_REGISTER: "0" };
-  const h = harness();
+  const h = harness({ sessionName: "Before /name" });
   let calls = 0;
   let complete;
   const options = {
     env, settings: {},
-    execFileImpl(_command, _args, _options, callback) { calls++; complete = callback; },
+    execFileImpl(_command, args, _options, callback) {
+      calls++;
+      assert.equal(args[args.indexOf("--session-name") + 1], "Live /name");
+      complete = callback;
+    },
   };
   createCacophonyRuntimeExtension(options)(h.pi);
   await h.emit("session_start");
@@ -78,17 +85,19 @@ test("manual registration works with auto-registration off and deduplicates conc
   await h.commands.get("caco-runtime").handler("", h.ctx);
   assert.match(h.notifications.at(-1).message, /auto-registration off; use \/caco-agent-register/);
   const register = () => h.commands.get("caco-agent-register").handler("", h.ctx);
+  h.setSessionName("Live /name");
   const first = register();
   const second = register();
   assert.equal(calls, 1);
   complete(null, JSON.stringify({ id: "visitor", project: "p" }), "");
   await Promise.all([first, second]);
+  h.setSessionName("Renamed after registration");
   await register();
   assert.equal(calls, 1);
   assert.equal(h.appended.length, 1);
   assert.equal(h.events.length, 1);
   await h.emit("session_shutdown");
-  const restored = harness({ entries: h.appended });
+  const restored = harness({ entries: h.appended, sessionName: "Renamed on reload" });
   createCacophonyRuntimeExtension(options)(restored.pi);
   await restored.emit("session_start");
   assert.equal(getCacophonyRuntimeIdentity(env, restored.ctx).agentId, "visitor");
@@ -145,14 +154,14 @@ test("visiting registration supports non-tmux hosts and uses the session cwd", a
 test("successful registration publishes one durable runtime identity and context message", async () => {
   clearCacophonyRuntimeIdentity();
   let calls = 0;
-  const h = harness();
+  const h = harness({ sessionName: "  Parser work / café; $(not-a-shell)  " });
   createCacophonyRuntimeExtension({
-    env: { CACO_PROJECT: "agent-utils", TMUX: "/tmp/tmux,1,0", CACO_BIN: "caco-test" },
+    env: { CACO_PROJECT: "agent-utils", TMUX: "/tmp/tmux,1,0", CACO_BIN: "caco-test", PI_SESSION_NAME: "server-name" },
     settings: { agentUtils: { cacophony: { autoRegister: true } } },
     execFileImpl(command, args, _options, callback) {
       calls += 1;
       assert.equal(command, "caco-test");
-      assert.deepEqual(args, ["agent", "register", "--project", "agent-utils", "--session-id", "pi-session", "--json"]);
+      assert.deepEqual(args, ["agent", "register", "--project", "agent-utils", "--session-id", "pi-session", "--session-name", "Parser work / café; $(not-a-shell)", "--json"]);
       callback(null, JSON.stringify({ ok: true, data: { id: "visiting-1", project: "agent-utils" } }), "");
     },
   })(h.pi);
@@ -167,6 +176,28 @@ test("successful registration publishes one durable runtime identity and context
   assert.deepEqual(h.messages[0].options, { deliverAs: "nextTurn" });
   await h.emit("session_shutdown");
   assert.equal(getCacophonyRuntimeIdentity({}, h.ctx).agentId, "", "visiting identity is session-scoped");
+});
+
+test("unnamed or unavailable live metadata never borrows a name from IDs or environment", async () => {
+  for (const getSessionName of [undefined, () => undefined, () => "", () => " \t ", () => null, () => 42, () => { throw new Error("unavailable"); }]) {
+    clearCacophonyRuntimeIdentity();
+    const h = harness({ sessionId: "37e41c34-558f-4bb5-b31c-e1bd4d3956c5" });
+    h.pi.getSessionName = getSessionName;
+    let calls = 0;
+    createCacophonyRuntimeExtension({
+      env: { CACO_PROJECT: "p", PI_SESSION_NAME: "parent name", PI_SESSION_TITLE: "server title", PI_SESSION_ID: "parent", PI_CACO_RUNTIME_AGENT_ID: "pd-external" },
+      settings: {},
+      execFileImpl(_command, args, options, callback) {
+        calls++;
+        assert.deepEqual(args, ["agent", "register", "--project", "p", "--session-id", h.ctx.sessionManager.getSessionId(), "--runtime-agent-id", "pd-external", "--json"]);
+        assert.equal(options.cwd, h.ctx.cwd);
+        callback(null, JSON.stringify({ id: "visiting-unnamed", project: "p" }), "");
+      },
+    })(h.pi);
+    await h.commands.get("caco-agent-register").handler("", h.ctx);
+    assert.equal(calls, 1);
+    await h.emit("session_shutdown");
+  }
 });
 
 test("session receipt restores registration without rerunning CLI or duplicating its message", async () => {
