@@ -184,6 +184,32 @@ test("the client part publishes each session's git state, and opens a session fo
   assert.equal(watches[1].session, "b");
 });
 
+test("pi-client's sidebar rows can show a followed session's branch and repo (pi-daemon bd-8e7f67)", async () => {
+  const handlers = new Map();
+  const segments = new Map();
+  const watches = [];
+  let renders = 0;
+  const ctx = {
+    sessionManager: { getSessionId: () => "a" },
+    chord: { async watchDocument(_address, onValue) { watches.push(onValue); return () => {}; } },
+    ui: { notify() {}, requestRender: () => { renders += 1; } },
+  };
+  gitClient({ on: (type, handler) => handlers.set(type, handler), events: { on() {}, emit() {} }, registerSidebarSegment: (name, segment) => segments.set(name, segment) });
+  assert.deepEqual([...segments.keys()], ["branch", "repo"]);
+  await handlers.get("session_start")({}, ctx);
+  await Promise.resolve();
+  const branch = segments.get("branch");
+  const repoName = segments.get("repo");
+  assert.equal(branch({ id: "a" }), undefined, "nothing until its state arrives");
+  watches[0]({ values: { workspace: { repo: true, branch: "main", project: "pi-daemon" } } });
+  assert.deepEqual([branch({ id: "a" }), repoName({ id: "a" }), branch({ id: "other" })], ["⎇ main", "pi-daemon", undefined]);
+  assert.ok(renders > 0, "a change redraws");
+  watches[0]({ values: { workspace: { repo: true, oid: "0123456789abcdef", project: "pi-daemon" } } });
+  assert.equal(branch({ id: "a" }), "⎇ detached 01234567");
+  watches[0]({ values: { workspace: { repo: false } } });
+  assert.deepEqual([branch({ id: "a" }), repoName({ id: "a" })], [undefined, undefined], "not a repository");
+});
+
 test("a repository's state lists its worktrees, main first; its panel shows branch, upstream, changes and worktree", async (t) => {
   const { dir, root } = await repo(t);
   const tree = join(dir, "feature");

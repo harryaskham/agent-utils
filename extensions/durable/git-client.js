@@ -6,7 +6,8 @@
 // for while drawing its pane. After /git wt fork, it opens a session in the new worktree,
 // carrying the conversation (pi-client's ctx.sessions). The focused session's repository shows in
 // pi-client's sidebar (setWidget's placement "sidebar", where ctx.ui.hasSidebar); /repo switches
-// to another session in the same repository or one of its worktrees, on the same host. In TUI Pi
+// to another session in the same repository or one of its worktrees, on the same host. Sidebar rows
+// (pi-client's client.sidebar.rows) can show each followed session's "branch" and "repo". In TUI Pi
 // (no ctx.chord) it does nothing.
 import { GIT_EVENT, GIT_REQUEST, GIT_STATE_DOC } from "../lib/git-indicator.js";
 import { workspacePanel } from "../lib/durable-git.js";
@@ -49,7 +50,22 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
     const entry = sessions.get(sessionId);
     if (entry?.workspace) pi.events?.emit?.(GIT_EVENT, { sessionId, workspace: entry.workspace });
     showPanel();
+    // The sidebar's branch and repo segments may have changed.
+    live?.ui?.requestRender?.();
   };
+
+  // pi-client's sidebar rows (client.sidebar.rows) can name "branch" and "repo" (pi-daemon
+  // bd-8e7f67): each session followed here (shown in a pane), else nothing.
+  const repository = (session) => {
+    const workspace = sessions.get(String(session?.id ?? ""))?.workspace;
+    return workspace && workspace.repo !== false ? workspace : undefined;
+  };
+  pi.registerSidebarSegment?.("branch", (session) => {
+    const workspace = repository(session);
+    if (!workspace) return undefined;
+    return `⎇ ${workspace.branch || (workspace.oid ? `detached ${String(workspace.oid).slice(0, 8)}` : "no commits")}`;
+  });
+  pi.registerSidebarSegment?.("repo", (session) => repository(session)?.project || undefined);
 
   // /repo: another session in this repository (its worktrees too), on the same host.
   pi.registerCommand?.("repo", {

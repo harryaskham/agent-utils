@@ -16,6 +16,7 @@ A pi-daemon plugin in two parts. pi-daemon itself knows nothing of git.
   - It follows that document for the focused session, and for each pane the editor chips draw.
   - It publishes the state on Pi's event bus (`agent-utils:git.v1`). The branch and diff chips use it in place of running git themselves, so they work for remote sessions too.
   - **The repo sidebar:** the focused session's repository shows in pi-client's sidebar, under the sessions: branch and project, upstream with ahead/behind, changes, and whether it is a worktree. It uses Pi's `setWidget` with pi-client's `placement: "sidebar"`, and only where `ctx.ui.hasSidebar`.
+  - **Sidebar segments:** pi-client's `client.sidebar.rows` can name `branch` (`⎇ main`, or `detached` and the commit) and `repo` (the project). They show for the sessions the client part follows, those open in a pane, and are blank for the rest.
   - **`/repo`:** switch to another session in the same repository or one of its worktrees, on the same host, newest first. The state lists the repository's worktrees for it.
   - In TUI Pi it does nothing, and the chips run git locally as before.
 
