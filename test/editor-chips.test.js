@@ -110,6 +110,37 @@ test("full-width rails render top-right and three-way bottom placement with sema
   assert.match(rails.bottom, /\x1b\[38;2;52;58;72m\x1b\[48;2;129;161;193m1\.1M/, "context total uses the same dark Nord text");
 });
 
+test("display aliases rewrite chip text only: any field, one field, hiding, and the real values kept", () => {
+  const aliased = resolveEditorChipsConfig({ agentUtils: { editorChips: { enabled: true, aliases: {
+    "github-copilot": "ghcp",
+    thinking: { low: "lo" },
+    model: { "gpt-5.6-sol": "sol", "github-copilot": "not-the-provider" },
+    cwd: { "~/x": "home-x" },
+    constructor: 7,
+    branch: ["ignored"],
+  } } } }, {});
+  const input = values({ directory: "~/x", branch: "github-copilot" });
+  const rails = buildEditorChipRails({ width: 200, config: aliased, values: input, theme });
+  const top = stripAnsi(rails.top);
+  const bottom = stripAnsi(rails.bottom);
+  assert.match(top, / ghcp .* sol /, "the provider and the model are rewritten");
+  assert.doesNotMatch(top, /github-copilot|gpt-5\.6-sol/);
+  assert.match(top, / lo /);
+  assert.match(rails.top, new RegExp(`\\x1b\\[48;2;${COLORS.borderAccent.join(";")}m lo `), "an aliased effort keeps its colour");
+  assert.match(bottom, /home-x/);
+  assert.match(bottom, / ghcp /, "a string alias applies in any field (here the branch)");
+  assert.equal(input.provider, "github-copilot", "view only: the values are not changed");
+  assert.equal(input.effort, "low");
+
+  // "" hides the provider half and the effort chip; no aliases: the same output as before.
+  const hiding = resolveEditorChipsConfig({ agentUtils: { editorChips: { enabled: true, aliases: { provider: { "github-copilot": "" }, effort: { low: "" } } } } }, {});
+  const hidden = stripAnsi(buildEditorChipRails({ width: 200, config: hiding, values: values(), theme }).top);
+  assert.doesNotMatch(hidden, /github-copilot| low /);
+  assert.match(hidden, /gpt-5\.6-sol/);
+  assert.equal(buildEditorChipRails({ width: 200, config, values: values(), theme }).top,
+    buildEditorChipRails({ width: 200, config: resolveEditorChipsConfig({ agentUtils: { editorChips: { enabled: true, aliases: {} } } }, {}), values: values(), theme }).top);
+});
+
 test("topCenter placement and editorPadding preserve rail cells at both edges", () => {
   const placed = {
     ...config,

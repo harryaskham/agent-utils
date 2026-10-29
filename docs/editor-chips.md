@@ -18,7 +18,8 @@ Editor chips are immutable startup policy. Configure them in `settings.json` and
       "bottomLeft": ["meter"],
       "bottomCenter": ["branch", "diff"],
       "hideFooter": true,
-      "hiddenStatuses": ["jev"]
+      "hiddenStatuses": ["jev"],
+      "aliases": { "github-copilot": "ghcp" }
     }
   }
 }
@@ -42,6 +43,18 @@ Available fields are:
 `hideFooter` defaults to `true`. The extension replaces the ordinary footer because the configured values now live on the editor rails. Extension statuses not represented by the `mcp` chip remain visible on a residual footer line.
 
 `hiddenStatuses` lists extension status keys to keep off that residual line (for example the third-party `jev` package's `jev: ready`). A hidden status that reports a failure (`unconfigured`, `error`, `failed`, `unavailable`, `invalid`, `blocked`, `denied`) is shown once as a warning notification instead.
+
+`aliases` rewrites chip text for display only: `"github-copilot": "ghcp"` turns the model chip `github-copilot  claude-opus-5.5` into `ghcp  claude-opus-5.5`. Matching is on the whole text, case-sensitive. A string value applies wherever that text appears as the provider, model, effort, directory or branch; an object keyed by one of those fields applies only there, and wins over a string alias:
+
+```json
+"aliases": {
+  "github-copilot": "ghcp",
+  "model": { "claude-opus-5.5": "opus 5.5" },
+  "directory": { "~/cosmos/projects/agent-utils": "agent-utils" }
+}
+```
+
+An empty string hides the provider half of the model chip, or the effort chip. Colours, layout and everything else keep the real values: an aliased effort keeps its colour, and the session's provider and model are unchanged. pi-client draws the same chips (it runs this extension for each pane), so the aliases apply there too.
 
 ## Theme behavior
 

@@ -17,6 +17,10 @@ const BORDER_FIELDS = Object.freeze([["working", "topLeft", "start"], ["scrollUp
 const BORDER_RE = /^[─━═]/;
 const SCROLL_RE = /([↑↓])\s*(\d+)\s*more/;
 const FIELD_ALIASES = Object.freeze({ cwd: "directory", thinking: "effort", stt: "speech", ptt: "speech", mic: "speech", recording: "speech", volume: "meter", level: "meter", db: "meter" });
+// Chip text that display aliases may rewrite (view only: colours, compaction and logic keep the
+// real values). "provider" and "model" are the model chip's two halves.
+const ALIAS_FIELDS = Object.freeze(["provider", "model", "effort", "directory", "branch"]);
+const MAX_ALIASES = 256;
 const METER_RAMP = "▁▂▃▄▅▆▇█";
 const POWERLINE = Object.freeze({ left: "", right: "", chevron: "", vertical: "▌" });
 
@@ -69,7 +73,52 @@ function resolveConfiguredChips(settings, env) {
     hiddenStatuses: Array.isArray(raw.hiddenStatuses)
       ? [...new Set(raw.hiddenStatuses.map((key) => String(key || "").trim()).filter(Boolean))].slice(0, 64)
       : [],
+    aliases: resolveChipAliases(raw.aliases),
   };
+}
+
+/**
+ * Display aliases: exact chip text → what the chip shows. `{ "github-copilot": "ghcp" }`
+ * rewrites that text in any chip (provider, model, effort, directory, branch);
+ * `{ provider: { "github-copilot": "ghcp" } }` only in that field (field aliases such as
+ * `cwd` and `thinking` work). A field's own alias wins; "" hides the provider half or the
+ * effort chip.
+ */
+export function resolveChipAliases(raw) {
+  const resolved = { any: new Map(), fields: new Map(ALIAS_FIELDS.map((field) => [field, new Map()])) };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return resolved;
+  let count = 0;
+  const add = (map, from, to) => {
+    if (typeof to !== "string" || count >= MAX_ALIASES) return;
+    const key = String(from);
+    if (!key || /[\x00-\x1f\x7f]/.test(key + to)) return;
+    map.set(key, to);
+    count += 1;
+  };
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === "string") { add(resolved.any, key, value); continue; }
+    const name = String(key).trim().toLowerCase();
+    const field = resolved.fields.get(FIELD_ALIASES[name] || name);
+    if (!field || !value || typeof value !== "object" || Array.isArray(value)) continue;
+    for (const [from, to] of Object.entries(value)) add(field, from, to);
+  }
+  return resolved;
+}
+
+/** The values with display aliases applied; effort's alias is its label only (its colour stays). */
+export function applyChipAliases(values, aliases) {
+  if (!aliases || (aliases.any.size === 0 && [...aliases.fields.values()].every((map) => map.size === 0))) return values;
+  const out = { ...values };
+  for (const field of ALIAS_FIELDS) {
+    const text = values?.[field];
+    if (typeof text !== "string") continue;
+    const own = aliases.fields.get(field);
+    const shown = own?.has(text) ? own.get(text) : aliases.any.has(text) ? aliases.any.get(text) : undefined;
+    if (shown === undefined) continue;
+    if (field === "effort") out.effortLabel = shown;
+    else out[field] = shown;
+  }
+  return out;
 }
 
 export function editorChipFieldSet(config) {
@@ -242,8 +291,11 @@ function palette(theme, effort, contextPct) {
 function chipFor(field, values, theme) {
   const p = palette(theme, values.effort, values.contextPct);
   switch (field) {
-    case "model": return renderParts([part(values.provider || "model", p.nord3), part(values.model || "n/a", p.white, p.dark)]);
-    case "effort": return renderParts([part(values.effort || "off", p.effort)]);
+    case "model": return renderParts([
+      ...(values.provider === "" ? [] : [part(values.provider || "model", p.nord3)]),
+      part(values.model || "n/a", p.white, p.dark),
+    ]);
+    case "effort": return values.effortLabel === "" ? "" : renderParts([part(values.effortLabel ?? (values.effort || "off"), p.effort)]);
     case "directory": return renderParts([part("", p.blue), part(values.directory || ".", p.nord3)], { divider: "rounded" });
     case "branch": return values.inGitRepo ? renderParts([part("", p.blue), ...(values.branchCollapsed ? [] : [part(values.branch, p.nord3)])], { divider: "rounded" }) : "";
     case "diff": return values.inGitRepo ? renderParts([part(`+${values.additions || 0}`, p.green), part(`-${values.deletions || 0}`, p.red)], { divider: "vertical" }) : "";
@@ -400,7 +452,7 @@ export function buildEditorChipRails({ width, config, values, theme }) {
   const padding = Math.max(0, Math.trunc(Number(config.editorPaddingX) || 0));
   const innerWidth = Math.max(1, safeWidth - padding * 2);
   const separator = rail(theme, values.effort, 1);
-  const fittedValues = fitValues(innerWidth, config, values, theme, separator);
+  const fittedValues = fitValues(innerWidth, config, applyChipAliases(values, config.aliases), theme, separator);
   const top = composeRailRow({
     width: safeWidth,
     padding,
