@@ -2054,6 +2054,42 @@ test("local /stt's speech chip names its session, so pi-client's splits draw it 
   } finally { await h.handlers.get("session_shutdown")?.({}, h.ctx); __setLocalVadHooksForTest({}); }
 });
 
+test("local /ptt stays in the split it started in (ctx.pinned()); /ptt follow follows focus (bd-8e5ed3)", async () => {
+  const captures = [];
+  __setLocalVadHooksForTest({
+    capture: () => { const p = new EventEmitter(); p.stdout = new EventEmitter(); p.stderr = new EventEmitter(); p.kill = () => { p.killed = true; }; captures.push(p); return p; },
+    transcribe: async () => "dictated words",
+  });
+  const h = makeHarness();
+  try {
+    realtimeAgentExtension(h.pi); h.handlers.get("session_start")?.({}, h.ctx);
+    // pi-client's ctx.pinned(): the pane /ptt began in, with its own editor and session.
+    let pinnedText = "";
+    const pinnedSent = [];
+    const pinned = {
+      ...h.ctx,
+      ui: { ...h.ctx.ui, getEditorText: () => pinnedText, setEditorText: (text) => { pinnedText = text; } },
+      sessionManager: { ...h.ctx.sessionManager, getSessionId: () => "pane-a" },
+      sendUserMessage: (text, options) => pinnedSent.push({ text, options }),
+    };
+    h.ctx.pinned = () => pinned;
+    const toggle = () => h.shortcuts.get("ctrl+space").handler(h.ctx);
+
+    await h.commands.get("ptt").handler("", h.ctx);
+    captures.at(-1).stdout.emit("data", Buffer.alloc(24000, 1));
+    await toggle();
+    assert.deepEqual(pinnedSent.map((sent) => sent.text), ["dictated words"], "sent into the pane /ptt began in");
+    assert.equal(h.sentUserMessages.length, 0, "not into the focused pane");
+
+    await h.commands.get("ptt").handler("follow", h.ctx);
+    captures.at(-1).stdout.emit("data", Buffer.alloc(24000, 1));
+    await toggle();
+    assert.deepEqual(h.sentUserMessages.map((message) => message.content), ["dictated words"], "follow: wherever focus is");
+    assert.equal(pinnedSent.length, 1);
+    await h.commands.get("ptt").handler("stop", h.ctx);
+  } finally { await h.handlers.get("session_shutdown")?.({}, h.ctx); __setLocalVadHooksForTest({}); }
+});
+
 test("Ctrl-Space respects disabled shortcuts, active voice modes and blocking prompts", async () => {
   let captures = 0;
   __setLocalVadHooksForTest({ capture: () => { captures++; const p = new EventEmitter(); p.stdout = new EventEmitter(); p.stderr = new EventEmitter(); p.kill = () => {}; return p; }, transcribe: async () => "fixture" });

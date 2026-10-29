@@ -2911,7 +2911,9 @@ export default function realtimeAgentExtension(pi) {
     if (speechSessionClosed) return;
     const state = localSpeechIndicator() || realtimeSpeechIndicator() || { phase: "disabled" };
     // The session whose editor takes the speech: its pane alone shows the chip (pi-client splits).
-    const owner = localVad.active || localPttFinishing || pttArmed ? localVad.ownerSessionId : session.mic ? speechSessionIdOf(session.lastCtx) : undefined;
+    const owner = localVad.active || localPttFinishing || pttArmed
+      ? (localVad.follow ? speechSessionIdOf(localVad.liveCtx) : localVad.ownerSessionId)
+      : session.mic ? speechSessionIdOf(session.lastCtx) : undefined;
     speechIndicator.publish(owner ? { ...state, sessionId: owner } : state);
   }
   function speechSessionIdOf(ctx) {
@@ -3342,7 +3344,7 @@ export default function realtimeAgentExtension(pi) {
     }
   }
 
-  async function startLocalVad(ctx, { hold = false, quickfile = false, freeformSessionId = null, shortcut = false } = {}) {
+  async function startLocalVad(ctx, { hold = false, quickfile = false, freeformSessionId = null, shortcut = false, follow = false } = {}) {
     // Invalidate pending starts before awaiting teardown. Cancel/shutdown during
     // that await must not allow a late microphone to appear afterward.
     stopLocalVad({ flush: false, cancel: true });
@@ -3355,12 +3357,15 @@ export default function realtimeAgentExtension(pi) {
     const model = resolveSttSettings(process.env, persistedStt).model;
     const timeoutMs = resolveBatchSttTimeoutMs(process.env, persistedStt);
     const freeformDelivery = { submitted: false };
-    Object.assign(localVad, { ownerSessionId: speechSessionIdOf(ctx), vadState: "idle", surface: hold ? "PTT" : quickfile ? "NOTE" : "STT", cfg, model, timeoutMs, hold, quickfile, freeformSessionId, freeformDelivery, freeformCommitting: false, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now(), meter: new AudioLevelMeter({ width: 12 }), inputLevel: 0, rawInputRms: 0, lastMeterRenderAt: 0 });
+    // The split /stt started in keeps its dictation (pi-client's ctx.pinned(), bd-8e5ed3); with follow,
+    // the mic follows focus. TUI Pi has one session: its ctx is the same either way.
+    const target = !follow && typeof ctx?.pinned === "function" ? ctx.pinned() : ctx;
+    Object.assign(localVad, { ownerSessionId: follow ? undefined : speechSessionIdOf(target), follow, liveCtx: ctx, vadState: "idle", surface: hold ? "PTT" : quickfile ? "NOTE" : "STT", cfg, model, timeoutMs, hold, quickfile, freeformSessionId, freeformDelivery, freeformCommitting: false, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now(), meter: new AudioLevelMeter({ width: 12 }), inputLevel: 0, rawInputRms: 0, lastMeterRenderAt: 0 });
 
     // bd-0c008d: stream partial transcripts into the input editor (live voice
     // editing) instead of only a status widget; commit sends the editor's text
     // so operator edits are honored.
-    const editorMirror = makeEditorTranscriptMirror(ctx.ui);
+    const editorMirror = makeEditorTranscriptMirror(target.ui);
 
     const controller = new LocalVadController({
       config: cfg,
@@ -3430,7 +3435,11 @@ export default function realtimeAgentExtension(pi) {
             .catch((e) => { localVad.lastError = `quickfile failed: ${e?.message || String(e)}`; try { ctx.ui.notify(localVad.lastError, "warning"); } catch {} });
           return;
         }
-        try { pi.sendUserMessage(labelUntrustedTranscript(finalText), { deliverAs: "followUp", streamingBehavior: "followUp" }); }
+        const sendOptions = { deliverAs: "followUp", streamingBehavior: "followUp" };
+        try {
+          if (target !== ctx && typeof target.sendUserMessage === "function") target.sendUserMessage(labelUntrustedTranscript(finalText), sendOptions);
+          else pi.sendUserMessage(labelUntrustedTranscript(finalText), sendOptions);
+        }
         catch (e) { localVad.lastError = `sendUserMessage failed: ${e.message}`; ctx.ui.notify(localVad.lastError, "warning"); }
         flashSpeechIndicator("sent", localVad.surface || "STT", "sent", 900);
       },
@@ -4256,13 +4265,18 @@ export default function realtimeAgentExtension(pi) {
       ctx.ui.notify(had ? "local speech capture canceled" : "local speech capture was not running", "info");
       return;
     }
+    // follow: the mic follows focus between pi-client's splits instead of staying where it began.
+    if (value === "follow") {
+      pttArmed = defaultHold;
+      return startLocalVad(ctx, { hold: defaultHold, follow: true });
+    }
     const holdAliases = ["ptt", "hold", "local-vad-ptt", "local-vad-hold", "ptt-vad"];
     const vadAliases = ["vad", "local-vad", "localvad", "local_vad"];
     const genericStart = !value || ["start", "on"].includes(value);
     const localVadStart = genericStart || holdAliases.includes(value) || (!defaultHold && vadAliases.includes(value));
     const hold = defaultHold || holdAliases.includes(value);
     if (!localVadStart) {
-      ctx.ui.notify(`Unsupported ${commandName} mode. Use ${commandName} [vad|ptt|stop|cancel|status]. Full Realtime is available only through /rt.`, "warning");
+      ctx.ui.notify(`Unsupported ${commandName} mode. Use ${commandName} [vad|ptt|follow|stop|cancel|status]. Full Realtime is available only through /rt.`, "warning");
       return;
     }
     // /ptt (or /stt ptt) arms PTT: after a send, the indicator stays ready
