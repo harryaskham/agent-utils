@@ -13,7 +13,7 @@
   in {
     homeManagerModules.ag-dash = import ./nix/home-manager.nix { inherit self; };
     homeManagerModules.default = self.homeManagerModules.ag-dash;
-    packages = each (system: let pkgs = import nixpkgs { inherit system; }; in rec {
+    packages = each (system: let pkgs = nixpkgs.legacyPackages.${system}; in rec {
       ag = pkgs.rustPlatform.buildRustPackage {
         pname = "ag";
         version = "0.7.0";
@@ -58,11 +58,11 @@
     checks = each (system: {
       inherit (self.packages.${system}) ag;
       ag-dash-module = import ./nix/module-test.nix {
-        pkgs = import nixpkgs { inherit system; };
+        pkgs = nixpkgs.legacyPackages.${system};
         module = self.homeManagerModules.ag-dash;
       };
     });
-    devShells = each (system: let pkgs = import nixpkgs { inherit system; }; in {
+    devShells = each (system: let pkgs = nixpkgs.legacyPackages.${system}; in {
       default = pkgs.mkShell { packages = with pkgs; [ cargo rustc rustfmt clippy openssh rsync ]; };
     });
   };

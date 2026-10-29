@@ -64,7 +64,7 @@
       inherit (ag) homeManagerModules;
       packages = forAllSystems (system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = nixpkgs.legacyPackages.${system};
           skillServer = pkgs.rustPlatform.buildRustPackage {
             pname = "skill-server";
             version = "0.1.0";
@@ -276,7 +276,7 @@
 
       devShells = forAllSystems (system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = nixpkgs.legacyPackages.${system};
         in {
           default = pkgs.mkShell {
             packages = [

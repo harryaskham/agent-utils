@@ -20,7 +20,7 @@
       packages = forAllSystems (
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = nixpkgs.legacyPackages.${system};
 
           # Deterministic browser bundle: buildNpmPackage installs the pinned
           # package-lock.json deps as a fixed-output derivation (npmDepsHash),
@@ -104,7 +104,7 @@
       devShells = forAllSystems (
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = nixpkgs.legacyPackages.${system};
         in
         {
           default = pkgs.mkShell {

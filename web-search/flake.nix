@@ -58,7 +58,7 @@
 
       pythonSets = eachDefaultSystem (system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = nixpkgs.legacyPackages.${system};
           python = pkgs.python312;
         in
         (pkgs.callPackage pyproject-nix.build.packages { inherit python; }).overrideScope (
@@ -72,7 +72,7 @@
     {
       devShells = eachDefaultSystem (system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = nixpkgs.legacyPackages.${system};
           pythonSet = pythonSets.${system}.overrideScope (
             lib.composeManyExtensions [
               editableOverlay
@@ -102,7 +102,7 @@
 
       packages = eachDefaultSystem (system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = nixpkgs.legacyPackages.${system};
           pythonSet = pythonSets.${system};
           venv = pythonSet.mkVirtualEnv "web-search-mcp" workspace.deps.all;
           inherit (pkgs.callPackages pyproject-nix.build.util { }) mkApplication;
