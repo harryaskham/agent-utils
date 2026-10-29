@@ -2035,6 +2035,25 @@ test("Ctrl-Space goes to the daemon's voice input when a client part takes it, e
   } finally { await h.handlers.get("session_shutdown")?.({}, h.ctx); __setLocalVadHooksForTest({}); }
 });
 
+test("local /stt's speech chip names its session, so pi-client's splits draw it in that pane only", async () => {
+  const { SPEECH_INDICATOR_EVENT } = await import("../extensions/lib/speech-indicator.js");
+  __setLocalVadHooksForTest({ capture: () => { const p = new EventEmitter(); p.stdout = new EventEmitter(); p.stderr = new EventEmitter(); p.kill = () => {}; return p; }, transcribe: async () => "x" });
+  const h = makeHarness();
+  try {
+    realtimeAgentExtension(h.pi); h.handlers.get("session_start")?.({}, h.ctx);
+    const seen = [];
+    h.pi.events.on(SPEECH_INDICATOR_EVENT, (state) => seen.push({ phase: state.phase, sessionId: state.sessionId }));
+    h.ctx.sessionManager.getSessionId = () => "pane-a";
+    await h.commands.get("stt").handler("", h.ctx);
+    // Focus moves to another pane: the chip stays with the session /stt started in.
+    h.ctx.sessionManager.getSessionId = () => "pane-b";
+    h.handlers.get("session_start")?.({}, h.ctx);
+    assert.ok(seen.some((state) => state.phase === "listening" && state.sessionId === "pane-a"));
+    assert.ok(!seen.some((state) => state.phase !== "disabled" && state.sessionId === "pane-b"));
+    await h.commands.get("stt").handler("cancel", h.ctx);
+  } finally { await h.handlers.get("session_shutdown")?.({}, h.ctx); __setLocalVadHooksForTest({}); }
+});
+
 test("Ctrl-Space respects disabled shortcuts, active voice modes and blocking prompts", async () => {
   let captures = 0;
   __setLocalVadHooksForTest({ capture: () => { captures++; const p = new EventEmitter(); p.stdout = new EventEmitter(); p.stderr = new EventEmitter(); p.kill = () => {}; return p; }, transcribe: async () => "fixture" });

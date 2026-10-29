@@ -2909,7 +2909,13 @@ export default function realtimeAgentExtension(pi) {
   }
   function refreshSpeechIndicator() {
     if (speechSessionClosed) return;
-    speechIndicator.publish(localSpeechIndicator() || realtimeSpeechIndicator() || { phase: "disabled" });
+    const state = localSpeechIndicator() || realtimeSpeechIndicator() || { phase: "disabled" };
+    // The session whose editor takes the speech: its pane alone shows the chip (pi-client splits).
+    const owner = localVad.active || localPttFinishing || pttArmed ? localVad.ownerSessionId : session.mic ? speechSessionIdOf(session.lastCtx) : undefined;
+    speechIndicator.publish(owner ? { ...state, sessionId: owner } : state);
+  }
+  function speechSessionIdOf(ctx) {
+    try { const id = ctx?.sessionManager?.getSessionId?.(); return id ? String(id) : undefined; } catch { return undefined; }
   }
   session.onSpeechIndicator = refreshSpeechIndicator;
   const cascadePcmPlayer = createInterruptiblePcmPlayer();
@@ -3349,7 +3355,7 @@ export default function realtimeAgentExtension(pi) {
     const model = resolveSttSettings(process.env, persistedStt).model;
     const timeoutMs = resolveBatchSttTimeoutMs(process.env, persistedStt);
     const freeformDelivery = { submitted: false };
-    Object.assign(localVad, { vadState: "idle", surface: hold ? "PTT" : quickfile ? "NOTE" : "STT", cfg, model, timeoutMs, hold, quickfile, freeformSessionId, freeformDelivery, freeformCommitting: false, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now(), meter: new AudioLevelMeter({ width: 12 }), inputLevel: 0, rawInputRms: 0, lastMeterRenderAt: 0 });
+    Object.assign(localVad, { ownerSessionId: speechSessionIdOf(ctx), vadState: "idle", surface: hold ? "PTT" : quickfile ? "NOTE" : "STT", cfg, model, timeoutMs, hold, quickfile, freeformSessionId, freeformDelivery, freeformCommitting: false, lastError: null, lastTranscript: null, warnedError: false, warnedOverlong: false, startedAt: Date.now(), meter: new AudioLevelMeter({ width: 12 }), inputLevel: 0, rawInputRms: 0, lastMeterRenderAt: 0 });
 
     // bd-0c008d: stream partial transcripts into the input editor (live voice
     // editing) instead of only a status widget; commit sends the editor's text

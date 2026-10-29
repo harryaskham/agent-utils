@@ -79,7 +79,8 @@ export default function voiceClient(pi, { maxSessions = 16 } = {}) {
       return;
     }
     publisher ||= createSpeechIndicatorPublisher(pi);
-    publisher.publish(state);
+    // Its own session's pane only, in pi-client's splits.
+    publisher.publish({ ...state, ...(focused ? { sessionId: String(focused) } : {}) });
   };
 
   const follow = (ctx, sessionId) => {

@@ -250,7 +250,14 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         model: String(ctx.model?.id || "n/a"),
         effort: String(pi.getThinkingLevel?.() || ctx.thinkingLevel || "off").toLowerCase(),
         mcpCount: parseMcpCount(statuses),
-        speech: state.speech,
+        // The speech chip in its own session's pane only (pi-client's splits); none named: any.
+        speech: (() => {
+          const speech = state.speech;
+          if (!speech?.sessionId) return speech;
+          let sessionId;
+          try { sessionId = ctx.sessionManager?.getSessionId?.(); } catch {}
+          return sessionId === undefined || String(sessionId) === speech.sessionId ? speech : null;
+        })(),
         cost: totals.cost,
         subscription: provider === "github-copilot" || provider === "kimi-coding",
         contextPct: Number.isFinite(contextPct) ? contextPct : 0,

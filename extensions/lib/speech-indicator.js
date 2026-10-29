@@ -19,10 +19,13 @@ export function normalizeSpeechIndicator(value = {}) {
   const surface = SURFACES.has(value.surface) ? value.surface : "";
   if (phase === "disabled") return { version: 1, phase, surface: "", hint: "", meter: false, level: 0, db: null, transcribing: false, threshold: null };
   const meter = Boolean(value.meter);
+  // The session the speech is for (pi-client draws it in that session's pane only); none: any.
+  const sessionId = typeof value.sessionId === "string" && value.sessionId !== "" ? oneLine(value.sessionId, 200) : undefined;
   return {
     version: 1,
     phase,
     surface,
+    ...(sessionId === undefined ? {} : { sessionId }),
     hint: oneLine(value.hint, 24),
     meter,
     level: meter ? finite(value.level, 0, 1, 0) : 0,
@@ -39,7 +42,7 @@ export function rmsToDb(rms) {
 }
 
 const sameExceptMeter = (a, b) => a && b && a.phase === b.phase && a.surface === b.surface && a.hint === b.hint
-  && a.meter === b.meter && a.transcribing === b.transcribing;
+  && a.meter === b.meter && a.transcribing === b.transcribing && a.sessionId === b.sessionId;
 
 /// Producer. Phase changes publish immediately; meter-only changes coalesce to
 /// one update per interval with a trailing write. `fallback(state, consumed)`

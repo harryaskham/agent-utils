@@ -462,6 +462,14 @@ test("editor chips consume speech indicator events and hide quiet footer statuse
   assert.match(stripAnsi(rows[0]), /● STT/);
   assert.match(stripAnsi(rows.at(-1)), /-30dB/);
 
+  // pi-client's splits: speech for one session shows in that session's pane only.
+  ctx.sessionManager.getSessionId = () => "pane-a";
+  events.emit(SPEECH_INDICATOR_EVENT, { version: 1, phase: "on-air", surface: "CALL", sessionId: "pane-b", accept() {} });
+  assert.doesNotMatch(stripAnsi(editor.render(120)[0]), /CALL/, "another pane's call is not drawn here");
+  events.emit(SPEECH_INDICATOR_EVENT, { version: 1, phase: "on-air", surface: "CALL", sessionId: "pane-a", accept() {} });
+  assert.match(stripAnsi(editor.render(120)[0]), /● CALL/, "this pane's call is");
+  delete ctx.sessionManager.getSessionId;
+
   assert.deepEqual(footer.render(120).map(stripAnsi), ["other: busy"], "healthy jev status is hidden");
   statuses.set("jev", "jev: unconfigured");
   footer.render(120); footer.render(120);
