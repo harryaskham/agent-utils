@@ -58,6 +58,33 @@ Everything an operator sets lives in the worker's environment and Pi's
 | `PI_DURABLE_AUDIO_REPLAY_GRACE_MS` | Skip assistant messages older than this before the module loaded (default 60000; negative disables). |
 | `agentUtils.tts`, `agentUtils.narrate`, `agentUtils.choice` in `settings.json` | Startup defaults, read once and never written. |
 
+### Per-session host environment
+
+A host can give the same module each session's own startup environment. This
+matches a TUI Pi started with that session's variables without changing the shared
+worker process:
+
+```js
+import { withSessionEnvFiles } from "@harryaskham/pi-daemon";
+import { createDurableTtsModule } from "${pkg}/extensions/durable/tts-module.js";
+
+const audio = createDurableTtsModule({
+  sessionEnv: async ({ cwd }) => cwd
+    ? (await withSessionEnvFiles(["{cwd}/../session.env"], { cwd, env: {} })).env
+    : {},
+});
+export const commands = audio.commands;
+export function observe(event, info) { return audio.observe(event, info); }
+```
+
+The session variables overlay the worker environment for `PI_TTS_*`,
+`PI_NARRATE_*`, credentials, playback and settings special forms. For example, the
+usual `agentUtils.tts.enabled` form that is false when `CACO_AGENT_ID` is set
+keeps managed Cacophony agents quiet, while an agent profile that sets
+`PI_TTS_ENABLED=1` starts speaking. `/tts` and `/narrate` still override either
+default per session. A rewritten session environment reloads that session's
+speech defaults.
+
 `ag tts mute` and `ag tts unmute` work here as everywhere; see
 [runtime speech control](speech-runtime-control.md).
 

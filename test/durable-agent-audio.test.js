@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -483,6 +483,7 @@ test("helpers: deterministic tool lines, secret filtering, readiness", () => {
 
 test("the adaptor module imports no Pi TUI API and exports the module contract", async () => {
   const source = readFileSync(new URL("../extensions/durable/tts.mjs", import.meta.url), "utf8")
+    + readFileSync(new URL("../extensions/durable/tts-module.js", import.meta.url), "utf8")
     + readFileSync(new URL("../extensions/lib/durable-agent-audio.js", import.meta.url), "utf8");
   assert.doesNotMatch(source, /pi-tui|pi-coding-agent|ExtensionAPI|ctx\.ui/);
   // Load in a child so the module's process-wide instance does not leak into this run.
@@ -547,4 +548,97 @@ test("the spoken ledger stores long keys short, and finds them however they are 
   assert.equal(loaded.has(`start:${id(3)}`), true);
   loaded.delete(`start:${id(3)}`);
   assert.equal(loaded.size, 0);
+});
+
+test("a host session environment selects each session's startup speech defaults", async () => {
+  const spoken = [];
+  const environments = new Map([
+    ["managed", { CACO_AGENT_ID: "managed-agent", PULSE_SERVER: "managed:4713" }],
+    ["pebble", { CACO_AGENT_ID: "pebble", PI_TTS_ENABLED: "1", PI_NARRATE_ENABLED: "1", PULSE_SERVER: "phone:4713" }],
+  ]);
+  const reads = [];
+  const created = [];
+  const host = fakeHost({
+    speech: spoken,
+    sessionEnv: ({ sessionId }) => environments.get(sessionId) ?? {},
+    readPersistedSettings: (env) => {
+      reads.push(env.CACO_AGENT_ID ?? "personal");
+      return { tts: { enabled: !env.CACO_AGENT_ID }, narrate: { enabled: !env.CACO_AGENT_ID } };
+    },
+    createSpeech: ({ sessionId, env }) => {
+      created.push({ sessionId, agent: env.CACO_AGENT_ID, pulse: env.PULSE_SERVER, enabled: env.PI_TTS_ENABLED });
+      return stubSpeech(spoken, sessionId);
+    },
+  });
+
+  await host.emit("managed", assistantEnd([text("Managed agents stay quiet.")]));
+  await host.emit("pebble", assistantEnd([text("Pebble asked to speak.")]));
+  await host.emit("personal", assistantEnd([text("Personal sessions keep settings defaults.")]));
+  assert.deepEqual(spoken.map(({ sessionId, text }) => [sessionId, text]), [
+    ["pebble", "Pebble asked to speak."],
+    ["personal", "Personal sessions keep settings defaults."],
+  ]);
+  assert.deepEqual(reads, ["managed-agent", "pebble", "personal"]);
+  assert.deepEqual(created, [
+    { sessionId: "managed", agent: "managed-agent", pulse: "managed:4713", enabled: undefined },
+    { sessionId: "pebble", agent: "pebble", pulse: "phone:4713", enabled: "1" },
+    { sessionId: "personal", agent: undefined, pulse: undefined, enabled: undefined },
+  ]);
+
+  await host.command("managed", "/tts status");
+  assert.match(host.notifications.at(-1).text, /^tts:off/);
+  await host.command("managed", "/tts on");
+  await host.emit("managed", assistantEnd([text("Explicitly enabled.")]));
+  assert.equal(spoken.at(-1).text, "Explicitly enabled.");
+});
+
+test("a rewritten session environment reloads that session's defaults", async () => {
+  const spoken = [];
+  const environment = { CACO_AGENT_ID: "agent" };
+  let reads = 0;
+  const host = fakeHost({
+    speech: spoken,
+    sessionEnv: () => environment,
+    readPersistedSettings: () => { reads += 1; return {}; },
+  });
+  await host.emit("s1", assistantEnd([text("Before opt-in.")]));
+  await host.emit("s1", assistantEnd([text("Still before opt-in.")]));
+  assert.equal(reads, 1, "settings special forms run once for an unchanged session environment");
+  environment.PI_TTS_ENABLED = "1";
+  await host.emit("s1", assistantEnd([text("After opt-in.")]));
+  assert.equal(reads, 2);
+  assert.deepEqual(spoken.map(({ text }) => text), ["After opt-in."]);
+});
+
+test("the module factory evaluates settings special forms with a session environment", () => {
+  const agentDir = join(tmp, `agent-${Math.random().toString(36).slice(2)}`);
+  const settingsPath = join(agentDir, "settings.json");
+  const sessionEnvPath = join(tmp, `session-${Math.random().toString(36).slice(2)}.env`);
+  spawnSync("mkdir", ["-p", agentDir]);
+  writeFileSync(settingsPath, JSON.stringify({
+    agentUtils: {
+      globalShellExpansion: { enabled: true },
+      tts: { enabled: { $boolCommand: "[[ -z \"${CACO_AGENT_ID:-}\" ]]" } },
+      narrate: { enabled: { $boolCommand: "[[ -z \"${CACO_AGENT_ID:-}\" ]]" } },
+    },
+  }));
+  writeFileSync(sessionEnvPath, "CACO_AGENT_ID=managed\n");
+  const probe = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import { readFileSync } from "node:fs";
+    const { createDurableTtsModule, readDurableAudioSettings } = await import(${JSON.stringify(new URL("../extensions/durable/tts-module.js", import.meta.url).href)});
+    const personal = readDurableAudioSettings(process.env);
+    const managed = readDurableAudioSettings({ ...process.env, CACO_AGENT_ID: "managed" });
+    const audio = createDurableTtsModule({
+      instanceKey: Symbol("probe"),
+      sessionEnv: () => Object.fromEntries(readFileSync(${JSON.stringify(sessionEnvPath)}, "utf8").trim().split("\\n").map((line) => line.split("="))),
+    });
+    const notes = [];
+    await audio.commands.tts.run("status", { sessionId: "managed", notify: (value) => notes.push(value) });
+    console.log(JSON.stringify({ personal: personal.tts.enabled, managed: managed.tts.enabled, status: notes[0] }));
+  `], { encoding: "utf8", env: { ...baseEnv(), HOME: tmp, PI_CODING_AGENT_DIR: agentDir }, timeout: 20_000 });
+  assert.equal(probe.status, 0, probe.stderr);
+  const result = JSON.parse(probe.stdout.trim().split("\n").at(-1));
+  assert.equal(result.personal, true);
+  assert.equal(result.managed, false);
+  assert.match(result.status, /^tts:off/);
 });
