@@ -95,6 +95,23 @@ function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
+const SESSION_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** String variables from a host's per-session environment source. */
+function sessionEnvValues(value) {
+  return Object.fromEntries(Object.entries(plainObject(value)).filter(([key, entry]) => SESSION_ENV_NAME.test(key) && typeof entry === "string" && !entry.includes("\0")));
+}
+
+/** A stable identity for a session environment, without retaining another copy of its values. */
+function sessionEnvKey(values) {
+  const entries = Object.entries(values).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+  return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+}
+
+function persistedSlices(value = {}) {
+  return { tts: plainObject(value.tts), narrate: plainObject(value.narrate), choice: plainObject(value.choice) };
+}
+
 function normalizePhases(value, name = "/narrate phases") {
   const phase = String(value ?? "").trim().toLowerCase();
   if (!NARRATE_PHASES.includes(phase)) throw new Error(`${name} must be before, after or both`);
@@ -219,10 +236,13 @@ function memoryStateStore(map, sessionId) {
  * Options are injection points for tests and adaptors:
  * - `createSpeech({ sessionId, config, env, routing })` returns a controller shaped like
  *   createAgentSpeechController (speak/interrupt/apply/getConfig/setConfig/dispose).
- * - `createChoiceSpeech({ sessionId, env, routing })` returns { speak, interrupt, dispose }.
+ * - `createChoiceSpeech({ sessionId, env, persisted, routing })` returns { speak, interrupt, dispose }.
  * - `createRouting({ sessionId, env })` returns a session's speech output routing
  *   (createSpeechOutputRouting): its /tts focus and /tts solo, overlaid on each utterance.
  * - `persistedSettings` is the immutable startup `{ tts, narrate, choice }` slice.
+ * - `sessionEnv(ctx)` optionally returns a session's host-owned variables, such as
+ *   pi-daemon `sessionEnvFiles`; they overlay `env` for that session only.
+ * - `readPersistedSettings(env)` rereads settings special forms with that session environment.
  */
 const ROUTING_MODES = ["focus", "solo"];
 
@@ -237,7 +257,7 @@ export function createDurableAgentAudio({
   persistedSettings = {},
   createSpeech,
   createChoiceSpeech,
-  createRouting = () => createSpeechOutputRouting({ env }),
+  createRouting = ({ env: routingEnv = env } = {}) => createSpeechOutputRouting({ env: routingEnv }),
   executables = {},
   spawnImpl,
   which = findExecutable,
@@ -249,35 +269,51 @@ export function createDurableAgentAudio({
   log = (line) => { try { process.stderr.write(`${line}\n`); } catch {} },
   appendFeed = appendTtsFeed,
   runTextTurn = runPiTextTurn,
+  sessionEnv,
+  readPersistedSettings,
 } = {}) {
-  const persistedTts = plainObject(persistedSettings.tts);
-  const persistedNarrate = plainObject(persistedSettings.narrate);
-  const persistedChoice = plainObject(persistedSettings.choice);
+  const startupPersisted = persistedSlices(persistedSettings);
   const graceMs = Number.isFinite(Number(replayGraceMs ?? env.PI_DURABLE_AUDIO_REPLAY_GRACE_MS))
     ? Number(replayGraceMs ?? env.PI_DURABLE_AUDIO_REPLAY_GRACE_MS)
     : DEFAULT_DURABLE_REPLAY_GRACE_MS;
   const audioProviders = createAudioProviders({});
-  const speechPolicy = resolveSessionSpeechPolicy(persistedTts, env);
   const makePlayer = () => createInterruptiblePcmPlayer({ queue: true, ...(spawnImpl || Object.keys(executables).length ? { spawnImpl: spawnWithExecutables(spawnImpl || spawn, executables) } : {}) });
   // Each session routes its own speech (/tts focus, /tts solo): the worker's environment
   // (PULSE_SERVER, PULSE_SINK) is every session's default, and a session's routing overlays
   // the output of each of its utterances.
-  const speechFactory = createSpeech || (({ config, routing }) => createAgentSpeechController({ env, initialConfig: config, routing, player: makePlayer() }));
-  const choiceFactory = createChoiceSpeech || (({ routing }) => createChoiceSpeaker({ env, persisted: persistedTts, routing, audioProviders, player: makePlayer() }));
+  const speechFactory = createSpeech || (({ config, routing, env: speechEnv = env }) => createAgentSpeechController({ env: speechEnv, initialConfig: config, routing, player: makePlayer() }));
+  const choiceFactory = createChoiceSpeech || (({ routing, env: choiceEnv = env, persisted = startupPersisted }) => createChoiceSpeaker({ env: choiceEnv, persisted: plainObject(persisted.tts), routing, audioProviders, player: makePlayer() }));
 
   /** sessionId -> runtime record; bounded, least recently used first. */
   const sessions = new Map();
   const pending = new Set();
   let disposed = false;
 
-  const defaults = () => {
-    const tts = resolveAgentTtsSettings({ env, persisted: persistedTts, audioProviders });
-    const narrate = resolveNarrateSettings({ env, persisted: persistedNarrate });
+  const sessionEnvironment = async (ctx) => {
+    if (typeof sessionEnv !== "function") return { env, persisted: startupPersisted, key: "" };
+    let overlay = {};
+    try { overlay = sessionEnvValues(await sessionEnv(ctx)); }
+    catch (error) { log(`agent-utils durable audio: session environment unavailable: ${error?.message || error}`); }
+    return { overlay, key: sessionEnvKey(overlay) };
+  };
+
+  const persistedFor = (sessionEnvValue) => {
+    if (typeof readPersistedSettings !== "function") return startupPersisted;
+    try { return persistedSlices(readPersistedSettings(sessionEnvValue)); }
+    catch (error) {
+      log(`agent-utils durable audio: session settings unavailable: ${error?.message || error}`);
+      return startupPersisted;
+    }
+  };
+
+  const defaults = (sessionEnvValue, persisted) => {
+    const tts = resolveAgentTtsSettings({ env: sessionEnvValue, persisted: persisted.tts, audioProviders });
+    const narrate = resolveNarrateSettings({ env: sessionEnvValue, persisted: persisted.narrate });
     let phases = "before";
-    try { phases = normalizePhases(env.PI_NARRATE_PHASES ?? persistedNarrate.phases ?? "before", "PI_NARRATE_PHASES"); } catch {}
+    try { phases = normalizePhases(sessionEnvValue.PI_NARRATE_PHASES ?? persisted.narrate.phases ?? "before", "PI_NARRATE_PHASES"); } catch {}
     return {
       config: tts.config,
-      tts: { enabled: tts.enabled, prefix: tts.prefix, suffix: tts.suffix, choices: optionalBool(env.PI_CHOICE_SPEECH_ENABLED, optionalBool(persistedChoice.speechEnabled, true)), speech: {} },
+      tts: { enabled: tts.enabled, prefix: tts.prefix, suffix: tts.suffix, choices: optionalBool(sessionEnvValue.PI_CHOICE_SPEECH_ENABLED, optionalBool(persisted.choice.speechEnabled, true)), speech: {} },
       narrate: { enabled: narrate.enabled, phases, model: narrate.model, speed: narrate.speed, style: narrate.style, styleDegree: narrate.styleDegree, reasoningSummaries: narrate.reasoningSummaries, prefix: narrate.prefix, suffix: narrate.suffix },
     };
   };
@@ -288,32 +324,44 @@ export function createDurableAgentAudio({
     return { store: memoryStateStore(memoryState, String(ctx?.sessionId ?? "default")), durable: false };
   };
 
+  const disposeEntry = (record) => {
+    void Promise.resolve(record.loading).then((loaded) => {
+      try { loaded?.speech?.dispose?.(); loaded?.choices?.dispose?.(); } catch {}
+      void Promise.resolve(loaded?.routing?.shutdown?.()).catch(() => {});
+    }).catch(() => {});
+  };
+
   const evict = () => {
     while (sessions.size > maxSessions) {
       const [oldest, record] = sessions.entries().next().value;
       sessions.delete(oldest);
-      void Promise.resolve(record.loading).then((loaded) => {
-        try { loaded?.speech?.dispose?.(); loaded?.choices?.dispose?.(); } catch {}
-        void Promise.resolve(loaded?.routing?.shutdown?.()).catch(() => {});
-      }).catch(() => {});
+      disposeEntry(record);
     }
   };
 
-  const loadSession = async (ctx) => {
+  const loadSession = async (ctx, knownEnvironment) => {
     const sessionId = String(ctx?.sessionId ?? "default");
+    const environment = knownEnvironment ?? await sessionEnvironment(ctx);
     let entry = sessions.get(sessionId);
     if (entry) {
       sessions.delete(sessionId);
+      // A rewritten session environment changes that session's startup defaults and voice.
+      if (entry.envKey !== environment.key) {
+        disposeEntry(entry);
+        return loadSession(ctx, environment);
+      }
       sessions.set(sessionId, entry);
       const session = await entry.loading;
       // A host may begin passing durable state after the first event; prefer it.
-      if (!session.durable && stateFor(ctx).durable) { sessions.delete(sessionId); return loadSession(ctx); }
+      if (!session.durable && stateFor(ctx).durable) { sessions.delete(sessionId); return loadSession(ctx, environment); }
       if (typeof ctx?.cwd === "string" && ctx.cwd) session.cwd = ctx.cwd;
       return session;
     }
-    entry = { loading: (async () => {
+    entry = { envKey: environment.key, loading: (async () => {
       const { store, durable } = stateFor(ctx);
-      const base = defaults();
+      const sessionEnvValue = environment.overlay ? { ...env, ...environment.overlay } : environment.env;
+      const persisted = environment.overlay ? persistedFor(sessionEnvValue) : environment.persisted;
+      const base = defaults(sessionEnvValue, persisted);
       let saved = {};
       let ledger = [];
       try { saved = plainObject(await store.get(DURABLE_AUDIO_SETTINGS_KEY)); } catch (error) { log(`agent-utils durable audio: state read failed: ${error?.message || error}`); }
@@ -324,19 +372,21 @@ export function createDurableAgentAudio({
       const narrate = { ...base.narrate, ...plainObject(saved.narrate) };
       if (!NARRATE_PHASES.includes(narrate.phases)) narrate.phases = base.narrate.phases;
       let config = base.config;
-      try { if (Object.keys(tts.speech).length) config = applyAgentTtsConfig(config, tts.speech, env); }
+      try { if (Object.keys(tts.speech).length) config = applyAgentTtsConfig(config, tts.speech, sessionEnvValue); }
       catch (error) { log(`agent-utils durable audio: saved speech settings ignored: ${error?.message || error}`); }
-      config = assignSessionVoice(config, sessionId, tts.speech);
-      const routing = createRouting({ sessionId, env });
+      config = assignSessionVoice(config, sessionId, tts.speech, resolveSessionSpeechPolicy(persisted.tts, sessionEnvValue));
+      const routing = createRouting({ sessionId, env: sessionEnvValue });
       const session = {
         sessionId,
         cwd: typeof ctx?.cwd === "string" && ctx.cwd ? ctx.cwd : undefined,
+        env: sessionEnvValue,
+        persisted,
         store,
         durable,
         tts,
         narrate,
         routing,
-        speech: speechFactory({ sessionId, config, env, routing }),
+        speech: speechFactory({ sessionId, config, env: sessionEnvValue, routing }),
         choices: null,
         ledger: new SpokenLedger(ledger.slice(-DURABLE_AUDIO_LEDGER_LIMIT)),
         batches: new Map(),
@@ -361,10 +411,10 @@ export function createDurableAgentAudio({
     sessions.set(sessionId, entry);
     evict();
     try { return await entry.loading; }
-    catch (error) { sessions.delete(sessionId); throw error; }
+    catch (error) { if (sessions.get(sessionId) === entry) sessions.delete(sessionId); throw error; }
   };
 
-  const assignSessionVoice = (config, sessionId, speechValues) => {
+  const assignSessionVoice = (config, sessionId, speechValues, speechPolicy) => {
     const assignment = resolveSessionSpeechAssignment(sessionId, speechPolicy);
     const explicitVoice = ["voice", "embedding", "speaker", "speakerprofileid", "speaker_profile_id"].some((key) => Object.hasOwn(speechValues, key));
     return {
@@ -379,8 +429,8 @@ export function createDurableAgentAudio({
 
   /** What a session's routing needs to switch focus or solo on. */
   const routingOptions = (session) => ({
-    base: { ...(session.speech.getConfig?.() ?? {}), env },
-    focus: plainObject(persistedTts.focus),
+    base: { ...(session.speech.getConfig?.() ?? {}), env: session.env },
+    focus: plainObject(session.persisted.tts.focus),
     identity: { session: session.sessionId },
   });
 
@@ -431,16 +481,16 @@ export function createDurableAgentAudio({
   // interactive Pi writes it: `ag tts` and ag dash's TTS panel read it. One
   // record per spoken line, written whether or not playback succeeds.
   const recordFeed = (session, kind, text) => {
-    if (!ttsFeedEnabled(env)) return;
+    if (!ttsFeedEnabled(session.env)) return;
     // Named as the session's media shares are (durable-media): a configured agent
     // name, else `pi-daemon-<directory>`, so ag shows one agent per session.
     const place = session.cwd ? basename(session.cwd) : "";
     const identity = artifactIdentity(null, {
       cwd: session.cwd,
       sessionManager: { getSessionId: () => session.sessionId, getSessionName: () => (place ? `pi-daemon-${place}` : undefined) },
-    }, env);
+    }, session.env);
     track(Promise.resolve()
-      .then(() => appendFeed({ ...identity, text, kind }, { env }))
+      .then(() => appendFeed({ ...identity, text, kind }, { env: session.env }))
       .catch((error) => report(session, "tts feed", error)));
   };
 
@@ -488,7 +538,7 @@ export function createDurableAgentAudio({
   const speakChoice = (session, text) => {
     if (disposed || !String(text || "").trim()) return;
     recordFeed(session, "choices", String(text));
-    session.choices ||= choiceFactory({ sessionId: session.sessionId, env, routing: session.routing });
+    session.choices ||= choiceFactory({ sessionId: session.sessionId, env: session.env, persisted: session.persisted, routing: session.routing });
     try { session.choices.assignSession?.({ sessionManager: { getSessionId: () => session.sessionId } }); } catch {}
     track(whileSpeaking(session, Promise.resolve().then(() => session.choices.speak(text))).catch((error) => report(session, "choices", error)));
   };
@@ -608,7 +658,7 @@ export function createDurableAgentAudio({
   const optional = (value) => value == null || value === "" ? "none" : String(value);
 
   const readinessNote = (session) => {
-    const problems = speechReadiness(session.speech.getConfig(), { env, executables, which });
+    const problems = speechReadiness(session.speech.getConfig(), { env: session.env, executables, which });
     return problems.length ? ` · warning: speech unavailable on this host (${problems.join("; ")}); events will be skipped quietly` : "";
   };
 
@@ -618,7 +668,7 @@ export function createDurableAgentAudio({
   const ttsStatus = (session, { check = false } = {}) => {
     const config = session.speech.getConfig();
     let credentials = "";
-    try { credentials = speechCredentialStatus(config, env); } catch {}
+    try { credentials = speechCredentialStatus(config, session.env); } catch {}
     return [
       `tts:${session.tts.enabled ? "on" : "off"}`,
       `provider:${config.providerName && config.providerName !== config.provider ? `${config.providerName}(${config.provider})` : config.provider}`,
@@ -697,8 +747,8 @@ export function createDurableAgentAudio({
         if (parsed.positionals.length) throw new Error(`/tts: unexpected argument '${parsed.positionals[0]}'`);
         const { prefix, suffix, choices, prefix_with_session_name, prefixwithsessionname, ...speechValues } = parsed.values;
         if (prefix_with_session_name !== undefined || prefixwithsessionname !== undefined) throw new Error("/tts: prefix_with_session_name needs a Pi session name; use prefix= instead");
-        if (prefix !== undefined) session.tts.prefix = expandEnvReferences(prefix, env, "/tts prefix");
-        if (suffix !== undefined) session.tts.suffix = expandEnvReferences(suffix, env, "/tts suffix");
+        if (prefix !== undefined) session.tts.prefix = expandEnvReferences(prefix, session.env, "/tts prefix");
+        if (suffix !== undefined) session.tts.suffix = expandEnvReferences(suffix, session.env, "/tts suffix");
         if (choices !== undefined) session.tts.choices = boolValue(choices, "/tts choices");
         applySpeechValues(session, speechValues, "/tts");
       }
@@ -759,8 +809,8 @@ export function createDurableAgentAudio({
         }
         const reasoning = values.reasoning_summaries ?? values.reasoningsummaries ?? values.reasoning;
         if (reasoning !== undefined) next.reasoningSummaries = boolValue(reasoning, "/narrate reasoning_summaries");
-        if (values.prefix !== undefined) next.prefix = expandEnvReferences(values.prefix, env, "/narrate prefix");
-        if (values.suffix !== undefined) next.suffix = expandEnvReferences(values.suffix, env, "/narrate suffix");
+        if (values.prefix !== undefined) next.prefix = expandEnvReferences(values.prefix, session.env, "/narrate prefix");
+        if (values.suffix !== undefined) next.suffix = expandEnvReferences(values.suffix, session.env, "/narrate suffix");
         next.enabled = values.enabled !== undefined ? boolValue(values.enabled, "/narrate enabled")
           : values.on !== undefined ? boolValue(values.on, "/narrate on") : true;
         const speechValues = Object.fromEntries(Object.entries(values).filter(([key]) => NARRATE_SPEECH_KEYS.has(key)).map(([key, value]) => [key === "tts_model" ? "model" : key, value]));

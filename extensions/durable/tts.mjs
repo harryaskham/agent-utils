@@ -9,47 +9,11 @@
 // AZURE_SPEECH_*, OPENAI_*, PULSE_SERVER/PULSE_SINK, …) and the immutable
 // `agentUtils.tts|narrate|choice` slices of Pi's settings.json. Runtime toggles
 // are per session and stored in the host's per-session module state.
+// Host-specific modules may use ./tts-module.js to add per-session variables.
 
-import { readFileSync } from "node:fs";
-import { createDurableAgentAudio } from "../lib/durable-agent-audio.js";
-import { readPersistedChoiceSettings, readPersistedNarrateSettings, readPersistedTtsSettings } from "../lib/tts-settings.js";
+import { createDurableTtsModule } from "./tts-module.js";
 
-const INSTANCE = Symbol.for("agent-utils.durable-agent-audio.v1");
-
-function readSlice(read) {
-  try { return read(); } catch { return {}; }
-}
-
-/** Absolute playback binaries the Nix package records next to this module. */
-function packagedExecutables() {
-  try {
-    const value = JSON.parse(readFileSync(new URL("./runtime-paths.json", import.meta.url), "utf8"));
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? Object.fromEntries(Object.entries(value).filter(([, path]) => typeof path === "string" && path.startsWith("/")))
-      : {};
-  } catch { return {}; }
-}
-
-function start() {
-  // pi-daemon re-imports an edited module. Stop the previous instance's speech
-  // and keep its process-start time and in-memory fallback state.
-  const previous = globalThis[INSTANCE];
-  void previous?.dispose?.().catch?.(() => {});
-  const instance = createDurableAgentAudio({
-    env: process.env,
-    persistedSettings: {
-      tts: readSlice(readPersistedTtsSettings),
-      narrate: readSlice(readPersistedNarrateSettings),
-      choice: readSlice(readPersistedChoiceSettings),
-    },
-    executables: packagedExecutables(),
-    ...(previous ? { loadedAt: previous.loadedAt, memoryState: previous.memoryState } : {}),
-  });
-  globalThis[INSTANCE] = instance;
-  return instance;
-}
-
-const audio = start();
+const audio = createDurableTtsModule();
 
 export const commands = audio.commands;
 
