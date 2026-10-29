@@ -124,7 +124,7 @@ Narration works as in interactive Pi when the host offers the profile's models
 (pi-daemon 1.12+ passes observers `modelRegistry`).
 - **Before a batch:** the line is the agent's own reasoning summary or preamble when it wrote
   one. Otherwise a side completion with the narration model (`model=provider/id`,
-  `PI_NARRATE_MODEL`, default `github-copilot/gpt-6-luna`) describes the batch from the tool
+  `PI_NARRATE_MODEL`, default `github-copilot/gpt-6.1-terra`) describes the batch from the tool
   names and arguments.
 - **After a batch:** a side completion summarizes the outcome from the results.
 - **Supersession:** a newer batch, or the final answer, supersedes narration still running.

@@ -8,7 +8,7 @@ import { ttsSynthesisOptions } from "./tts-provider-config.js";
 import { createSpeechRequests } from "./speech-requests.js";
 import { withSpeechOutputRouting } from "./speech-output-routing.js";
 
-export const DEFAULT_NARRATION_MODEL = "github-copilot/gpt-6-luna";
+export const DEFAULT_NARRATION_MODEL = "github-copilot/gpt-6.1-terra";
 export const TOOL_SUMMARY_CUSTOM_TYPE = "agent-utils-tool-summary";
 
 const SENSITIVE_KEY = /(api[-_]?key|token|secret|password|passwd|authorization|cookie|credential|private[-_]?key)/i;

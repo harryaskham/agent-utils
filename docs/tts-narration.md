@@ -190,7 +190,7 @@ explicitly.
     },
     "narrate": {
       "enabled": true,
-      "model": "github-copilot/gpt-6-luna",
+      "model": "github-copilot/gpt-6.1-terra",
       "speed": 2,
       "style": "excited",
       "styleDegree": 1.6,
@@ -234,7 +234,7 @@ Environment overrides are `PI_TTS_PREFIX_WITH_SESSION_NAME` and
 
 ```text
 /narrate
-/narrate model=github-copilot/gpt-6-luna
+/narrate model=github-copilot/gpt-6.1-terra
 /narrate style=excited styledegree=1.6
 /narrate prefix="$AGENT_ID: " suffix=" done"
 /narrate reasoning_summaries=true
@@ -243,7 +243,7 @@ Environment overrides are `PI_TTS_PREFIX_WITH_SESSION_NAME` and
 /narrate status
 ```
 
-The default narration model is `github-copilot/gpt-6-luna`, overridable with
+The default narration model is `github-copilot/gpt-6.1-terra`, overridable with
 `PI_NARRATE_MODEL` or the runtime command. Narration normally inherits
 `agentUtils.tts.speed`, but `agentUtils.narrate.speed`, `PI_NARRATE_SPEED`, or
 `/narrate speed=2` applies a per-call speech-rate override without changing

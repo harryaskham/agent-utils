@@ -179,7 +179,7 @@ test("/narrate infers its sentences with the host's models, as TUI narration doe
   const requests = [];
   const reply = (value) => ({ role: "assistant", content: [{ type: "text", text: value }], stopReason: "stop" });
   const modelRegistry = {
-    find: (provider, id) => (provider === "github-copilot" && id === "gpt-6-luna" ? { provider, id } : undefined),
+    find: (provider, id) => (provider === "github-copilot" && id === "gpt-6.1-terra" ? { provider, id } : undefined),
     async complete(model, context, options) {
       const payload = JSON.parse(context.messages[0].content[0].text);
       requests.push({ model: `${model.provider}/${model.id}`, payload, maxTokens: options.maxTokens });
@@ -193,7 +193,7 @@ test("/narrate infers its sentences with the host's models, as TUI narration doe
   await host.emit("s1", toolStart("t1", "bash", { command: "ls tools" }));
   await host.emit("s1", { ...toolEnd("t1", "bash"), result: { content: [{ type: "text", text: "build.sh\nrelease.sh" }] } });
   assert.deepEqual(host.spoken.map(({ text }) => text), ["I'm listing the tools folder to find the build script.", "The build script lives in tools/build.sh."]);
-  assert.equal(requests[0].model, "github-copilot/gpt-6-luna");
+  assert.equal(requests[0].model, "github-copilot/gpt-6.1-terra");
   assert.deepEqual(requests[0].payload, { phase: "before", tools: [{ name: "bash", arguments: { command: "ls tools" } }] });
   assert.equal(requests[1].payload.phase, "after");
   assert.match(requests[1].payload.results[0].text, /build\.sh/);
@@ -365,7 +365,7 @@ test("settings round-trip through durable state and survive a restart", async ()
 
   const second = fakeHost({ store });
   await second.command("s1", "/narrate status");
-  assert.match(second.notifications.at(-1).text, /^narrate:on · phases:after · model:github-copilot\/gpt-6-luna · speed:tts · style:cheerful · styledegree:1.4 · reasoning-summaries:off/);
+  assert.match(second.notifications.at(-1).text, /^narrate:on · phases:after · model:github-copilot\/gpt-6.1-terra · speed:tts · style:cheerful · styledegree:1.4 · reasoning-summaries:off/);
   await second.emit("s1", assistantEnd([text("Restored.")]));
   assert.deepEqual(second.spoken.map(({ text }) => text), ["Agent: Restored."]);
 });
