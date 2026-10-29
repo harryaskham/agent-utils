@@ -22,6 +22,7 @@ List it in a pi-daemon profile's `extensions:` beside `tts.mjs`. A session's spe
 | `/call mute`, `/call unmute` | Drop the microphone's audio while the call stays up. |
 | `/call hangup` (`end`, `stop`, `off`) | Hang up. Speech already heard is still sent. |
 | `/call status` | The call, its device and server, provider, model, turns sent and VAD settings. |
+| `/call devices` | The microphones (Pulse sources) the session's server has, the chosen one marked. `device=` completes from them. |
 | `/stt [on\|ptt\|off\|cancel\|status\|key=value]` | Dictation, the same as a call but it never hangs up on silence. |
 | `/ptt [on\|talk\|send\|cancel\|off\|status\|key=value]` | Push-to-talk dictation. |
 
@@ -39,6 +40,9 @@ restart:
   `hangup_after=5m|off` (silence before a call hangs up).
 
 An empty value (`server=`) removes a session's own setting. A value is checked before it is kept.
+A `device=` the session's Pulse server does not have is refused, with the names it has; when the
+server cannot be asked (`pactl` fails), the name is kept as given. The Nix package records
+`pactl` beside `pacat`.
 
 Defaults come in order:
 1. settings.json `agentUtils.stt`, including the Azure auth it shares with `tts`;

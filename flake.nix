@@ -133,7 +133,7 @@
             chmod -R u+w $out
             echo '{ "type": "module" }' > $out/package.json
             ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-              echo '{ "pacat": "${pkgs.pulseaudio}/bin/pacat" }' > $out/extensions/durable/runtime-paths.json
+              echo '{ "pacat": "${pkgs.pulseaudio}/bin/pacat", "pactl": "${pkgs.pulseaudio}/bin/pactl" }' > $out/extensions/durable/runtime-paths.json
             ''}
             echo 'export * from "./extensions/durable/tts.mjs";' > $out/tts.mjs
             # image_share, audio_share and tendril_capture (bd-647b05).

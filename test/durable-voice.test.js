@@ -115,7 +115,7 @@ async function until(check, label) {
   assert.fail(`timed out waiting for ${label}`);
 }
 
-function setup({ env = {}, persisted = {}, speaking = () => false } = {}) {
+function setup({ env = {}, persisted = {}, speaking = () => false, listSources } = {}) {
   let clock = 1_000_000;
   const mics = microphones();
   const heard = [];
@@ -133,6 +133,7 @@ function setup({ env = {}, persisted = {}, speaking = () => false } = {}) {
     setInterval: (fn) => { const timer = { fn }; timers.add(timer); return timer; },
     clearInterval: (timer) => timers.delete(timer),
     log: () => {},
+    listSources: listSources ?? (async ({ env: sessionEnv }) => ({ ok: false, server: sessionEnv.PULSE_SERVER ?? null, error: "no pactl in tests" })),
   });
   const commands = createVoiceCommands({ task, now: () => clock });
   const tools = createVoiceTools({ task, now: () => clock });
@@ -431,4 +432,52 @@ test("Ctrl-Space sends /ptt talk to the focused session's daemon when it runs vo
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(offerDaemonPtt(pi), false, "a daemon without voice input: the press stays local");
   assert.equal(calls.length, 2);
+});
+
+test("/call devices lists the session's Pulse sources; an unknown device is refused with them; device= completes", async () => {
+  const asked = [];
+  const listSources = async ({ env: sessionEnv }) => {
+    asked.push(sessionEnv.PULSE_SERVER ?? null);
+    return sessionEnv.PULSE_SERVER === "tcp:down:4713"
+      ? { ok: false, server: sessionEnv.PULSE_SERVER, error: "Connection refused" }
+      : { ok: true, server: sessionEnv.PULSE_SERVER ?? null, sources: [{ name: "alsa_input.usb-mic", state: "suspended" }, { name: "bluez_input.headset", state: "running" }, { name: "alsa_output.speakers.monitor", state: "idle" }] };
+  };
+  const voice = setup({ env: { PULSE_SERVER: "tcp:mac:4713" }, listSources });
+  const store = durable("s");
+  const { ctx, notices } = commandContext(store, "s");
+
+  await voice.commands.call.run("devices", ctx);
+  assert.equal(notices.at(-1), [
+    "Pulse sources on tcp:mac:4713 (none chosen: the server's default):",
+    "· alsa_input.usb-mic (suspended)",
+    "· bluez_input.headset (running)",
+    "· alsa_output.speakers.monitor (idle)",
+    "Choose one with /call device=NAME.",
+  ].join("\n"));
+
+  // A name the server does not have: refused, nothing kept, nothing started.
+  await voice.commands.call.run("device=source.bluetooth", ctx);
+  assert.match(notices.at(-1), /^\/call: no Pulse source 'source\.bluetooth'\. Pulse sources on tcp:mac:4713/);
+  assert.match(notices.at(-1), /bluez_input\.headset/);
+  assert.deepEqual(store.doc()?.settings ?? {}, {});
+  assert.equal(store.tasks.length, 0);
+
+  // One it has: kept, and the call starts with it.
+  await voice.commands.call.run("device=bluez_input.headset", ctx);
+  assert.match(notices.at(-1), /^started · call:on · vad · listening · device:bluez_input\.headset · server:tcp:mac:4713/);
+  await voice.commands.call.run("devices", ctx);
+  assert.match(notices.at(-1), /● bluez_input\.headset \(running\)/);
+
+  // A server that cannot be asked: the name is kept as given (nothing to check it against).
+  await voice.commands.call.run("server=tcp:down:4713 device=alsa_input.usb-mic", ctx);
+  assert.match(notices.at(-1), /settings applied/);
+  assert.equal(store.doc().settings.server, "tcp:down:4713");
+  await voice.commands.call.run("server=", ctx);
+
+  // Completions: the verbs (devices among them), and after device= the server's sources.
+  assert.ok((await voice.commands.call.getArgumentCompletions("de", ctx)).some((item) => item.value === "devices"));
+  const items = await voice.commands.call.getArgumentCompletions("vad device=bl", { ...ctx, harness: { ...ctx.harness, snapshot: async () => store.doc() } });
+  assert.deepEqual(items, [{ value: "vad device=bluez_input.headset", label: "bluez_input.headset", description: "running" }]);
+  assert.ok(asked.length >= 4);
+  await voice.commands.call.run("hangup", ctx);
 });

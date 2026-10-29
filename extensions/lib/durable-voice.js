@@ -98,6 +98,44 @@ export function defaultCapture({ env, executables = {}, streamName, spawnImpl = 
   return proc;
 }
 
+/**
+ * The Pulse sources a session's environment reaches (`pactl list short sources`, with its
+ * PULSE_SERVER): `{ ok, server, sources: [{ name, state }] }`, or `ok: false` and why.
+ */
+export function defaultListSources({ env, executables = {}, spawnImpl = spawn, timeoutMs = 5_000 }) {
+  return new Promise((resolve) => {
+    const server = env.PULSE_SERVER || null;
+    let out = "";
+    let err = "";
+    let child;
+    try {
+      child = spawnImpl(executables.pactl || "pactl", ["list", "short", "sources"], { env, stdio: ["ignore", "pipe", "pipe"] });
+    } catch (error) {
+      resolve({ ok: false, server, error: error?.message || String(error) });
+      return;
+    }
+    const timer = setTimeout(() => { try { child.kill?.("SIGKILL"); } catch {} }, timeoutMs);
+    timer.unref?.();
+    child.stdout?.on?.("data", (chunk) => { if (out.length < 64_000) out += chunk; });
+    child.stderr?.on?.("data", (chunk) => { if (err.length < 2_000) err += chunk; });
+    child.on?.("error", (error) => { clearTimeout(timer); resolve({ ok: false, server, error: error?.message || String(error) }); });
+    child.on?.("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) { resolve({ ok: false, server, error: err.trim() || `pactl exited with ${code}` }); return; }
+      const sources = out.split("\n").map((line) => line.split("\t")).filter((cols) => cols.length >= 2 && cols[1]).map((cols) => ({ name: cols[1], state: (cols[4] ?? "").trim().toLowerCase() }));
+      resolve({ ok: true, server, sources });
+    });
+  });
+}
+
+/** One line per source, the session's marked, monitors (an output's loopback) last. */
+export function sourcesText(listed, current) {
+  if (!listed.ok) return `Pulse sources on ${listed.server ?? "the default server"} could not be listed: ${listed.error}`;
+  const sorted = [...listed.sources].sort((a, b) => Number(a.name.endsWith(".monitor")) - Number(b.name.endsWith(".monitor")));
+  const lines = sorted.map((source) => `${source.name === current ? "●" : "·"} ${source.name}${source.state ? ` (${source.state})` : ""}`);
+  return [`Pulse sources on ${listed.server ?? "the default server"}${current ? "" : " (none chosen: the server's default)"}:`, ...lines].join("\n");
+}
+
 const bounded = (text, max) => {
   const value = String(text ?? "");
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
@@ -388,11 +426,13 @@ function voiceDeps({
   setInterval: setTimer = setInterval,
   clearInterval: clearTimer = clearInterval,
   tickMs = 1000,
+  listSources,
   log = (line) => { try { process.stderr.write(`${line}\n`); } catch {} },
 } = {}) {
   return {
     env, persisted, audioProviders, executables, transcribe, speaking, now, tickMs, log,
     capture: capture ?? ((options) => defaultCapture({ ...options, ...(spawnImpl ? { spawnImpl } : {}) })),
+    listSources: listSources ?? ((options) => defaultListSources({ executables, ...options, ...(spawnImpl ? { spawnImpl } : {}) })),
     setInterval: setTimer,
     clearInterval: clearTimer,
   };
@@ -493,7 +533,7 @@ export function voiceStatus(state, deps, now = Date.now()) {
 }
 
 const USAGE = {
-  call: "/call [vad|ptt] [key=value …] starts a voice call (or changes the live one); /call talk (PTT: start, then send), send, cancel, mute, unmute, hangup, status. Settings: device= server= provider= model= language= energy= … mode= deliver=followup|steer hangup_after=5m|off.",
+  call: "/call [vad|ptt] [key=value …] starts a voice call (or changes the live one); /call talk (PTT: start, then send), send, cancel, mute, unmute, hangup, status; /call devices lists the microphones (Pulse sources). Settings: device= server= provider= model= language= energy= … mode= deliver=followup|steer hangup_after=5m|off.",
   stt: "/stt [on|ptt|off|cancel|status|key=value …]: dictation run by the daemon, each turn sent as your message. Settings as /call (device=, server=, provider=, model=, …).",
   ptt: "/ptt [on|talk|send|cancel|off|status|key=value …]: push-to-talk run by the daemon. /ptt talk starts recording; /ptt talk (or send) sends.",
 };
@@ -543,6 +583,19 @@ export function createVoiceCommands({ task, now = () => Date.now() } = {}) {
       const values = parsed.values;
       if (Object.keys(values).length) {
         rejectSurfaceAuthKeys(values, surface, { providerName: values.provider || deps.env.PI_STT_PROVIDER || deps.persisted.provider || "azure", audioProviders: deps.audioProviders });
+        // A device the session's Pulse server does not have is refused, with the ones it has.
+        if (["device", "source", "server"].some((key) => Object.hasOwn(values, key) && String(values[key]).trim() !== "")) {
+          const next = { ...(await ops.read(commitOf(ctx))).settings, ...values };
+          for (const key of Object.keys(values)) if (String(values[key]).trim() === "") delete next[key];
+          validateCallValues(next, surface);
+          const resolved = voiceSettings(next, { ...deps, surface });
+          if (resolved.device !== null) {
+            const listed = await deps.listSources({ env: resolved.env });
+            if (listed.ok && !listed.sources.some((source) => source.name === resolved.device)) {
+              throw new Error(`${surface}: no Pulse source '${resolved.device}'. ${sourcesText(listed, null)}`);
+            }
+          }
+        }
         await ops.configure(commitOf(ctx), values, surface);
       }
       if (parsed.positionals.length > 1) throw new Error(`${surface}: unexpected '${parsed.positionals[1]}'`);
@@ -556,6 +609,11 @@ export function createVoiceCommands({ task, now = () => Date.now() } = {}) {
         case "status":
           ctx.notify(await status(ctx));
           return;
+        case "devices": case "sources": {
+          const resolved = voiceSettings((await ops.read(commit)).settings, { ...deps, surface });
+          ctx.notify(`${sourcesText(await deps.listSources({ env: resolved.env }), resolved.device)}\nChoose one with ${surface} device=NAME.`);
+          return;
+        }
         case "talk":
           ctx.notify(await talk(ctx, kind));
           return;
@@ -592,10 +650,27 @@ export function createVoiceCommands({ task, now = () => Date.now() } = {}) {
     }
   };
 
-  const completions = (verbs) => (prefix) => {
-    const text = String(prefix ?? "").trimStart().toLowerCase();
+  // The verbs; after device= (or source=), the sources the session's Pulse server has.
+  const completions = (verbs) => async (prefix, ctx) => {
+    const raw = String(prefix ?? "");
+    const device = /^(.*?(?:^|\s)(?:device|source)=)(\S*)$/.exec(raw);
+    if (device !== null) {
+      let settings = {};
+      try {
+        const doc = typeof ctx?.harness?.snapshot === "function" ? await ctx.harness.snapshot(VOICE_DOC, ctx.context) : undefined;
+        settings = doc?.settings ?? {};
+      } catch {}
+      let env;
+      try { env = voiceSettings(settings, deps).env; } catch { return null; }
+      const listed = await deps.listSources({ env });
+      if (!listed.ok) return null;
+      return listed.sources
+        .filter((source) => source.name.startsWith(device[2]))
+        .map((source) => ({ value: `${device[1]}${source.name}`, label: source.name, ...(source.state ? { description: source.state } : {}) }));
+    }
+    const text = raw.trimStart().toLowerCase();
     if (/\s/.test(text)) return null;
-    return verbs.filter((verb) => verb.startsWith(text)).map((verb) => ({ value: verb, label: verb }));
+    return [...verbs, "devices"].filter((verb) => verb.startsWith(text)).map((verb) => ({ value: verb, label: verb }));
   };
   return {
     call: { description: `Voice call with this agent, run by the daemon. ${USAGE.call}`, run: run("call", "call"), getArgumentCompletions: completions(["vad", "ptt", "talk", "send", "cancel", "mute", "unmute", "hangup", "status"]) },
