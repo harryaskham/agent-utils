@@ -259,7 +259,9 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
 
     pi.on("session_start", async (_event, ctx) => {
       lastCtx = ctx;
-      if (config.enabled && !enabled && !setEnabled(ctx, true)) warnOnce(`visual thoughts unavailable: ${unavailable}`);
+      // Enabled by settings where it cannot draw (tmux, no fullscreen, headless): quietly off;
+      // /thoughts says why.
+      if (config.enabled && !enabled) setEnabled(ctx, true);
       else if (enabled) { try { focus(ctx); } catch {} }
     });
 
