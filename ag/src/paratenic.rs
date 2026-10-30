@@ -612,14 +612,7 @@ impl Connection {
         let (client_id, lease) = IdentityLease::acquire(&endpoint.url);
         tokio::time::timeout(
             timeout,
-            client.initialize(
-                client_id.clone(),
-                ahp_types::SUPPORTED_PROTOCOL_VERSIONS
-                    .iter()
-                    .map(|v| (*v).to_owned())
-                    .collect(),
-                vec![],
-            ),
+            client.initialize(client_id.clone(), offered_versions(), vec![]),
         )
         .await
         .map_err(|_| Error::Transport("AHP initialize timed out".into()))?
@@ -681,6 +674,23 @@ impl Connection {
         self.client.shutdown().await;
     }
 }
+
+/// The AHP versions `ag` offers, most preferred first: AHP 1.0's baselines,
+/// then 0.8.0 for hosts not yet on 1.0 (Paratenic, pi-daemons before
+/// pi-daemon bd-0e06d8). The 1.0 types read a 0.8 host: what 1.0 renamed or
+/// reshaped (a failed session's `creationFailed`, a turn's `error`) is kept as
+/// unknown or ignored, and `ag` only needs a ready session's input requests.
+pub fn offered_versions() -> Vec<String> {
+    ahp_types::SUPPORTED_PROTOCOL_VERSIONS
+        .iter()
+        .copied()
+        .chain([LEGACY_AHP_VERSION])
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The AHP version Paratenic, Culture and older pi-daemons speak.
+const LEGACY_AHP_VERSION: &str = "0.8.0";
 
 fn rpc(error: ahp::ClientError) -> Error {
     Error::Transport(format!("AHP: {}", redact(&error.to_string())))
@@ -1689,6 +1699,32 @@ mod tests {
         assert_eq!(
             context.as_deref(),
             Some("Released .67 native tools are prepared on sgu24.")
+        );
+    }
+
+    #[test]
+    fn offers_ahp_1_0_then_0_8_and_reads_0_8_sessions() {
+        // bd-84fbac: 1.0 first, 0.8 for Paratenic and older pi-daemons.
+        assert_eq!(offered_versions(), ["1.0.0", "0.9.0", "0.8.0"]);
+        // A 0.8 host's failed session parses, and its questions are not actionable.
+        let state: SessionState = serde_json::from_value(serde_json::json!({
+            "provider": "pi", "title": "t", "status": 24, "lifecycle": "creationFailed",
+            "activeClients": [], "defaultChat": "ahp-chat:/s/1",
+            "chats": [{"resource": "ahp-chat:/s/1", "title": "t", "status": 24, "modifiedAt": "2026-10-30T00:00:00Z"}],
+            "inputNeeded": [{"kind": "chatInput", "id": "q1", "chat": "ahp-chat:/s/1", "request": {"id": "q1", "message": "Ship?", "questions": [
+                {"kind": "text", "id": "a", "message": "Ship?", "required": true}
+            ]}}],
+        }))
+        .expect("a 0.8 session parses with the 1.0 types");
+        assert_eq!(
+            state.lifecycle,
+            SessionLifecycle::Unknown("creationFailed".into())
+        );
+        let choices = choices_for("node", "ahp-session:/s", &state, true, None);
+        assert_eq!(choices.len(), 1);
+        assert_eq!(
+            choices[0].stale_reason.as_deref(),
+            Some("session is not ready")
         );
     }
 

@@ -193,6 +193,11 @@ fn answer_dispatches_exact_chat_input_completed_and_reports_authoritative_echo()
         json!({"state": "submitted", "value": {"kind": "selected", "value": "opt-b"}})
     );
     assert_eq!(receipt["data"]["client_seq"], dispatch["clientSeq"]);
+    // bd-84fbac: ag offers AHP 1.0 first and 0.8.0 for this 0.8 (Paratenic) host.
+    assert_eq!(
+        fake.lock().unwrap().offered[0],
+        ["1.0.0", "0.9.0", "0.8.0"].map(String::from).to_vec()
+    );
 
     // Already answered: refused locally as gone, never re-dispatched.
     let (code, again) = fixture.json(&[
@@ -218,9 +223,11 @@ fn pi_daemon_sessions_join_the_node_deduplicated_and_answer_through_the_daemon()
     // A node's Paratenic lists a TUI Pi asking choice-1. Its pi-daemon /ahp
     // lists a Durable session asking with ask_user and the same TUI Pi again
     // (as tui-…), found through pi-client's client.hosts (bd-4fc36c).
+    // The pi-daemon speaks AHP 1.0 and Paratenic 0.8.0 (bd-84fbac).
     let (paratenic, paratenic_fake) = fake_host();
     let (daemon, daemon_fake) = fake_ahp::fake_host_with(fake_ahp::Fake {
         pi_daemon: true,
+        current: true,
         ..Default::default()
     });
     let fixture = Fixture::new(&[("alpha", url(paratenic))]);

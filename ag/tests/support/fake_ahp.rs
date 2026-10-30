@@ -34,6 +34,10 @@ pub struct Fake {
     /// Refuse the WebSocket upgrade with this HTTP status (a bridge before
     /// pi-daemon 1.11 answers 404 on /ahp).
     pub refuse: Option<u16>,
+    /// The protocol versions each client offered at `initialize`.
+    pub offered: Vec<Vec<String>>,
+    /// Speak AHP 1.0 (a pi-daemon after bd-0e06d8) instead of 0.8.0 (Paratenic).
+    pub current: bool,
 }
 
 pub fn select_request(id: &str, message: &str, freeform: bool) -> Value {
@@ -243,12 +247,18 @@ pub async fn serve_connection(stream: tokio::net::TcpStream, state: Arc<Mutex<Fa
         };
         let result = match method.as_str() {
             "initialize" => {
-                state
-                    .lock()
-                    .unwrap()
-                    .clients
+                let mut fake = state.lock().unwrap();
+                fake.clients
                     .push(params["clientId"].as_str().unwrap_or_default().into());
-                Some(json!({"protocolVersion": "0.8.0", "serverSeq": seq, "snapshots": []}))
+                let offered: Vec<String> = params["protocolVersions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect();
+                fake.offered.push(offered);
+                let version = if fake.current { "1.0.0" } else { "0.8.0" };
+                Some(json!({"protocolVersion": version, "serverSeq": seq, "snapshots": []}))
             }
             "listSessions" => Some(
                 json!({"items": sessions(&answered).into_iter().map(|(s, _)| s).collect::<Vec<_>>()}),

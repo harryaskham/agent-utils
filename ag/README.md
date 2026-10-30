@@ -100,7 +100,8 @@ hosts:
 pi-daemon and its bridge off, as before; `paratenic.pi_settings` still names the Pi settings file.
 
 **pi-daemon agents.** Each node's pi-daemon serves AHP, and `ag choices`, `ag dash`,
-`ag doctor` and `ag_choices_answer` query it whether or not Paratenic is enabled:
+`ag doctor` and `ag_choices_answer` query it whether or not Paratenic is enabled. `ag` speaks AHP 1.0 and offers 0.8.0 as well,
+so it reaches Paratenic and pi-daemons not yet on 1.0:
 
 - **Durable sessions** (`ask_user`): the daemon's `/ahp` (`client.hosts[].url`, port 7463).
 - **TUI Pis**: the node bridge's `/ahp` (`client.hosts[].bridge`, port 7464; pi-daemon 1.11).
