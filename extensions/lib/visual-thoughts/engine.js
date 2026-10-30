@@ -1,23 +1,29 @@
-// Visual thoughts: the engine. While the agent works, its output feeds a digest; when enough is
-// new (and the last image is old enough), a fast model writes an image prompt from it and an
-// image model paints it. Finished images join the rotation, which crossfades the backdrop
-// between them. Hosts supply the surface (where frames go), the prompt model and the provider;
-// the engine never blocks the agent and every failure is a warning at most.
+// Visual thoughts: the display engine. Images join a rotation that crossfades the backdrop
+// between them. They come from the painter (painter.js: the agent's output, a prompt model, an
+// image model) painting here, or, in slot mode, from the session's `backdrop` slot, which a
+// pi-daemon module paints once for every client (the engine only shows them). Hosts supply the
+// surface (where frames go), the prompt model and the provider; the engine never blocks the
+// agent and every failure is a warning at most.
 import { readFileSync, unlinkSync } from "node:fs";
 
-import { ImageRateLimitError } from "./image-provider.js";
-import { buildImagePromptRequest, createDigest, normalizeImagePrompt } from "./prompter.js";
+import { createPainter } from "./painter.js";
 import { createRenderer as defaultCreateRenderer } from "./renderer.js";
 import { createRotation } from "./rotation.js";
 
 const ease = (t) => t * t * (3 - 2 * t);
+
+/** A slot image's id here: its digest (the same image keeps its id across slot updates), else its URI. */
+export function slotImageId(ref) {
+  const key = String(ref?.digest || ref?.uri || "");
+  return `slot-${key.replace(/[^A-Za-z0-9]+/g, "-").slice(-80)}`;
+}
 
 /**
  * `config` is the live config object (runtime changes mutate it, then call `configure()`).
  * `promptTurn(request, signal)` resolves the prompt model's reply text; `provider.generate`
  * paints; `surface` keeps named images in the terminal and shows one (tui-surface.js has the
  * shape: size, transport, has, upload, show, shown, drop, clear); `createRenderer` makes the
- * renderer (renderer.js).
+ * renderer (renderer.js). `fetchImage(uri)` resolves a slot image's PNG bytes (slot mode).
  */
 export function createVisualThoughtsEngine({
   config,
@@ -32,6 +38,7 @@ export function createVisualThoughtsEngine({
   createRenderer = defaultCreateRenderer,
   trace = null,
   look = () => ({ fit: config.fit, feather: config.feather, opacity: config.opacity }),
+  fetchImage = null,
 }) {
   const log = typeof trace === "function" ? (line) => { try { trace(`${now()} ${line}`); } catch {} } : () => {};
   if (typeof trace === "function") {
@@ -44,121 +51,61 @@ export function createVisualThoughtsEngine({
     }, 10);
     lagTimer.unref?.();
   }
-  const digest = createDigest();
+  // Slot mode: the session's backdrop slot supplies the images (and hints); nothing paints here.
+  let slotMode = false;
+  let slotHints = {};
+  let slotRev = -1;
+  let slotCurrent = null;
   const rotation = createRotation(rotationOptions());
   /** id → { id, prompt, model, batch, at, ms, png?, path?, sent? } */
   const images = new Map();
-  const inflight = new Set();
-  const recentPrompts = [];
   let enabled = false;
   let disposed = false;
-  let inRun = false;
-  let flushAfterRun = false;
-  let runCount = 0;
-  let nextAllowedAt = 0;
-  let failures = 0;
   let displayTimer = null;
-  let wakeTimer = null;
-  let seq = 0;
   let paused = false;
-  let activity = "idle"; // idle | prompting | painting
   let lastError = "";
-  let generated = 0;
-  let lastMs = 0;
-  let currentProvider = provider;
 
   function rotationOptions() {
-    return { holdMs: config.holdMs, fadeMs: config.fadeMs, minShowMs: config.minShowMs, minSet: config.minSet, maxImages: config.maxImages };
+    const holdMs = slotMode && Number.isFinite(slotHints.cycleMs) && slotHints.cycleMs >= 1_000 ? slotHints.cycleMs : config.holdMs;
+    return { holdMs, fadeMs: config.fadeMs, minShowMs: config.minShowMs, minSet: slotMode ? 1 : config.minSet, maxImages: slotMode ? 64 : config.maxImages };
   }
 
-  function setActivity(next) {
-    if (activity === next) return;
-    activity = next;
-    try { onChange(status()); } catch {}
+  /** The look: the slot's hints where it gives them (the painter's settings), else this host's. */
+  function currentLook() {
+    const own = look();
+    if (!slotMode) return own;
+    const pick = (key, ok) => (ok(slotHints[key]) ? slotHints[key] : own[key]);
+    return {
+      fit: pick("fit", (v) => ["cover", "contain", "stretch"].includes(v)),
+      feather: pick("feather", (v) => Number.isFinite(v) && v >= 0 && v <= 0.5),
+      opacity: pick("opacity", (v) => Number.isFinite(v) && v >= 0 && v <= 1),
+    };
   }
 
-  // ── generation ────────────────────────────────────────────────────────────
-
-  function scheduleWake(at) {
-    if (wakeTimer) return;
-    wakeTimer = timers.setTimeout(() => { wakeTimer = null; maybeGenerate(); }, Math.max(50, at - now()));
-    wakeTimer?.unref?.();
-  }
-
-  function maybeGenerate({ force = false } = {}) {
-    if (!enabled || disposed) return false;
-    if (inflight.size >= config.maxConcurrent) return false;
-    if (!force) {
-      if (!inRun && !flushAfterRun) return false;
-      if (runCount >= config.maxPerRun) return false;
-      const threshold = runCount === 0 ? config.firstChars : config.minChars;
-      if (digest.pending < Math.max(1, threshold)) return false;
-    }
-    if (now() < nextAllowedAt) { scheduleWake(nextAllowedAt); return false; }
-    flushAfterRun = false;
-    void generate();
-    return true;
-  }
-
-  async function generate() {
-    const snapshot = digest.snapshot();
-    digest.mark();
-    runCount += 1;
-    nextAllowedAt = now() + config.minIntervalMs;
-    const batch = rotation.batch;
-    const controller = new AbortController();
-    inflight.add(controller);
-    try {
-      setActivity("prompting");
-      const request = buildImagePromptRequest({ digest: snapshot, recentPrompts, style: config.style });
-      const reply = await promptTurn(request, controller.signal);
-      if (controller.signal.aborted) return;
-      const prompt = normalizeImagePrompt(reply, { style: config.style });
-      if (!prompt) throw new Error("the prompt model returned no prompt");
-      recentPrompts.push(prompt);
-      if (recentPrompts.length > 5) recentPrompts.shift();
-      setActivity("painting");
-      const result = await currentProvider.generate(prompt, { signal: controller.signal });
-      if (controller.signal.aborted || disposed) return;
-      seq += 1;
-      const id = `vt-${now().toString(36)}-${seq}`;
-      const record = { id, prompt, model: result.model, batch, at: now(), ms: result.ms };
+  const painter = createPainter({
+    config,
+    promptTurn,
+    provider,
+    now,
+    timers,
+    warn,
+    onChange: () => { try { onChange(status()); } catch {} },
+    onImage: async (record, png) => {
       let path;
       if (store) {
-        try { path = await store.save(record, result.png); } catch (error) { warn(`visual thoughts: could not save an image: ${error.message}`); }
+        try { path = await store.save(record, png); } catch (error) { warn(`visual thoughts: could not save an image: ${error.message}`); }
       }
-      images.set(id, { ...record, png: result.png, path });
-      generated += 1;
-      lastMs = result.ms;
-      failures = 0;
-      lastError = "";
-      if (enabled) {
-        // Prepared (and its hold uploaded) before it joins the rotation, so it shows at once.
-        await ensureHold(id);
-        if (disposed || !enabled) return;
-        rotation.add({ id, batch }, now());
-        dropUnused();
-        render();
-      }
-      if (store && config.keep > 0 && generated % 8 === 0) store.prune(config.keep).catch(() => {});
-    } catch (error) {
-      if (controller.signal.aborted || disposed) return;
-      if (error instanceof ImageRateLimitError) {
-        nextAllowedAt = Math.max(nextAllowedAt, now() + error.retryAfterMs);
-        lastError = error.message;
-      } else {
-        failures += 1;
-        nextAllowedAt = Math.max(nextAllowedAt, now() + Math.min(300_000, 15_000 * 2 ** (failures - 1)));
-        lastError = error?.message || String(error);
-        warn(`visual thoughts: ${lastError}`);
-      }
-    } finally {
-      inflight.delete(controller);
-      if (!inflight.size) setActivity("idle");
-      else try { onChange(status()); } catch {}
-      maybeGenerate();
-    }
-  }
+      images.set(record.id, { ...record, png, path });
+      if (!enabled || slotMode) return;
+      // Prepared (and its hold uploaded) before it joins the rotation, so it shows at once.
+      await ensureHold(record.id);
+      if (disposed || !enabled) return;
+      rotation.add({ id: record.id, batch: record.batch }, now());
+      dropUnused();
+      render();
+      if (store && config.keep > 0 && painter.status().generated % 8 === 0) store.prune(config.keep).catch(() => {});
+    },
+  });
 
   // ── display ──────────────────────────────────────────────────────────────
   // Holds: each image is uploaded once at up to the screen's resolution and placed while it is
@@ -187,7 +134,7 @@ export function createVisualThoughtsEngine({
   function ensureConfigured(size = surface.size()) {
     if (!size) return null;
     const area = { width: size.cols * size.cellWidthPx, height: size.rows * size.cellHeightPx };
-    const { fit, feather, opacity } = look();
+    const { fit, feather, opacity } = currentLook();
     const key = `${area.width}x${area.height}:${fit}:${feather}:${opacity}:${config.transitionPixels}`;
     if (key === areaKey) return configuring;
     areaKey = key;
@@ -398,29 +345,27 @@ export function createVisualThoughtsEngine({
   let lastFrameAt = 0;
   let shownFrames = 0;
 
+  /** Forget an image: its holds, its renderer copy, its place in the rotation. */
+  function forget(id) {
+    images.delete(id);
+    rotation.remove(id);
+    for (const key of [...liveHolds]) if (key.startsWith(`hold:${id}:`)) { surface.drop(key); liveHolds.delete(key); }
+    holdRequests.delete(id);
+    void renderer?.drop(id).catch(() => {});
+  }
+
   function dropUnused() {
     const keep = new Set(rotation.ids());
-    for (const id of images.keys()) {
-      if (keep.has(id)) continue;
-      images.delete(id);
-      for (const key of [...liveHolds]) if (key.startsWith(`hold:${id}:`)) { surface.drop(key); liveHolds.delete(key); }
-      holdRequests.delete(id);
-      void renderer?.drop(id).catch(() => {});
-    }
+    for (const id of [...images.keys()]) if (!keep.has(id)) forget(id);
   }
 
   function status() {
+    const painting = painter.status();
     return {
+      ...painting,
       enabled,
-      activity,
-      inRun,
-      runCount,
-      generated,
-      lastMs,
-      lastError,
-      provider: currentProvider?.describe?.() || "",
-      waitMs: Math.max(0, nextAllowedAt - now()),
-      prompt: recentPrompts.at(-1) || "",
+      slot: slotMode,
+      lastError: lastError || painting.lastError,
       ...rotation.status(),
     };
   }
@@ -429,41 +374,91 @@ export function createVisualThoughtsEngine({
     status,
     /** Output while the agent works: `kind` thinking | text | tool | result | user. */
     output(kind, text) {
-      if (!enabled || disposed) return;
-      digest.add(kind, text);
-      maybeGenerate();
+      if (!slotMode) painter.output(kind, text);
     },
     /** An agent run begins (a prompt): its images form a new batch. */
     runStart() {
-      inRun = true;
-      flushAfterRun = false;
-      runCount = 0;
+      if (slotMode) return;
+      painter.runStart();
       rotation.newBatch();
     },
     /** The run ended: one last image from what is left, if enough. */
     runEnd() {
-      inRun = false;
-      if (enabled && runCount < config.maxPerRun && digest.pending >= Math.max(1, config.firstChars)) {
-        flushAfterRun = true;
-        maybeGenerate();
-      }
+      if (!slotMode) painter.runEnd();
     },
     setEnabled(next) {
       if (disposed) return;
       enabled = Boolean(next);
-      if (enabled) { render(); maybeGenerate(); }
-      else {
-        for (const controller of inflight) controller.abort();
-        if (displayTimer) timers.clearTimeout(displayTimer);
-        if (wakeTimer) timers.clearTimeout(wakeTimer);
-        displayTimer = null; wakeTimer = null;
-        endJob();
-        try { surface.clear(); } catch {}
-        // Images stay with the renderer; their holds upload again when shown.
-        holdRequests.clear();
-        setActivity("idle");
-      }
+      painter.setEnabled(enabled && !slotMode);
+      if (enabled) { render(); return; }
+      if (displayTimer) timers.clearTimeout(displayTimer);
+      displayTimer = null;
+      endJob();
+      try { surface.clear(); } catch {}
+      // Images stay with the renderer; their holds upload again when shown.
+      holdRequests.clear();
     },
+    /**
+     * Show the session's backdrop slot (`{ kind: "image-set", images, current, hints, rev }`) instead
+     * of painting here: its images join the rotation as they come (fetched with `fetchImage`), the
+     * ones it drops leave, and a new `current` is shown once the shown image has had its time.
+     * `null` leaves slot mode (painting here again, when enabled).
+     */
+    async syncSlot(slot) {
+      if (disposed) return;
+      if (!slot) {
+        if (!slotMode) return;
+        slotMode = false;
+        slotRev = -1;
+        slotCurrent = null;
+        rotation.clear();
+        for (const id of [...images.keys()]) forget(id);
+        rotation.configure(rotationOptions());
+        painter.setEnabled(enabled);
+        render();
+        return;
+      }
+      if (!slotMode) {
+        slotMode = true;
+        painter.setEnabled(false);
+        rotation.clear();
+        for (const id of [...images.keys()]) forget(id);
+      }
+      if (Number.isFinite(slot.rev) && slot.rev <= slotRev) return;
+      // A slot cleared and set again starts its revisions afresh.
+      slotRev = Number.isFinite(slot.rev) ? slot.rev : -1;
+      const hints = slot.hints && typeof slot.hints === "object" ? slot.hints : {};
+      if (JSON.stringify(hints) !== JSON.stringify(slotHints)) {
+        slotHints = { ...hints };
+        rotation.configure(rotationOptions());
+      }
+      const refs = (Array.isArray(slot.images) ? slot.images : []).filter((ref) => typeof ref?.uri === "string");
+      const ids = refs.map(slotImageId);
+      for (const id of [...images.keys()]) if (!ids.includes(id)) forget(id);
+      for (let index = 0; index < refs.length; index += 1) {
+        const id = ids[index];
+        if (images.has(id)) continue;
+        try {
+          const png = await fetchImage?.(refs[index].uri);
+          if (!png || disposed) continue;
+          images.set(id, { id, prompt: String(refs[index].alt || ""), batch: 0, png: Buffer.from(png) });
+          painter.remember(refs[index].alt);
+          if (enabled) await ensureHold(id);
+          if (!images.has(id)) continue;
+          rotation.add({ id, batch: 0 }, now());
+        } catch (error) {
+          lastError = `slot image: ${error?.message || error}`;
+          warn(`visual thoughts: ${lastError}`);
+        }
+      }
+      const current = ids[Number.isInteger(slot.current) ? slot.current : ids.length - 1];
+      if (current && current !== slotCurrent && images.has(current)) {
+        slotCurrent = current;
+        rotation.focus(current, now());
+      }
+      render();
+    },
+    get slotMode() { return slotMode; },
     get enabled() { return enabled; },
     /** Hold still (an unfocused pane) or carry on cycling. */
     pause(on) {
@@ -473,8 +468,8 @@ export function createVisualThoughtsEngine({
     get paused() { return paused; },
     /** Paint from the current output now, regardless of thresholds (not of rate limits). */
     generateNow() {
-      if (!enabled) return false;
-      return maybeGenerate({ force: true });
+      if (!enabled || slotMode) return false;
+      return painter.paintNow();
     },
     /** Crossfade to the next image now. */
     next() {
@@ -487,14 +482,14 @@ export function createVisualThoughtsEngine({
         if (!record?.id || images.has(record.id)) continue;
         images.set(record.id, { id: record.id, prompt: record.prompt, model: record.model, batch: -1, at: record.at, path: record.path });
         rotation.add({ id: record.id, batch: -1 }, now());
-        if (record.prompt) { recentPrompts.push(record.prompt); if (recentPrompts.length > 5) recentPrompts.shift(); }
+        painter.remember(record.prompt);
       }
       dropUnused();
       render();
     },
     /** Apply changed display/generation settings (and a new provider, if given). */
     configure({ provider: nextProvider } = {}) {
-      if (nextProvider) currentProvider = nextProvider;
+      painter.setProvider(nextProvider);
       rotation.configure(rotationOptions());
       dropUnused();
       render();
@@ -525,6 +520,7 @@ export function createVisualThoughtsEngine({
     dispose() {
       if (disposed) return;
       this.setEnabled(false);
+      painter.dispose();
       disposed = true;
       renderer?.close();
       renderer = null;

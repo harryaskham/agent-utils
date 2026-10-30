@@ -26,6 +26,17 @@ It is off by default. Enable it at startup with `agentUtils.visualThoughts.enabl
 
 Measured on 2026-10-30 (sandbox deployments, ~30-word prompts): `gpt-image-2.5-flare` at 1536×1024 `quality=low` ~14 s through LiteLLM; `MAI-Image-2.5-Flash` / `2.6-Flash` ~10 s at 768×768 and ~13 s at 1344×768 (768 px minimum per side), limited to 2 requests a minute per deployment; `gpt-image-2` / `2.5-sunburst` ~22 s; `gpt-image-1.5` ~28 s. The prompt model adds 2–5 s.
 
+## pi-daemon sessions: painted once, for every client
+
+List `extensions/durable/visual-thoughts.mjs` (the package's `visual-thoughts.mjs`) in a pi-daemon profile's `extensions`. With pi-daemon 1.15+ (session UI slots), the session's worker paints, once per session, and every client shows the same images: each pi-client pane on the session, on any machine, `/web` and Culture (AHP `_meta["pi-daemon/ui"]`).
+
+- **The slot.** The module owns the session's `backdrop` slot: `{ kind: "image-set", images, current, hints }`. `images` are the newest `slotImages` paintings, stored as the session's media (PNG; a painting over the 2 MiB limit is scaled down on a worker thread first); `current` is the one to show now; `hints` say how (`placement`, `opacity`, `fit`, `feather`, `cycleMs` from `holdMs`, `transition`). The module claims the slot, empty, as soon as it meets a session, so clients never paint it themselves as well.
+- **Clients show it.** pi-client sees the module among the session's commands and follows the slot (`session.watchDocument`): images are fetched once by URI, the hints set the look and the cycle, a new `current` is shown once the shown image has had `minShowMs`, and the transitions (effect, fps, layer) stay the client's own. A session without the module, an older pi-daemon (no slots: the module stays quiet) and TUI Pi paint locally as before.
+- **`/thoughts` in pi-client goes to the session.** `on`, `off`, `now`, `next`, `clear`, `status` and the painting settings run as the module's command, for every client: `off` empties the slot; `next` moves everyone on. The display settings (`effect`, `fps`, `layer`, `pixels`, `fade`, `min-show`, `canvas-opacity`, `transport`) stay with the pane. A session's on/off and settings persist in the module's session state.
+- **Prompts** use the session's model registry (`promptModel`), so `github-copilot/…` models work there too; `LITELLM_BASE_URL` and `LITELLM_MASTER_KEY` come from the worker's environment (the profile's `envFiles`).
+
+![pi-client on a pi-daemon session: the session's own painting, from its backdrop slot](assets/visual-thoughts/pi-daemon-slot.jpg)
+
 ## Display
 
 TUI Pi in fullscreen mode (`tuiMode: fullscreen`) on a Kitty-graphics terminal (Kitty, Ghostty, WezTerm), and pi-client.
@@ -71,6 +82,7 @@ tmux is not supported yet (`PI_VISUAL_THOUGHTS_TMUX=1` to try). `PI_VISUAL_THOUG
 | `minIntervalMs` | `12000` | between paintings |
 | `firstChars`, `minChars` | `160`, `600` | new output needed |
 | `maxPerRun`, `maxImages`, `minSet` | `10`, `8`, `3` | |
+| `slotImages` | `8` | paintings a pi-daemon session's backdrop slot keeps (`images` at runtime) |
 | `keep` | `24` | stored images per session |
 | `transport` | `auto` | `file` (`t=t`) or `stream` (inline) |
 

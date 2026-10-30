@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 
 import { createTransitionRenderer, planTransition } from "./effects.js";
-import { decodeImage, prepareBackdrop } from "./raster.js";
+import { decodeImage, encodeBackdropPng, prepareBackdrop } from "./raster.js";
 
 /** Largest hold image (device pixels): a still image needs no more than the screen or its source. */
 const MAX_HOLD_PIXELS = 4_200_000;
@@ -123,6 +123,21 @@ export function createRenderCore({ dir, transport = "file", pid = process.pid } 
     end(state, { seq }) {
       if (state.current?.seq === seq) state.current = null;
       return { seq };
+    },
+    /** A PNG no larger than `maxBytes`: the same image, scaled down as little as that takes. */
+    fitPng(_state, { png, maxBytes }) {
+      const bytes = Buffer.from(png);
+      if (bytes.length <= maxBytes) return { png: bytes };
+      const source = decodeImage(bytes);
+      let scale = Math.min(1, Math.sqrt(maxBytes / bytes.length) * 0.95);
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const width = Math.max(16, Math.round(source.width * scale));
+        const height = Math.max(16, Math.round(source.height * scale));
+        const out = encodeBackdropPng(prepareBackdrop(source, { width, height, fit: "stretch", feather: 0, opacity: 1 }), { level: 6 });
+        if (out.length <= maxBytes) return { png: out, width, height };
+        scale *= Math.sqrt(maxBytes / out.length) * 0.95;
+      }
+      throw new Error("could not fit the image within the size limit");
     },
     /** The context's backdrop is gone: forget everything it had. */
     release(state, message) {

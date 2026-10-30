@@ -154,6 +154,8 @@
             echo 'export * from "./extensions/durable/git.mjs";' > $out/git.mjs
             # /context 500k: a per-session context limit (opt-in: list it in a profile).
             echo 'export * from "./extensions/durable/context-limit.mjs";' > $out/context-limit.mjs
+            # Visual thoughts painted once per session into its backdrop UI slot (pi-daemon 1.15).
+            echo 'export * from "./extensions/durable/visual-thoughts.mjs";' > $out/visual-thoughts.mjs
             # The modules must load with nothing but Node built-ins.
             HOME=$TMPDIR node --input-type=module -e "
               const m = await import('$out/tts.mjs');
@@ -173,6 +175,8 @@
               const choiceClient = await import('$out/extensions/durable/choice-client.js');
               if (typeof choiceClient.default !== 'function') process.exit(1);
               const contextLimit = await import('$out/context-limit.mjs');
+              const thoughts = await import('$out/visual-thoughts.mjs');
+              if (typeof thoughts.observe !== 'function' || typeof thoughts.commands?.thoughts?.run !== 'function') process.exit(1);
               if (typeof contextLimit.observe !== 'function' || typeof contextLimit.commands?.context?.run !== 'function') process.exit(1);
               const git = await import('$out/git.mjs');
               if (typeof git.observe !== 'function' || typeof git.commands?.git?.run !== 'function') process.exit(1);

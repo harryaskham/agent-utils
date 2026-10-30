@@ -63,6 +63,12 @@ export function createRotation({ holdMs = 15_000, fadeMs = 3_000, minShowMs = 4_
       prune();
       return this.tick(now);
     },
+    /** Show `id` next (after the current image's minimum), as a newly added image would be. */
+    focus(id, now) {
+      if (!has(id) || id === current) return this.tick(now);
+      pending = id;
+      return this.tick(now);
+    },
     remove(id) {
       images = images.filter((image) => image.id !== id);
       if (pending === id) pending = null;

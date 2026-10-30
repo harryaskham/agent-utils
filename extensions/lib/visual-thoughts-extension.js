@@ -27,6 +27,11 @@ import { createImageStore, pruneStore, visualThoughtsStateDir } from "./visual-t
 import { activeCanvas, backdropLayer, createTuiBackdropSurface } from "./visual-thoughts/tui-surface.js";
 
 const STATUS_KEY = "visual-thoughts";
+/** pi-daemon's session UI slots document (1.15) and the slot visual thoughts paints. */
+const PI_UI_DOC = Object.freeze({ kind: "pi.ui", version: 1, scope: "session" });
+const BACKDROP_SLOT = "backdrop";
+/** Settings about how this client shows images; the rest is the painter's (the host's, where it paints). */
+const LOCAL_KEYS = new Set(["layer", "fps", "effect", "transitionPixels", "transport", "fadeMs", "minShowMs", "canvasOpacity"]);
 const PROVIDER_KEYS = new Set(["provider", "imageModel", "size", "quality", "baseUrl", "apiKeyEnv", "maiEndpoint", "maiAuth", "maiKeyEnv"]);
 
 export function resolvePromptModel(registry, reference) {
@@ -135,6 +140,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
       if (!pane) return;
       panes.delete(pane.key);
       if (focused === pane) focused = null;
+      try { pane.stopWatch?.(); } catch {}
       try { pane.engine.dispose(); } catch {}
       try { pane.surface.dispose?.(); } catch {}
     }
@@ -185,9 +191,11 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         const holder = { current: null };
         const surface = makeSurface(ctx, backdrop, holder);
         const store = createImageStore({ root: visualThoughtsStateDir(env), sessionId });
-        pane = { key, sessionId, surface, engine: null };
+        pane = { key, sessionId, surface, store, engine: null, host: false, stopWatch: null };
         holder.current = pane;
         const made = pane;
+        // pi-client: the pane's own ctx, so slot reads and media follow this pane's session.
+        const paneCtx = typeof ctx?.pinned === "function" ? ctx.pinned() : ctx;
         pane.engine = createVisualThoughtsEngine({
           config,
           surface,
@@ -199,6 +207,10 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
           // Blended into pi-graphics' canvas (TUI Pi's /gfx full), stronger.
           look: () => ({ fit: config.fit, feather: config.feather, opacity: !backdrop && activeCanvas() ? config.canvasOpacity : config.opacity }),
           ...(env.PI_VISUAL_THOUGHTS_TRACE ? { trace: (line) => appendFileSync(env.PI_VISUAL_THOUGHTS_TRACE, `${line}\n`) } : {}),
+          fetchImage: async (uri) => {
+            const item = await paneCtx?.sessionMedia?.(uri);
+            return item?.data ? Buffer.from(item.data, "base64") : null;
+          },
           onChange: (status) => {
             if (focused !== made) return;
             try { lastCtx?.ui?.setStatus?.(STATUS_KEY, status.enabled && status.activity !== "idle" ? `✧ ${status.activity}` : undefined); } catch {}
@@ -206,14 +218,90 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         });
         panes.set(key, pane);
         pane.engine.setEnabled(enabled);
-        store.recent(config.maxImages).then((records) => made.engine.restore(records)).catch(() => {});
-        seedSoon(pane, ctx);
+        if (paneCtx?.chord) void followHost(made, paneCtx);
+        else {
+          store.recent(config.maxImages).then((records) => made.engine.restore(records)).catch(() => {});
+          seedSoon(pane, ctx);
+        }
       }
       if (focused !== pane) {
         focused = pane;
         for (const other of panes.values()) other.engine.pause(other !== pane);
       }
       return pane;
+    }
+
+    /**
+     * pi-client: when the session's host runs the visual-thoughts module on pi-daemon 1.15+, it
+     * paints once for every client into the session's backdrop slot (claimed, empty, as soon as the
+     * module meets the session), and this pane only shows it. Otherwise (an older host, a profile
+     * without the module, a TUI Pi session through the bridge) the pane paints locally.
+     */
+    async function followHost(pane, paneCtx) {
+      let capable = false;
+      try {
+        const commands = await paneCtx.chord.call("session.commands", {});
+        capable = (commands?.items || []).some((item) => item?.name === "thoughts" && item?.kind === "extension");
+      } catch {}
+      if (panes.get(pane.key) !== pane) return;
+      pane.paneCtx = paneCtx;
+      if (!capable) return void paintHere(pane);
+      pane.capable = true;
+      await watchSlot(pane);
+    }
+
+    /** Local painting for a pane: its stored images back, and a first one from the conversation. */
+    function paintHere(pane) {
+      if (pane.local) return;
+      pane.local = true;
+      pane.store.recent(config.maxImages).then((records) => { if (!pane.host) pane.engine.restore(records); }).catch(() => {});
+      seedSoon(pane, pane.paneCtx);
+    }
+
+    function slotValue(pane, value) {
+      if (panes.get(pane.key) !== pane) return;
+      const slot = value?.slots?.[BACKDROP_SLOT];
+      if (slot?.kind === "image-set") {
+        pane.host = true;
+        void pane.engine.syncSlot(slot);
+        return;
+      }
+      pane.host = false;
+      if (pane.engine.slotMode) void pane.engine.syncSlot(null);
+      paintHere(pane);
+    }
+
+    /**
+     * Follow the pane's backdrop slot (again). pi-client's document watches end with their
+     * connection, so each agent run starts and ends with a fresh one (a snapshot of the slot: a
+     * revision already shown changes nothing).
+     */
+    async function watchSlot(pane) {
+      if (!pane?.capable || panes.get(pane.key) !== pane) return;
+      const generation = (pane.watchGeneration || 0) + 1;
+      pane.watchGeneration = generation;
+      try { pane.stopWatch?.(); } catch {}
+      pane.stopWatch = null;
+      try {
+        const stop = await pane.paneCtx.chord.watchDocument(PI_UI_DOC, (value) => {
+          if (pane.watchGeneration === generation) slotValue(pane, value);
+        });
+        if (panes.get(pane.key) === pane && pane.watchGeneration === generation) pane.stopWatch = stop;
+        else stop?.();
+      } catch (error) {
+        warnOnce(`visual thoughts: cannot follow this session's backdrop: ${error?.message || error}`);
+        if (!pane.host) paintHere(pane);
+      }
+    }
+
+    /** The focused pane, when its host can paint: refollow its slot; true when the host paints it. */
+    function refollow(ctx) {
+      if (!enabled) return false;
+      let pane = null;
+      try { pane = focus(ctx); } catch { return false; }
+      if (!pane?.capable) return false;
+      void watchSlot(pane);
+      return pane.host;
     }
 
     /** The conversation's latest text, to paint something at once when nothing shows yet. */
@@ -291,6 +379,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
 
     pi.on("agent_start", async (_event, ctx) => {
       lastCtx = ctx || lastCtx;
+      if (refollow(lastCtx)) return;
       current(lastCtx)?.runStart();
     });
 
@@ -330,6 +419,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
 
     pi.on("agent_end", async (_event, ctx) => {
       lastCtx = ctx || lastCtx;
+      if (refollow(lastCtx)) return;
       current(lastCtx)?.runEnd();
     });
 
@@ -346,6 +436,15 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         const verb = (words[0] || "status").toLowerCase();
         let pane = null;
         if (enabled) { try { pane = focus(ctx); } catch {} }
+        // pi-client, a session its host paints: the host's /thoughts module decides what is painted
+        // (for every client); only how this pane shows it stays here.
+        const local = words.length >= 2 && LOCAL_KEYS.has(parseSettingChange(words[0], words.slice(1).join(" ")).key);
+        if (pane?.host && !local) {
+          if (verb === "status") notify(`this pane: ${pane.engine.status().images} image(s) from the session's backdrop slot; showing ${pane.engine.status().current || "nothing yet"}`, "info", ctx);
+          try { ctx.sendUserMessage?.(`/thoughts ${String(args || "").trim()}`.trim()); }
+          catch (error) { notify(`visual thoughts: ${error?.message || error}`, "warning", ctx); }
+          return;
+        }
         if (verb === "status") {
           if (unavailable && !pane) return notify(`visual thoughts unavailable: ${unavailable}`, "warning", ctx);
           return notify(describeStatus(pane ? { ...pane.engine.status(), stats: pane.engine.stats() } : { enabled: false }, config), "info", ctx);

@@ -115,6 +115,11 @@ export function createRenderer({ transport = "file", useWorker = true, onError =
     begin: (options) => request({ type: "begin", ...options }),
     frame: (seq, k, t) => request({ type: "frame", seq, k, t }),
     end: (seq) => request({ type: "end", seq }),
+    /** The PNG `png`, scaled down until it is at most `maxBytes` (on the renderer thread). */
+    fitPng: (png, maxBytes) => {
+      const bytes = new Uint8Array(png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength));
+      return request({ type: "fitPng", png: bytes, maxBytes }, [bytes.buffer]);
+    },
     close() {
       if (closed) return;
       void owner.process.request({ type: "release", ctx }).catch(() => {});

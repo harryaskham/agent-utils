@@ -34,6 +34,8 @@ export const DEFAULTS = Object.freeze({
   minShowMs: 5_000,
   minSet: 3,
   maxImages: 8,
+  // Paintings a pi-daemon session's backdrop slot keeps (its clients rotate through them).
+  slotImages: 8,
   // Generation.
   minIntervalMs: 12_000,
   firstChars: 160,
@@ -47,7 +49,7 @@ export const DEFAULTS = Object.freeze({
 const NUMERIC = Object.freeze({
   opacity: [0, 1], canvasOpacity: [0, 1], feather: [0, 0.5], fps: [1, 120], transitionPixels: [20_000, 2_000_000],
   holdMs: [1_000, 600_000], fadeMs: [0, 60_000], minShowMs: [0, 600_000],
-  minSet: [1, 32], maxImages: [1, 64], minIntervalMs: [0, 3_600_000], firstChars: [0, 100_000],
+  minSet: [1, 32], maxImages: [1, 64], slotImages: [1, 32], minIntervalMs: [0, 3_600_000], firstChars: [0, 100_000],
   minChars: [0, 100_000], maxPerRun: [0, 1_000], maxConcurrent: [1, 4], keep: [0, 10_000],
 });
 const CHOICES = Object.freeze({
@@ -63,7 +65,7 @@ const STRINGS = new Set(["promptModel", "clientPromptModel", "imageModel", "size
 const ALIASES = Object.freeze({
   hold: ["holdMs", 1000], "canvas-opacity": ["canvasOpacity", 1], fade: ["fadeMs", 1000], interval: ["minIntervalMs", 1000], "min-show": ["minShowMs", 1000],
   model: ["imageModel", 1], "image-model": ["imageModel", 1], "prompt-model": ["promptModel", 1],
-  "max-images": ["maxImages", 1], "per-run": ["maxPerRun", 1], "min-set": ["minSet", 1], pixels: ["transitionPixels", 1],
+  "max-images": ["maxImages", 1], images: ["slotImages", 1], "slot-images": ["slotImages", 1], "per-run": ["maxPerRun", 1], "min-set": ["minSet", 1], pixels: ["transitionPixels", 1],
 });
 
 function bool(value, fallback) {

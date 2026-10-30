@@ -734,3 +734,245 @@ test("store: old sessions and an over-full store are pruned, the session in use 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/** pi-daemon's module `ui` (session UI slots, 1.15), recording what a module asks of it. */
+function fakeSlotsUi({ owner = "visual-thoughts" } = {}) {
+  const slots = new Map();
+  const media = new Map();
+  let n = 0;
+  const ui = {
+    calls: [],
+    rateLimitNext: 0,
+    async image(bytes, mimeType, options = {}) {
+      ui.calls.push(`image ${mimeType} ${bytes.length}`);
+      if (bytes.length > 2 * 1024 * 1024) throw Object.assign(new Error("too large"), { code: "limit" });
+      n += 1;
+      const ref = { uri: `ahp-session:/s1/content/m${n}`, mimeType, digest: `sha256:${n}`, ...(options.alt ? { alt: options.alt } : {}) };
+      media.set(ref.uri, Buffer.from(bytes));
+      return ref;
+    },
+    async set(name, value) {
+      if (ui.rateLimitNext > 0) { ui.rateLimitNext -= 1; throw Object.assign(new Error("slow down"), { code: "rate_limited" }); }
+      const prior = slots.get(name);
+      if (prior && prior.owner !== owner) throw Object.assign(new Error("owned"), { code: "not_owner" });
+      const rev = (prior?.rev ?? 0) + 1;
+      slots.set(name, { ...value, owner, rev, updatedAt: "t" });
+      ui.calls.push(`set ${name} ${value.images?.length}`);
+      return { rev };
+    },
+    async clear(name) { slots.delete(name); ui.calls.push(`clear ${name}`); },
+    async get(name) { return slots.get(name); },
+  };
+  return { ui, slots, media };
+}
+
+function moduleInfo(ui, sessionId = "s1") {
+  const values = new Map();
+  const notices = [];
+  return {
+    notices,
+    info: {
+      sessionId, ui,
+      state: { get: async (key) => values.get(key), set: async (key, value) => void values.set(key, value) },
+      notify: (text) => notices.push(text),
+    },
+  };
+}
+
+function paintingFetch(requests, { pngBytes = solidPng(32, 18, [10, 60, 90]) } = {}) {
+  return async (url, init) => {
+    const body = JSON.parse(init.body);
+    requests.push({ url, body });
+    if (url.endsWith("/v1/chat/completions")) return new Response(JSON.stringify({ choices: [{ message: { content: `a calm harbour ${requests.length}` } }] }));
+    return new Response(JSON.stringify({ data: [{ b64_json: pngBytes.toString("base64") }] }));
+  };
+}
+
+test("pi-daemon module: paints the session's backdrop slot once, for every client", async () => {
+  const { createVisualThoughtsModule, OWNER } = await import("../extensions/lib/durable-visual-thoughts.js");
+  assert.equal(OWNER, "visual-thoughts");
+  const requests = [];
+  const { ui, slots } = fakeSlotsUi();
+  const module = createVisualThoughtsModule({
+    env: { LITELLM_BASE_URL: "http://proxy:4000", LITELLM_MASTER_KEY: "k" },
+    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minIntervalMs: 0, slotImages: 2, opacity: 0.4 } } },
+    fetchImpl: paintingFetch(requests),
+    log: () => {},
+  });
+  try {
+    const { info, notices } = moduleInfo(ui);
+    await module.observe({ type: "agent_start" }, info);
+    await module.observe({ type: "message_end", message: { role: "user", content: [{ type: "text", text: "paint the harbour" }] } }, info);
+    // Claimed at once (empty), so clients stop painting locally; then the first painting.
+    assert.deepEqual(slots.get("backdrop")?.images, []);
+    for (let i = 0; i < 100 && !slots.get("backdrop").images.length; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    const slot = slots.get("backdrop");
+    assert.ok(slot, "the slot is set");
+    assert.equal(slot.kind, "image-set");
+    assert.equal(slot.owner, "visual-thoughts");
+    assert.equal(slot.images.length, 1);
+    assert.match(slot.images[0].alt, /a calm harbour/);
+    assert.deepEqual(slot.hints, { placement: "backdrop", opacity: 0.4, fit: "cover", feather: 0.12, cycleMs: 18_000, transition: "crossfade" });
+    // No model registry here: the prompt went to the chat endpoint; the image to the images API.
+    assert.equal(requests[0].url, "http://proxy:4000/v1/chat/completions");
+    assert.match(requests[0].body.messages[1].content, /\[prompt\] paint the harbour/);
+    assert.equal(requests[1].url, "http://proxy:4000/v1/images/generations");
+
+    // More output: a second and third image; the slot keeps the newest slotImages (2), current newest.
+    ui.rateLimitNext = 1; // the host's per-slot rate limit is waited out
+    // Durable's shape: the committed entry's model messages.
+    await module.observe({ type: "message_end", entry: { model: [{ role: "assistant", content: [{ type: "thinking", thinking: "x".repeat(700) }] }] } }, info);
+    for (let i = 0; i < 100 && slots.get("backdrop").images.length < 2; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    await module.observe({ type: "tool_execution_start", toolName: "bash", args: { command: "y".repeat(700) } }, info);
+    for (let i = 0; i < 100 && slots.get("backdrop").rev < 4; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(slots.get("backdrop").images.length, 2);
+    assert.equal(slots.get("backdrop").current, 1);
+
+    // /thoughts next moves everyone on; settings change the hints; off clears the slot for all.
+    const run = module.commands.thoughts.run;
+    await run("next", info);
+    assert.equal(slots.get("backdrop").current, 0);
+    await run("opacity 0.2", info);
+    assert.equal(slots.get("backdrop").hints.opacity, 0.2);
+    assert.match(await run("status", info), /on[\s\S]*2 images in the backdrop slot/);
+    await run("off", info);
+    assert.deepEqual(slots.get("backdrop").images, [], "off empties the slot but keeps it: clients do not paint locally");
+    assert.match(notices.at(-1), /off/);
+    // Persisted per session: a fresh worker keeps it off.
+    const again = createVisualThoughtsModule({ env: {}, settings: { agentUtils: { visualThoughts: { enabled: true } } }, log: () => {} });
+    assert.match(await again.commands.thoughts.run("status", info), /: off/);
+    again.dispose();
+  } finally {
+    module.dispose();
+  }
+});
+
+test("pi-daemon module: another module's slot is left alone; hosts without ui say so; big PNGs are scaled to fit", async () => {
+  const { createVisualThoughtsModule, MAX_IMAGE_BYTES } = await import("../extensions/lib/durable-visual-thoughts.js");
+  // Before pi-daemon 1.15 there is no `ui`: nothing paints, /thoughts says why.
+  const quiet = createVisualThoughtsModule({ env: {}, settings: { agentUtils: { visualThoughts: { enabled: true } } }, log: () => {} });
+  const bare = moduleInfo(undefined);
+  assert.match(await quiet.commands.thoughts.run("status", bare.info), /needs 1\.15/);
+  quiet.dispose();
+
+  // Someone else's backdrop: blocked, never overwritten.
+  const { ui, slots } = fakeSlotsUi({ owner: "other" });
+  slots.set("backdrop", { kind: "image-set", images: [], owner: "other", rev: 1 });
+  const module = createVisualThoughtsModule({ env: {}, settings: { agentUtils: { visualThoughts: { enabled: true } } }, log: () => {} });
+  assert.match(await module.commands.thoughts.run("status", moduleInfo(ui).info), /blocked: the backdrop slot belongs to other/);
+  module.dispose();
+
+  // A painting over ui.image's 2 MiB limit is scaled down on the renderer thread first.
+  const { createRenderer } = await import("../extensions/lib/visual-thoughts/renderer.js");
+  const renderer = createRenderer({ transport: "stream", useWorker: false });
+  try {
+    const noisy = new Uint8Array(900 * 700 * 4);
+    let seed = 0x9e3779b9;
+    for (let i = 0; i < noisy.length; i += 1) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; noisy[i] = seed & 255; }
+    const big = encodeBackdropPng({ width: 900, height: 700, rgba: noisy }, { level: 1 });
+    assert.ok(big.length > 1_000_000);
+    const reply = await renderer.fitPng(big, 1_000_000);
+    assert.ok(reply.png.length <= 1_000_000 && reply.width < 900);
+    assert.ok(MAX_IMAGE_BYTES < 2 * 1024 * 1024);
+  } finally {
+    renderer.close();
+  }
+});
+
+test("engine slot mode: shows the session's slot (fetched images, its current, its hints), paints nothing", async () => {
+  const fetched = [];
+  const h = engineHarness({ fadeMs: 100 });
+  const media = new Map([["u1", solidPng(8, 8, [1, 1, 1])], ["u2", solidPng(8, 8, [2, 2, 2])], ["u3", solidPng(8, 8, [3, 3, 3])]]);
+  const engine = createVisualThoughtsEngine({
+    config: h.config, now: h.time.now, timers: h.time.timers, surface: h.surface, createRenderer: h.renderer.create,
+    promptTurn: async () => { throw new Error("no painting in slot mode"); },
+    provider: { generate: async () => { throw new Error("no painting in slot mode"); } },
+    fetchImage: async (uri) => { fetched.push(uri); return media.get(uri); },
+  });
+  engine.setEnabled(true);
+  await engine.syncSlot({ kind: "image-set", rev: 1, images: [{ uri: "u1", digest: "sha256:aa" }, { uri: "u2", digest: "sha256:bb" }], current: 1, hints: { opacity: 0.5, cycleMs: 5_000 } });
+  assert.equal(engine.slotMode, true);
+  assert.deepEqual(fetched, ["u1", "u2"]);
+  await h.time.advance(400);
+  assert.match(h.surface.shown, /^hold:slot-sha256-bb:/, "the slot's current image");
+  assert.ok(h.renderer.calls.some((call) => call === "configure 400x240"));
+  // Output and runs do not paint here.
+  engine.runStart();
+  engine.output("text", "z".repeat(5_000));
+  await h.time.advance(100);
+  assert.equal(engine.status().generated, 0);
+  // The slot moves on: u1 dropped, u3 added and current; an older revision is ignored.
+  await engine.syncSlot({ kind: "image-set", rev: 2, images: [{ uri: "u2", digest: "sha256:bb" }, { uri: "u3", digest: "sha256:cc" }], current: 1 });
+  await engine.syncSlot({ kind: "image-set", rev: 1, images: [], current: 0 });
+  await h.time.advance(400);
+  assert.match(h.surface.shown, /^hold:slot-sha256-cc:/);
+  assert.equal(engine.status().images, 2);
+  assert.ok(!h.surface.has("hold:slot-sha256-aa:1"));
+  // Cleared (an empty slot): nothing shown.
+  await engine.syncSlot({ kind: "image-set", images: [], current: 0 });
+  await h.time.advance(200);
+  assert.equal(engine.status().images, 0);
+  engine.dispose();
+});
+
+test("extension in pi-client: a session its host paints is shown from the slot; /thoughts goes to the host", async () => {
+  const { createVisualThoughtsExtension } = await import("../extensions/lib/visual-thoughts-extension.js");
+  const dir = mkdtempSync(join(tmpdir(), "vt-host-"));
+  const handlers = new Map();
+  const commands = new Map();
+  const pi = { on: (name, fn) => handlers.set(name, [...(handlers.get(name) || []), fn]), registerCommand: (name, def) => commands.set(name, def) };
+  const requests = [];
+  const extension = createVisualThoughtsExtension({
+    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 1, minIntervalMs: 0, fadeMs: 0 } } },
+    env: { PI_VISUAL_THOUGHTS_DIR: dir, LITELLM_BASE_URL: "http://proxy:4000" },
+    fetchImpl: paintingFetch(requests),
+  });
+  extension(pi);
+  const backdrop = fakeBackdrop("pane");
+  let watcher = null;
+  const sent = [];
+  const media = new Map([["ahp-session:/s/content/m1", solidPng(8, 8, [9, 9, 9])]]);
+  const ctx = {
+    ui: { backdrop: () => backdrop, notify() {}, setStatus() {} },
+    sessionManager: { getSessionId: () => "s-hosted", getEntries: () => [], getBranch: () => [] },
+    sessionMedia: async (uri) => ({ data: media.get(uri).toString("base64"), mimeType: "image/png" }),
+    sendUserMessage: (text) => sent.push(text),
+    chord: {
+      call: async (method) => (method === "session.commands" ? { items: [{ name: "thoughts", kind: "extension" }, { name: "tts", kind: "extension" }] } : null),
+      watchDocument: async (address, onValue) => { assert.deepEqual(address, { kind: "pi.ui", version: 1, scope: "session" }); watcher = onValue; return () => { watcher = null; }; },
+    },
+  };
+  ctx.pinned = () => ctx;
+  const emit = async (name, event) => { for (const fn of handlers.get(name) || []) await fn(event, ctx); };
+  const waitFor = async (what, check) => { for (let i = 0; i < 400; i += 1) { if (check()) return; await new Promise((resolve) => setTimeout(resolve, 10)); } throw new Error(`timed out: ${what}`); };
+  try {
+    await emit("session_start", {});
+    await waitFor("the slot followed", () => watcher);
+    // The module claims the slot (empty) as soon as it meets the session.
+    watcher({ rev: 1, slots: { backdrop: { kind: "image-set", owner: "visual-thoughts", rev: 1, images: [], current: 0, hints: {} } } });
+    // The agent works: nothing paints here (the host does).
+    await emit("agent_start", {});
+    await emit("message_end", { message: { role: "user", content: [{ type: "text", text: "a harbour" }] } });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(requests.length, 0, "no prompt or image requests from the client");
+    // The host's slot arrives: shown.
+    watcher({ rev: 2, slots: { backdrop: { kind: "image-set", owner: "visual-thoughts", rev: 2, images: [{ uri: "ahp-session:/s/content/m1", digest: "sha256:m1", alt: "harbour" }], current: 0, hints: {} } } });
+    await waitFor("the slot's image shown", () => backdrop.log.some((line) => /^show hold:slot-sha256-m1:/.test(line)));
+    // /thoughts on goes to the host's module; a display setting stays here.
+    await commands.get("thoughts").handler("on", ctx);
+    assert.deepEqual(sent, ["/thoughts on"]);
+    await commands.get("thoughts").handler("effect ripple", ctx);
+    assert.deepEqual(sent, ["/thoughts on"], "a local display setting is not forwarded");
+    // No slot (a host without UI slots: the module never claims it): this pane paints itself.
+    watcher(null);
+    await emit("agent_start", {});
+    await waitFor("the slot refollowed", () => watcher);
+    watcher(null);
+    await emit("message_end", { message: { role: "assistant", content: [{ type: "text", text: "a lighthouse in fog ".repeat(40) }] } });
+    await waitFor("painting locally", () => requests.some((request) => request.url.endsWith("/v1/images/generations")));
+    await emit("session_shutdown", {});
+    assert.equal(watcher, null, "stopped following");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
