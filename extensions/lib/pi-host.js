@@ -14,5 +14,6 @@
 // extension. Outside Pi (tests, standalone use) the import resolves to Agent
 // Utils' pinned dependency.
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
+import { getCellDimensions } from "@earendil-works/pi-tui";
 
-export { CustomEditor };
+export { CustomEditor, getCellDimensions };

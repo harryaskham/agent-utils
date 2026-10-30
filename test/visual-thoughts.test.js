@@ -620,7 +620,7 @@ function fakeBackdrop(name) {
 }
 
 test("extension in pi-client: each pane paints its own session; prompts over the chat endpoint; panes hold still unfocused", async () => {
-  const { createVisualThoughtsExtension } = await import("../extensions/visual-thoughts.js");
+  const { createVisualThoughtsExtension } = await import("../extensions/lib/visual-thoughts-extension.js");
   const dir = mkdtempSync(join(tmpdir(), "vt-ext-"));
   const handlers = new Map();
   const commands = new Map();

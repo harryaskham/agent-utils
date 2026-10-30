@@ -14,8 +14,6 @@
 // backgrounds (`over`, tinting panels too) or beneath them (`under`); `auto` is `under` inside
 // tmux (whose status line and popups must cover it) and `over` elsewhere (herdr paints every
 // cell's background).
-import { getCellDimensions } from "@earendil-works/pi-tui";
-
 import { serializeKittyGraphicsChunks, serializeKittyGraphicsCommand } from "../../kitty-graphics.js";
 import { piGraphicsImageId } from "../../pi-graphics/id-space.js";
 
@@ -61,10 +59,11 @@ export function transmitCommand(imageId, payload, passthrough = "none") {
 
 /**
  * The surface on Pi's terminal. `tui` is Pi's TUI (it follows renderer switches); `options()`
- * gives `{ layer, transport }` live; `onResize()` runs when the screen's size changes;
- * `onLost()` when the terminal freed the images (they need uploading again).
+ * gives `{ layer, transport }` live; `cellSize()` is the cell's device pixels (Pi's pi-tui
+ * getCellDimensions, injected by the entry; 9×18 when unknown); `onResize()` runs when the
+ * screen's size changes; `onLost()` when the terminal freed the images (they need uploading again).
  */
-export function createTuiBackdropSurface({ tui, env = process.env, options = () => ({}), onResize = () => {}, onLost = () => {}, cellSize = getCellDimensions, ids } = {}) {
+export function createTuiBackdropSurface({ tui, env = process.env, options = () => ({}), onResize = () => {}, onLost = () => {}, cellSize = () => undefined, ids } = {}) {
   const terminal = tui?.terminal;
   if (!terminal) throw new Error("visual thoughts: Pi's terminal is not available");
   const pool = ids || Array.from({ length: POOL }, (_, n) => piGraphicsImageId(`visual-thoughts:${n}`));
