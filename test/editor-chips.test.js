@@ -110,6 +110,13 @@ test("full-width rails render top-right and three-way bottom placement with sema
   assert.match(rails.bottom, /\x1b\[38;2;52;58;72m\x1b\[48;2;129;161;193m1\.1M/, "context total uses the same dark Nord text");
 });
 
+test("no MCP servers: no MCP chip, rather than a 0", () => {
+  const bottom = stripAnsi(buildEditorChipRails({ width: 260, config, values: values({ mcpCount: 0 }), theme }).bottom);
+  assert.doesNotMatch(bottom, /MCP/);
+  assert.match(bottom, /\$498\.89/, "the other chips stay");
+  assert.match(stripAnsi(buildEditorChipRails({ width: 260, config, values: values({ mcpCount: 1 }), theme }).bottom), /1▌MCP|1 ▌ MCP|1.*MCP/);
+});
+
 test("display aliases rewrite chip text only: any field, one field, hiding, and the real values kept", () => {
   const aliased = resolveEditorChipsConfig({ agentUtils: { editorChips: { enabled: true, aliases: {
     "github-copilot": "ghcp",
@@ -346,7 +353,9 @@ test("editor chips mount without relying on ctx.mode and reassert after a later 
   assert.notEqual(footerFactory, redundantFooter, "later footer owners cannot restore redundant footer while chips hide it");
   const rendered = editorFactory({ requestRender() {} }, theme, {}).render(100);
   assert.match(stripAnsi(rendered[0]), /p/);
-  assert.match(stripAnsi(rendered.at(-1)), /MCP/);
+  // The bottom rail is drawn (its cost chip; no MCP chip without MCP servers).
+  assert.match(stripAnsi(rendered.at(-1)), /\$0\.00/);
+  assert.doesNotMatch(stripAnsi(rendered.at(-1)), /MCP/);
   await commands.get("editor-chips").handler("repair", { ...ctx, ui: { ...ui, notify() {} } });
   await handlers.get("thinking_level_select")[0]({ level: "high" }, ctx);
   assert.equal(typeof editorFactory, "function");

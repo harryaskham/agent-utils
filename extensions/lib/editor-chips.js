@@ -299,7 +299,8 @@ function chipFor(field, values, theme) {
     case "directory": return renderParts([part("", p.blue), part(values.directory || ".", p.nord3)], { divider: "rounded" });
     case "branch": return values.inGitRepo ? renderParts([part("", p.blue), ...(values.branchCollapsed ? [] : [part(values.branch, p.nord3)])], { divider: "rounded" }) : "";
     case "diff": return values.inGitRepo ? renderParts([part(`+${values.additions || 0}`, p.green), part(`-${values.deletions || 0}`, p.red)], { divider: "vertical" }) : "";
-    case "mcp": return renderParts([part(`${values.mcpCount || 0}`, p.magenta), part("MCP", p.nord3)], { divider: "vertical" });
+    // No MCP servers: no chip (a 0 only takes room).
+    case "mcp": return Number(values.mcpCount) > 0 ? renderParts([part(`${values.mcpCount}`, p.magenta), part("MCP", p.nord3)], { divider: "vertical" }) : "";
     // The session's loops (pi-daemon's /loop, through loop.mjs's client part): how many, and the
     // time to the next one; none: no chip.
     case "loops": return values.loopsCount > 0
