@@ -295,12 +295,14 @@ function fakeTime() {
 const settle = async () => { for (let i = 0; i < 8; i += 1) await new Promise((resolve) => setImmediate(resolve)); };
 
 /** A surface that records what it shows (the shape tui-surface.js and pi-client provide). */
-function fakeSurface({ size = { cols: 40, rows: 12, cellWidthPx: 10, cellHeightPx: 20 } } = {}) {
+function fakeSurface({ size: initial = { cols: 40, rows: 12, cellWidthPx: 10, cellHeightPx: 20 } } = {}) {
   const keys = new Set();
   const log = [];
   let shown = null;
+  let size = initial;
   return {
     log,
+    resize(next) { size = next; },
     size: () => size,
     transport: () => "stream",
     has: (key) => keys.has(key),
@@ -395,7 +397,7 @@ test("engine: holds upload once and show; transitions play renderer frames, then
   await h.time.advance(300);
   const id = h.engine.status().current;
   assert.ok(id);
-  assert.equal(h.surface.shown, `hold:${id}`, "the hold image once the fade-in ends");
+  assert.equal(h.surface.shown, `hold:${id}:1`, "the hold image once the fade-in ends");
   const frames = h.surface.log.filter((line) => /^show tx:/.test(line)).length;
   assert.ok(frames >= 5 && frames <= 11, `about fadeMs × fps frames (${frames})`);
   assert.ok(h.surface.log.some((line) => line.startsWith("upload tx:0 100x60")));
@@ -405,15 +407,33 @@ test("engine: holds upload once and show; transitions play renderer frames, then
   await h.time.advance(300);
   const second = h.engine.status().current;
   assert.notEqual(second, id);
-  assert.equal(h.surface.shown, `hold:${second}`);
+  assert.equal(h.surface.shown, `hold:${second}:1`);
   assert.equal(h.renderer.calls.filter((c) => c.startsWith("begin")).length, 2);
   assert.ok(h.renderer.calls.filter((c) => c.startsWith("end")).length >= 1);
   // The terminal freed everything: the shown hold uploads again.
   h.surface.lose();
   h.engine.lost();
   await h.time.advance(50);
-  assert.equal(h.surface.shown, `hold:${second}`);
+  assert.equal(h.surface.shown, `hold:${second}:1`);
   assert.ok(h.renderer.calls.includes(`hold ${second}`));
+  // A new size: the old hold stays up until the one made for the new size replaces it.
+  h.surface.resize({ cols: 20, rows: 12, cellWidthPx: 10, cellHeightPx: 20 });
+  h.engine.resized();
+  assert.equal(h.surface.shown, `hold:${second}:1`, "nothing blank meanwhile");
+  await h.time.advance(20);
+  assert.equal(h.surface.shown, `hold:${second}:2`);
+  assert.equal(h.surface.has(`hold:${second}:1`), false, "the old size's hold is freed");
+  assert.ok(h.renderer.calls.includes("configure 200x240"));
+  // Paused (an unfocused pane): no cycling, but a resize still remakes the shown hold.
+  h.engine.pause(true);
+  const before = h.engine.status().current;
+  await h.time.advance(20_000);
+  assert.equal(h.engine.status().current, before, "the cycle holds still");
+  h.surface.resize({ cols: 30, rows: 12, cellWidthPx: 10, cellHeightPx: 20 });
+  h.engine.resized();
+  await h.time.advance(20);
+  assert.equal(h.surface.shown, `hold:${before}:3`);
+  h.engine.pause(false);
   // Off: nothing shown.
   h.engine.setEnabled(false);
   assert.equal(h.surface.shown, null);
@@ -465,7 +485,7 @@ test("engine: restored images show at once; turning off clears the surface", asy
     h.engine.setEnabled(true);
     h.engine.restore(await store.recent(5));
     await h.time.advance(300);
-    assert.equal(h.surface.shown, "hold:vt-2", "drawn from the stored file");
+    assert.equal(h.surface.shown, "hold:vt-2:1", "drawn from the stored file");
     assert.ok(h.renderer.calls.includes("add vt-2"));
     h.engine.setEnabled(false);
     assert.equal(h.surface.log.at(-1), "clear");
@@ -569,4 +589,88 @@ test("the encoded backdrop is a valid RGBA PNG", () => {
   const length = png.readUInt32BE(idat - 4);
   const raw = inflateSync(png.subarray(idat + 4, idat + 4 + length));
   assert.equal(raw.length, 2 * (3 * 4 + 1));
+});
+
+/** pi-client's pane backdrop (ctx.ui.backdrop()), recording what it is asked. */
+function fakeBackdrop(name) {
+  const keys = new Set();
+  const listeners = { resize: [], lost: [], close: [] };
+  const backdrop = {
+    name, log: [], shownKey: null, visible: true,
+    size: () => (backdrop.visible ? { cols: 40, rows: 12, cellWidthPx: 10, cellHeightPx: 20 } : undefined),
+    transport: () => "stream",
+    has: (key) => keys.has(key),
+    upload(key) { keys.add(key); backdrop.log.push(`upload ${key}`); },
+    show(key, options) { if (key !== null && !keys.has(key)) return false; backdrop.shownKey = key; backdrop.log.push(`show ${key} ${options?.layer}`); return true; },
+    get shown() { return backdrop.shownKey; },
+    drop(key) { keys.delete(key); if (backdrop.shownKey === key) backdrop.shownKey = null; },
+    clear() { keys.clear(); backdrop.shownKey = null; backdrop.log.push("clear"); },
+    onResize(fn) { listeners.resize.push(fn); return () => {}; },
+    onLost(fn) { listeners.lost.push(fn); return () => {}; },
+    onClose(fn) { listeners.close.push(fn); return () => {}; },
+    close() { for (const fn of listeners.close) fn(); },
+  };
+  return backdrop;
+}
+
+test("extension in pi-client: each pane paints its own session; prompts over the chat endpoint; panes hold still unfocused", async () => {
+  const { createVisualThoughtsExtension } = await import("../extensions/visual-thoughts.js");
+  const dir = mkdtempSync(join(tmpdir(), "vt-ext-"));
+  const handlers = new Map();
+  const commands = new Map();
+  const pi = { on: (name, fn) => handlers.set(name, [...(handlers.get(name) || []), fn]), registerCommand: (name, def) => commands.set(name, def) };
+  const requests = [];
+  const fetchImpl = async (url, init) => {
+    const body = JSON.parse(init.body);
+    requests.push({ url, body });
+    if (url.endsWith("/v1/chat/completions")) return new Response(JSON.stringify({ choices: [{ message: { content: `scene for ${body.messages[1].content.length} chars` } }] }));
+    return new Response(JSON.stringify({ data: [{ b64_json: solidPng(16, 9, [requests.length * 20, 40, 60]).toString("base64") }] }));
+  };
+  const extension = createVisualThoughtsExtension({
+    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minIntervalMs: 0, fadeMs: 0 } } },
+    env: { PI_VISUAL_THOUGHTS_DIR: dir, LITELLM_BASE_URL: "http://proxy:4000", LITELLM_MASTER_KEY: "k" },
+    fetchImpl,
+  });
+  extension(pi);
+  const left = fakeBackdrop("left");
+  const right = fakeBackdrop("right");
+  const notices = [];
+  const ctxFor = (backdrop, sessionId) => ({
+    ui: { backdrop: () => backdrop, notify: (message) => notices.push(message), setStatus() {} },
+    sessionManager: { getSessionId: () => sessionId, getEntries: () => [], getBranch: () => [] },
+  });
+  const emit = async (name, event, ctx) => { for (const fn of handlers.get(name) || []) await fn(event, ctx); };
+  const waitFor = async (what, check) => { for (let i = 0; i < 400; i += 1) { if (check()) return; await new Promise((resolve) => setTimeout(resolve, 10)); } throw new Error(`timed out: ${what}`); };
+  try {
+    // The left pane's session runs: its prompt goes to the chat endpoint (no model registry here).
+    const leftCtx = ctxFor(left, "s-left");
+    await emit("session_start", {}, leftCtx);
+    await emit("agent_start", {}, leftCtx);
+    await emit("message_end", { message: { role: "user", content: [{ type: "text", text: "draw the harbour" }] } }, leftCtx);
+    await waitFor("the left pane's image shown", () => left.log.some((line) => /^show hold:/.test(line)));
+    const chat = requests.find((r) => r.url.endsWith("/chat/completions"));
+    assert.equal(chat.url, "http://proxy:4000/v1/chat/completions");
+    assert.equal(chat.body.model, "deepseek-v4-flash");
+    assert.match(chat.body.messages[1].content, /\[prompt\] draw the harbour/);
+    assert.ok(left.log.some((line) => line.endsWith(" over")), "shown over cell backgrounds by default");
+
+    // Focus moves to the right pane, another session: it gets its own engine; the left holds still.
+    const rightCtx = ctxFor(right, "s-right");
+    await emit("session_start", {}, rightCtx);
+    await emit("agent_start", {}, rightCtx);
+    await emit("message_end", { message: { role: "assistant", content: [{ type: "thinking", thinking: "the lighthouse beam sweeps" }, { type: "text", text: "Done." }] } }, rightCtx);
+    await waitFor("the right pane's image shown", () => right.log.some((line) => /^show hold:/.test(line)));
+    assert.match(requests.filter((r) => r.url.endsWith("/chat/completions")).at(-1).body.messages[1].content, /\[thinking\] the lighthouse beam sweeps/);
+
+    // The right pane switches to another session: its old one's images go.
+    await emit("session_start", {}, ctxFor(right, "s-other"));
+    assert.ok(right.log.includes("clear"));
+    // A closed pane's engine goes with it; /thoughts off clears the rest.
+    left.close();
+    await commands.get("thoughts").handler("off", rightCtx);
+    assert.equal(right.shownKey, null);
+    await emit("session_shutdown", {}, rightCtx);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

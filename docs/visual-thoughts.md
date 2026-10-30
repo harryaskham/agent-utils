@@ -26,7 +26,9 @@ Measured on 2026-10-30 (sandbox deployments, ~30-word prompts): `gpt-image-2.5-f
 
 ## Display
 
-TUI Pi in fullscreen mode (`tuiMode: fullscreen`) on a Kitty-graphics terminal (Kitty, Ghostty, WezTerm).
+TUI Pi in fullscreen mode (`tuiMode: fullscreen`) on a Kitty-graphics terminal (Kitty, Ghostty, WezTerm), and pi-client.
+
+- **pi-client: each pane paints its own session.** Add `extensions/visual-thoughts.js` to `client.extensions`. pi-client gives each pane a backdrop (`ctx.ui.backdrop()`, pi-daemon 1.15+): the images sit inside the pane, never over its neighbours, the dividers or the sidebar, and follow splits, zoom and tabs. The focused pane paints and cycles; the others hold their current image still, made again at their new size when the layout changes. A pane switched to another session starts from that session's images. pi-client runs extensions without the agent's process, so the prompt model there is `clientPromptModel` (default `deepseek-v4-flash`) on the OpenAI-compatible endpoint (`LITELLM_BASE_URL`); `promptModel: "litellm/<model>"` does the same in TUI Pi.
 
 - **Holds are sharp and free.** Each image is fitted and uploaded once, at the screen's real resolution (Pi's cell size in device pixels, so HiDPI is right) or the source's, whichever is smaller, then placed over the whole screen under the text. Holding an image costs nothing.
 - **Transitions run on a worker thread.** A transition is one of `ripple` (a ring spreads from a point, the water rippling at its edge), `wave` (heat haze: rows sway while the new image rises through), `dissolve` (soft noise with a faint glow along its edge), `bloom` (both images drift outwards and glow midway) or `drift` (the old image recedes as the new one settles in), or a plain `fade`; `random` (the default) picks one of the first five each time. Frames render at up to `transitionPixels` (400k by default) on a worker and play at `fps` (60 by default; frames the renderer cannot deliver in time are skipped, never queued). A frame costs the renderer 2–10 ms at 690×580 and Pi's own thread a few hundred bytes of output.
@@ -42,7 +44,8 @@ tmux is not supported yet (`PI_VISUAL_THOUGHTS_TMUX=1` to try). `PI_VISUAL_THOUG
 | Key | Default | |
 |---|---|---|
 | `enabled` | `false` | paint from startup |
-| `promptModel` | `github-copilot/gpt-6-luna` | `provider/id` from Pi's registry |
+| `promptModel` | `github-copilot/gpt-6-luna` | `provider/id` from Pi's registry, or `litellm/<model>` |
+| `clientPromptModel` | `deepseek-v4-flash` | the chat model where there is no registry (pi-client) |
 | `provider` | `litellm` | `litellm` or `mai` |
 | `imageModel` | `gpt-image-2.5-flare` | MAI: `MAI-Image-2.5-Flash` |
 | `size`, `quality` | `1536x1024`, `low` | MAI: `1344x768` |

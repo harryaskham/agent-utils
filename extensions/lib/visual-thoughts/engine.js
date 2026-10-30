@@ -59,6 +59,7 @@ export function createVisualThoughtsEngine({
   let displayTimer = null;
   let wakeTimer = null;
   let seq = 0;
+  let paused = false;
   let activity = "idle"; // idle | prompting | painting
   let lastError = "";
   let generated = 0;
@@ -165,6 +166,11 @@ export function createVisualThoughtsEngine({
 
   let renderer = null;
   let areaKey = "";
+  // Holds are named for the size they were made for: a resized backdrop keeps showing the old
+  // one (the terminal scales it) until the new one is up, then the old one goes.
+  let holdGen = 0;
+  const holdKey = (id) => `hold:${id}:${holdGen}`;
+  const liveHolds = new Set();
   let configuring = null;
   const holdRequests = new Map(); // id → promise
   let job = null; // { seq, from, to, frames, ready: Map(k → payload), requested: Set, shownK, alt, begun }
@@ -185,23 +191,27 @@ export function createVisualThoughtsEngine({
     areaKey = key;
     holdRequests.clear();
     if (job) endJob();
-    for (const id of images.keys()) surface.drop(`hold:${id}`);
+    holdGen += 1;
+    for (const key of [...liveHolds]) if (surface.shown !== key) { surface.drop(key); liveHolds.delete(key); }
     configuring = ensureRenderer().configure({ area, txPixels: config.transitionPixels, fit: config.fit, feather: config.feather, opacity: config.opacity });
     return configuring;
   }
 
   /** Make sure `id`'s hold image is in the terminal; resolves true once it is. */
   function ensureHold(id) {
-    const key = `hold:${id}`;
-    if (surface.has(key)) return Promise.resolve(true);
+    // Configured first: configuring for a new size moves holds to a new generation (key).
     const ready = ensureConfigured();
     if (!ready) return Promise.resolve(false);
+    const key = holdKey(id);
+    if (surface.has(key)) return Promise.resolve(true);
     let request = holdRequests.get(id);
-    if (!request) {
+    if (!request || request.key !== key) {
       const image = images.get(id);
       const sendPng = image && !image.sent;
+      const gen = holdGen;
       request = ready
         .then(() => {
+          if (disposed || !renderer) return null;
           if (!sendPng) return renderer.hold(id);
           const png = image.png || (image.path ? readFileSync(image.path) : null);
           if (!png) throw new Error(`image ${id} has no data`);
@@ -210,29 +220,31 @@ export function createVisualThoughtsEngine({
           return renderer.add(id, png);
         })
         .then((reply) => {
-          if (disposed || holdRequests.get(id) !== request) return false;
+          if (!reply || disposed || holdRequests.get(id) !== request || gen !== holdGen) return false;
           if (!images.has(id)) { void renderer.drop(id).catch(() => {}); return false; }
           surface.upload(key, reply.payload);
+          liveHolds.add(key);
           return true;
         })
         .catch((error) => {
-          if (holdRequests.get(id) === request) holdRequests.delete(id);
           lastError = error?.message || String(error);
           warn(`visual thoughts: ${lastError}`);
           return false;
         });
+      request.key = key;
       holdRequests.set(id, request);
-      request.then((ok) => { if (!ok && holdRequests.get(id) === request) holdRequests.delete(id); });
+      // A request that did not leave the hold up is forgotten, so the next asks again.
+      request.then((ok) => { if ((!ok || !surface.has(key)) && holdRequests.get(id) === request) holdRequests.delete(id); });
     }
-    return request;
+    return request.then((ok) => ok && surface.has(key));
   }
 
   /** Drop terminal copies of holds that are neither shown nor about to be. */
   function trimHolds(keep) {
     for (const id of images.keys()) {
       if (keep.has(id)) continue;
-      const key = `hold:${id}`;
-      if (surface.has(key) && surface.shown !== key) { surface.drop(key); holdRequests.delete(id); }
+      const key = holdKey(id);
+      if (surface.has(key) && surface.shown !== key) { surface.drop(key); liveHolds.delete(key); holdRequests.delete(id); }
     }
   }
 
@@ -263,7 +275,7 @@ export function createVisualThoughtsEngine({
     const holds = [ensureHold(view.to), ...(view.from ? [ensureHold(view.from)] : [])];
     ready
       .then(() => Promise.all(holds))
-      .then(() => renderer.begin({ seq: current.seq, from: current.from, to: current.to, effect: config.effect, seed: (Math.random() * 2 ** 31) | 0 }))
+      .then(() => (disposed || !renderer ? Promise.reject(new Error("stopped")) : renderer.begin({ seq: current.seq, from: current.from, to: current.to, effect: config.effect, seed: (Math.random() * 2 ** 31) | 0 })))
       .then((reply) => { log(`begin ${current.seq} ${reply?.effect} ${reply?.width}x${reply?.height}`); if (job === current) { current.begun = true; pump(lastViewT); } })
       .catch((error) => { log(`begin failed ${current.seq} ${error?.message}`); if (job === current) { current.failed = true; lastError = error?.message || String(error); } });
   }
@@ -306,16 +318,29 @@ export function createVisualThoughtsEngine({
   function render() {
     if (!enabled || disposed) return;
     const at = now();
+    // The size first: a new one moves holds to a new generation.
+    if (images.size && surface.size()) ensureConfigured();
+    // Paused (an unfocused pane): a transition under way finishes; then the image holds, made
+    // again for a new size, but the cycle does not move on.
+    if (paused && !job) {
+      const id = rotation.status().current;
+      if (!id) return;
+      const key = holdKey(id);
+      if (surface.shown === key) return;
+      if (surface.has(key)) showHold(key);
+      else void ensureHold(id).then((ok) => { if (ok) render(); });
+      return;
+    }
     const view = rotation.tick(at);
     if (!view) { scheduleRender(rotation.wakeIn(at)); return; }
     if (!surface.size()) { scheduleRender(1_000); return; }
     try {
       if (view.id) {
-        if (job && job.to === view.id && surface.has(`hold:${view.id}`)) endJob();
-        const key = `hold:${view.id}`;
+        if (job && job.to === view.id && surface.has(holdKey(view.id))) endJob();
+        const key = holdKey(view.id);
         if (surface.shown !== key) {
           if (surface.has(key)) {
-            surface.show(key);
+            showHold(key);
             log(`hold ${view.id}`);
             if (job) endJob();
           } else {
@@ -358,6 +383,16 @@ export function createVisualThoughtsEngine({
     }
   }
 
+  /** Show a hold; a hold of an earlier size it replaces goes. */
+  function showHold(key) {
+    const previous = surface.shown;
+    surface.show(key);
+    if (previous && previous !== key && liveHolds.has(previous) && !previous.endsWith(`:${holdGen}`)) {
+      surface.drop(previous);
+      liveHolds.delete(previous);
+    }
+  }
+
   let lastFrameAt = 0;
   let shownFrames = 0;
 
@@ -366,7 +401,7 @@ export function createVisualThoughtsEngine({
     for (const id of images.keys()) {
       if (keep.has(id)) continue;
       images.delete(id);
-      surface.drop(`hold:${id}`);
+      for (const key of [...liveHolds]) if (key.startsWith(`hold:${id}:`)) { surface.drop(key); liveHolds.delete(key); }
       holdRequests.delete(id);
       void renderer?.drop(id).catch(() => {});
     }
@@ -428,6 +463,12 @@ export function createVisualThoughtsEngine({
       }
     },
     get enabled() { return enabled; },
+    /** Hold still (an unfocused pane) or carry on cycling. */
+    pause(on) {
+      paused = Boolean(on);
+      if (!paused) render();
+    },
+    get paused() { return paused; },
     /** Paint from the current output now, regardless of thresholds (not of rate limits). */
     generateNow() {
       if (!enabled) return false;

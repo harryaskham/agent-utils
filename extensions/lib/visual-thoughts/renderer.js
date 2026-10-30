@@ -16,8 +16,12 @@ export function frameDirectory() {
   return tmpdir();
 }
 
-export function createRenderer({ transport = "file", useWorker = true, onError = () => {} } = {}) {
-  const dir = transport === "file" ? frameDirectory() : tmpdir();
+/**
+ * The renderer thread (or in-thread core) for one transport, shared: every backdrop gets a
+ * context of its own on it. Kept while any context is open.
+ */
+function createRendererProcess({ transport, useWorker, onError }) {
+  const dir = frameDirectory();
   const pending = new Map();
   let ref = 0;
   let worker = null;
@@ -51,19 +55,55 @@ export function createRenderer({ transport = "file", useWorker = true, onError =
   }
   if (!worker) local = createRenderCore({ dir, transport });
 
-  function request(message, transfer = []) {
-    if (closed) return Promise.reject(new Error("renderer closed"));
-    ref += 1;
-    const tagged = { ...message, ref };
-    return new Promise((resolve, reject) => {
-      pending.set(ref, { resolve, reject });
-      if (worker) worker.postMessage(tagged, transfer);
-      else setImmediate(() => settle(local.handle(tagged)));
-    });
-  }
-
   return {
     get threaded() { return Boolean(worker); },
+    request(message, transfer = []) {
+      if (closed) return Promise.reject(new Error("renderer closed"));
+      ref += 1;
+      const tagged = { ...message, ref };
+      return new Promise((resolve, reject) => {
+        pending.set(ref, { resolve, reject });
+        if (worker) worker.postMessage(tagged, transfer);
+        else setImmediate(() => settle(local.handle(tagged)));
+      });
+    },
+    close() {
+      closed = true;
+      for (const [, entry] of pending) entry.reject(new Error("renderer closed"));
+      pending.clear();
+      void worker?.terminate();
+      worker = null;
+      // Frame files the terminal never read.
+      if (transport === "file") {
+        const prefix = `tty-graphics-protocol-vt-${process.pid}-`;
+        try { for (const name of readdirSync(dir)) if (name.startsWith(prefix)) rmSync(join(dir, name), { force: true }); } catch {}
+      }
+    },
+  };
+}
+
+const shared = new Map(); // `${transport}:${worker}` → { process, users }
+let contextSeq = 0;
+
+/**
+ * A renderer for one backdrop: a context on the shared renderer thread for its transport.
+ * `close()` releases the context; the thread stops with the last one.
+ */
+export function createRenderer({ transport = "file", useWorker = true, onError = () => {} } = {}) {
+  const key = `${transport}:${useWorker ? "worker" : "inline"}`;
+  let entry = shared.get(key);
+  if (!entry) {
+    entry = { process: createRendererProcess({ transport, useWorker, onError }), users: 0 };
+    shared.set(key, entry);
+  }
+  entry.users += 1;
+  contextSeq += 1;
+  const ctx = `c${contextSeq}`;
+  const owner = entry;
+  let closed = false;
+  const request = (message, transfer) => (closed ? Promise.reject(new Error("renderer closed")) : owner.process.request({ ...message, ctx }, transfer));
+  return {
+    get threaded() { return owner.process.threaded; },
     transport,
     configure: (options) => request({ type: "configure", ...options }),
     add: (id, png) => {
@@ -76,15 +116,13 @@ export function createRenderer({ transport = "file", useWorker = true, onError =
     frame: (seq, k, t) => request({ type: "frame", seq, k, t }),
     end: (seq) => request({ type: "end", seq }),
     close() {
+      if (closed) return;
+      void owner.process.request({ type: "release", ctx }).catch(() => {});
       closed = true;
-      for (const [, entry] of pending) entry.reject(new Error("renderer closed"));
-      pending.clear();
-      void worker?.terminate();
-      worker = null;
-      // Frame files the terminal never read.
-      if (transport === "file") {
-        const prefix = `tty-graphics-protocol-vt-${process.pid}-`;
-        try { for (const name of readdirSync(dir)) if (name.startsWith(prefix)) rmSync(join(dir, name), { force: true }); } catch {}
+      owner.users -= 1;
+      if (owner.users <= 0) {
+        owner.process.close();
+        if (shared.get(key) === owner) shared.delete(key);
       }
     },
   };

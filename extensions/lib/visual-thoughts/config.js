@@ -7,6 +7,8 @@ export const DEFAULT_PROMPT_MODEL = "github-copilot/gpt-6-luna";
 export const DEFAULTS = Object.freeze({
   enabled: false,
   promptModel: DEFAULT_PROMPT_MODEL,
+  // Hosts without Pi's model registry (pi-client): an OpenAI-compatible chat model on baseUrl.
+  clientPromptModel: "deepseek-v4-flash",
   provider: "litellm",
   imageModel: "gpt-image-2.5-flare",
   size: "1536x1024",
@@ -54,7 +56,7 @@ const CHOICES = Object.freeze({
   maiAuth: ["entra", "key"],
   transport: ["auto", "file", "stream"],
 });
-const STRINGS = new Set(["promptModel", "imageModel", "size", "quality", "baseUrl", "apiKeyEnv", "maiEndpoint", "maiKeyEnv", "style"]);
+const STRINGS = new Set(["promptModel", "clientPromptModel", "imageModel", "size", "quality", "baseUrl", "apiKeyEnv", "maiEndpoint", "maiKeyEnv", "style"]);
 /** Seconds-friendly aliases for the millisecond settings, and short names. */
 const ALIASES = Object.freeze({
   hold: ["holdMs", 1000], fade: ["fadeMs", 1000], interval: ["minIntervalMs", 1000], "min-show": ["minShowMs", 1000],

@@ -36,17 +36,22 @@ export function transitionSize(area, pixels = 400_000) {
 }
 
 /**
- * The renderer's state and message handler. `handle(message)` returns the reply (and the
- * buffers to transfer), synchronously.
+ * The renderer's state and message handler. `handle(message)` returns the reply, synchronously.
+ * Each message names its context (`ctx`: one per backdrop, so one renderer serves every pane);
+ * a context has its own area, look, images and transition.
  */
 export function createRenderCore({ dir, transport = "file", pid = process.pid } = {}) {
-  /** id → { png, source?: {width,height}, hold?, tx? } */
-  const images = new Map();
-  let area = null; // { width, height } device pixels
-  let txPixels = 400_000;
-  let display = { fit: "cover", feather: 0.12, opacity: 0.3 };
+  const contexts = new Map();
   let fileSeq = 0;
-  let current = null; // { seq, renderer, out }
+
+  function context(name = "default") {
+    let state = contexts.get(name);
+    if (!state) {
+      state = { images: new Map(), area: null, txPixels: 400_000, display: { fit: "cover", feather: 0.12, opacity: 0.3 }, current: null };
+      contexts.set(name, state);
+    }
+    return state;
+  }
 
   function encode({ width, height, rgba }) {
     if (transport === "file") {
@@ -58,7 +63,8 @@ export function createRenderCore({ dir, transport = "file", pid = process.pid } 
     return { medium: "d", data: deflateSync(rgba, { level: 1 }).toString("base64"), compressed: true, width, height };
   }
 
-  function ensure(id) {
+  function ensure(state, id) {
+    const { images, area, txPixels, display } = state;
     const image = images.get(id);
     if (!image) throw new Error(`no image ${id}`);
     if (!area) throw new Error("no display area yet");
@@ -73,38 +79,40 @@ export function createRenderCore({ dir, transport = "file", pid = process.pid } 
 
   const handlers = {
     /** Display geometry and look; prepared rasters for another size or look are dropped. */
-    configure({ area: nextArea, txPixels: nextTx, fit, feather, opacity }) {
+    configure(state, { area: nextArea, txPixels: nextTx, fit, feather, opacity }) {
+      const { area, txPixels, display } = state;
       const changed = !area || nextArea.width !== area.width || nextArea.height !== area.height || nextTx !== txPixels
         || fit !== display.fit || feather !== display.feather || opacity !== display.opacity;
-      area = { width: Math.max(16, Math.round(nextArea.width)), height: Math.max(16, Math.round(nextArea.height)) };
-      if (Number.isFinite(nextTx)) txPixels = nextTx;
-      display = { fit, feather, opacity };
-      if (changed) for (const image of images.values()) { image.hold = null; image.tx = null; }
+      state.area = { width: Math.max(16, Math.round(nextArea.width)), height: Math.max(16, Math.round(nextArea.height)) };
+      if (Number.isFinite(nextTx)) state.txPixels = nextTx;
+      state.display = { fit, feather, opacity };
+      if (changed) for (const image of state.images.values()) { image.hold = null; image.tx = null; }
       return { changed };
     },
     /** An image to show: kept (as PNG) and prepared now; replies with its hold payload. */
-    add({ id, png }) {
-      images.set(id, { png: Buffer.from(png) });
-      return handlers.hold({ id });
+    add(state, { id, png }) {
+      state.images.set(id, { png: Buffer.from(png) });
+      return handlers.hold(state, { id });
     },
     /** The hold image's payload (again: a terminal that freed it needs it re-sent). */
-    hold({ id }) {
-      const image = ensure(id);
+    hold(state, { id }) {
+      const image = ensure(state, id);
       return { id, payload: encode(image.hold) };
     },
-    drop({ id }) {
-      images.delete(id);
+    drop(state, { id }) {
+      state.images.delete(id);
       return { id };
     },
     /** Start a transition (`from` may be null): later `frame`s render it. */
-    begin({ seq, from, to, effect, seed }) {
-      const b = ensure(to);
-      const a = from && images.has(from) ? ensure(from) : null;
+    begin(state, { seq, from, to, effect, seed }) {
+      const b = ensure(state, to);
+      const a = from && state.images.has(from) ? ensure(state, from) : null;
       const plan = planTransition({ width: b.tx.width, height: b.tx.height, effect, seed });
-      current = { seq, renderer: createTransitionRenderer(plan, a?.tx || null, b.tx), out: new Uint8Array(b.tx.width * b.tx.height * 4) };
+      state.current = { seq, renderer: createTransitionRenderer(plan, a?.tx || null, b.tx), out: new Uint8Array(b.tx.width * b.tx.height * 4) };
       return { seq, effect: plan.effect, width: b.tx.width, height: b.tx.height };
     },
-    frame({ seq, k, t }) {
+    frame(state, { seq, k, t }) {
+      const { current } = state;
       if (!current || current.seq !== seq) return { seq, k, stale: true };
       const started = performance.now();
       const { plan } = current.renderer;
@@ -112,9 +120,14 @@ export function createRenderCore({ dir, transport = "file", pid = process.pid } 
       const payload = encode({ width: plan.width, height: plan.height, rgba: current.out });
       return { seq, k, payload, ms: performance.now() - started };
     },
-    end({ seq }) {
-      if (current?.seq === seq) current = null;
+    end(state, { seq }) {
+      if (state.current?.seq === seq) state.current = null;
       return { seq };
+    },
+    /** The context's backdrop is gone: forget everything it had. */
+    release(state, message) {
+      contexts.delete(message.ctx ?? "default");
+      return {};
     },
   };
 
@@ -123,7 +136,7 @@ export function createRenderCore({ dir, transport = "file", pid = process.pid } 
       const handler = handlers[message?.type];
       if (!handler) return { type: "error", ref: message?.ref, error: `unknown message ${message?.type}` };
       try {
-        return { type: message.type, ref: message.ref, ...handler(message) };
+        return { type: message.type, ref: message.ref, ...handler(context(message.ctx), message) };
       } catch (error) {
         return { type: "error", ref: message.ref, error: error?.message || String(error) };
       }
