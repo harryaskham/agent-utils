@@ -32,13 +32,14 @@ Available fields are:
 - `mcp` — MCP count recovered from Pi's extension status data.
 - `cost` — cumulative session cost, including nested usage-bearing entries.
 - `context` — current context percentage and context-window size.
-- `directory` — current working directory, with the home prefix rendered as `~`.
+- `directory` — current working directory, with the home prefix rendered as `~`. In a Cacophony agent's session it shows the agent chip instead, unless `agent` is placed itself.
+- `agent` — a Cacophony agent's project and name, `cacophony▌router`. A native agent's name is the one its configuration declares (`CACOPHONY_AGENT_NAME`), else its full id (`CACO_AGENT_ID`, `CACOPHONY_AGENT`); a visiting agent's (`/caco-agent-register`) is its id, `pi-daemon▌visiting-abcdef`. TUI Pi reads its own identity; pi-client reads each pane's session's from agent-utils' cacophony module (`extensions/durable/cacophony.mjs`), which records a native agent's identity from the session's variables (pi-daemon 1.15's `env.all()`; clients never receive the variables). None when Cacophony is disabled (`DISABLE_PI_CACO`, incognito).
 - `branch` — current Git branch.
 - `diff` — tracked additions and deletions relative to `HEAD`.
 - `speech` — `/ptt`, `/stt` and `/rt` microphone state: a grey dot when no voice mode is enabled, blue when armed/listening, red on air, amber while transcribing, green after a send. See [the speech indicator](realtime-agent.md#speech-indicator).
 - `meter` — input level, dBFS and a `✎` transcription mark; present only while audio is being captured.
 
-`cwd` aliases `directory`, `thinking` aliases `effort`, `stt`/`ptt`/`mic`/`recording` alias `speech`, and `volume`/`level`/`db` alias `meter`. Unknown and duplicate field names are ignored. `PI_EDITOR_CHIPS_ENABLED` can provide process-local startup enable/disable policy without changing the settings file.
+`cwd` aliases `directory`, `caco`/`cacophony` alias `agent`, `thinking` aliases `effort`, `stt`/`ptt`/`mic`/`recording` alias `speech`, and `volume`/`level`/`db` alias `meter`. Unknown and duplicate field names are ignored. `PI_EDITOR_CHIPS_ENABLED` can provide process-local startup enable/disable policy without changing the settings file.
 
 `hideFooter` defaults to `true`. The extension replaces the ordinary footer because the configured values now live on the editor rails. Extension statuses not represented by the `mcp` chip remain visible on a residual footer line.
 
@@ -75,11 +76,12 @@ Configured `topLeft`, `topCenter` and `topRight` groups share the top rail. The 
 
 When space is constrained, fitting proceeds deterministically:
 
-1. Collapse directory components from left to right until each component reaches one character (for example `~/.cacophony/agents/agent-utils/...` becomes `~/./a/a/...`).
-2. Drop the speech hint and the meter's dB label, but only on the row that carries them.
-3. Collapse the branch chip to its Git icon.
-4. Reduce the speech chip to its state glyph.
-5. Remove inter-group rail gaps and allow deterministic overlap/clipping at the terminal boundary.
+1. Drop the agent chip's project, leaving its name.
+2. Collapse directory components from left to right until each component reaches one character (for example `~/.cacophony/agents/agent-utils/...` becomes `~/./a/a/...`).
+3. Drop the speech hint and the meter's dB label, but only on the row that carries them.
+4. Collapse the branch chip to its Git icon.
+5. Reduce the speech chip to its state glyph.
+6. Remove inter-group rail gaps and allow deterministic overlap/clipping at the terminal boundary.
 
 The renderer always applies Pi's ANSI-aware width clamp after composing the rails, so editor rows never exceed terminal width or corrupt cursor/focus behavior.
 

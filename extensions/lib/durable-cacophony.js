@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { agentFromVariables } from "./agent-chip.js";
 import { explicitCacophonyIdentity, isPiCacoDisabled } from "./cacophony-runtime.js";
 import { inferVisitingProject, registerInferringProject } from "./cacophony-project.js";
 
@@ -170,6 +171,17 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
     return Boolean(vars.CACO_AGENT_ID) || Boolean(explicitCacophonyIdentity(env).agentId);
   };
 
+  // A native (managed) agent's identity as the session's variables have it (pi-daemon 1.15's
+  // env.all()), kept in the module's state for clients: pi-client's editor chips name the agent
+  // (`cacophony▌router`), and clients never receive the variables themselves.
+  const recordAgent = async (info) => {
+    if (typeof info.env?.all !== "function") return;
+    const agent = agentFromVariables(await info.env.all());
+    const managed = agent === undefined || agent.agentId.startsWith("visiting-") ? undefined : agent;
+    const kept = await info.state.get("agent");
+    if (JSON.stringify(kept ?? null) !== JSON.stringify(managed ?? null)) await info.state.set("agent", managed);
+  };
+
   return {
     extension: { name: "agent-utils-cacophony", sections: [identitySection()] },
     commands: {
@@ -208,9 +220,10 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
         },
       },
     },
-    /** Auto-registration on a session's first run. */
+    /** Auto-registration on a session's first run; a native agent's identity, for clients. */
     async observe(event, info) {
       if (event.type !== "agent_start" || config.disabled) return;
+      await recordAgent(info).catch(() => undefined);
       if (typeof info.env?.set !== "function") return;
       // A session migrated from TUI Pi carries its visiting agent's identity in its variables
       // (pi-daemon's /migrate, bd-737651): it is that agent, as if registered here.

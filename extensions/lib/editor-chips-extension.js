@@ -2,6 +2,8 @@
 // is extensions/editor-chips.js, which supplies the running Pi's CustomEditor.
 import { LOOPS_EVENT, LOOPS_REQUEST, nextLoopIn, shortDuration } from "./loop-indicator.js";
 import { GIT_EVENT, GIT_REQUEST } from "./git-indicator.js";
+import { CACOPHONY_STATE_ADDRESS, runtimeAgentChip, stateAgentChip } from "./agent-chip.js";
+import { onCacophonyRuntimeIdentity } from "./cacophony-runtime.js";
 import { readAgentSettings, agentSettingsPath } from "../pi-graphics/agent-io.js";
 import { clampRenderedLineToWidth, clampRenderedRowsToWidth } from "../pi-graphics/ansi-width.js";
 import { getOrCreateEditorChromeRegistry } from "../pi-graphics/fullscreen-contract.js";
@@ -93,6 +95,10 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       stopped: false,
       speech: null,
       speechUnsubscribe: null,
+      // pi-client: each session's cacophony module state (its agent's identity), followed while
+      // its pane is drawn. TUI Pi: a registration redraws the chips.
+      agents: new Map(),
+      agentUnsubscribe: null,
       statusCtx: null,
       reportedStatusFailures: new Set(),
     };
@@ -217,6 +223,38 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       return { loopsCount: loops.length, ...(next === undefined ? {} : { loopsNext: shortDuration(next) }) };
     };
 
+    // The agent chip's identity for the session this ctx draws: TUI Pi's own, or (pi-client, whose
+    // ctx has chord) what the session's cacophony module keeps, followed from its first draw.
+    const showsAgent = configuredFields.has("directory") || configuredFields.has("agent");
+    const agentFor = (ctx) => {
+      if (!showsAgent) return undefined;
+      if (typeof ctx?.chord?.watchDocument !== "function") {
+        try { return runtimeAgentChip(env, ctx); } catch { return undefined; }
+      }
+      const sessionId = sessionIdOf(ctx);
+      if (!sessionId) return undefined;
+      let entry = state.agents.get(sessionId);
+      if (entry === undefined) {
+        const followed = (entry = { doc: undefined, stop: undefined, stopped: false });
+        state.agents.set(sessionId, followed);
+        while (state.agents.size > GIT_DIRECTORIES) {
+          const [oldest, gone] = state.agents.entries().next().value;
+          state.agents.delete(oldest);
+          gone.stopped = true;
+          try { gone.stop?.(); } catch {}
+        }
+        // Bound to the pane this ctx draws now; a host without the module never sends one.
+        Promise.resolve(ctx.chord.watchDocument({ ...CACOPHONY_STATE_ADDRESS }, (value) => {
+          if (followed.stopped) return;
+          followed.doc = value;
+          try { state.tui?.requestRender?.(); } catch {}
+        })).then((stop) => {
+          if (followed.stopped) { try { stop?.(); } catch {} } else followed.stop = stop;
+        }, () => {});
+      }
+      return stateAgentChip(entry.doc, sessionId);
+    };
+
     const valuesFor = (ctx) => {
       // The session's git as its host reads it (pi-git), else this ctx's directory's, refreshed
       // when missing or stale.
@@ -263,6 +301,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         contextPct: Number.isFinite(contextPct) ? contextPct : 0,
         contextMax: Number.isFinite(contextMax) ? contextMax : 0,
         directory: prettyDirectory(ctx.cwd || process.cwd(), env.HOME || env.USERPROFILE),
+        agent: agentFor(ctx),
         branch: footerBranch || git?.branch || "",
         inGitRepo: Boolean(git?.inGitRepo) || Boolean(footerBranch),
         additions: git?.additions || 0,
@@ -392,6 +431,9 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         state.timers.add(timer);
         timer.unref?.();
       }
+      if (showsAgent && !state.agentUnsubscribe && typeof ctx?.chord?.watchDocument !== "function") {
+        state.agentUnsubscribe = onCacophonyRuntimeIdentity(() => { try { state.tui?.requestRender?.(); } catch {} }, ctx);
+      }
       await refreshGit(ctx);
     });
 
@@ -406,6 +448,13 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       try { state.speechUnsubscribe?.(); } catch {}
       state.speechUnsubscribe = null;
       try { state.loopsUnsubscribe?.(); } catch {}
+      try { state.agentUnsubscribe?.(); } catch {}
+      state.agentUnsubscribe = null;
+      for (const entry of state.agents.values()) {
+        entry.stopped = true;
+        try { entry.stop?.(); } catch {}
+      }
+      state.agents.clear();
       try { state.gitUnsubscribe?.(); } catch {}
       state.gitUnsubscribe = null;
       state.loopsUnsubscribe = null;

@@ -10,13 +10,13 @@ const DEFAULT_FIELDS = Object.freeze({
   bottomLeft: ["directory"],
   bottomCenter: ["branch", "diff"],
 });
-const KNOWN_FIELDS = new Set(["model", "effort", "mcp", "loops", "cost", "context", "directory", "branch", "diff", "speech", "meter", "working", "scrollUp", "scrollDown"]);
+const KNOWN_FIELDS = new Set(["model", "effort", "mcp", "loops", "cost", "context", "directory", "agent", "branch", "diff", "speech", "meter", "working", "scrollUp", "scrollDown"]);
 // What the editor itself writes into its borders (pi-client's embedded working status, the
 // "↑ N more" / "↓ N more" scroll markers) becomes chips; unless placed explicitly, they go here.
 const BORDER_FIELDS = Object.freeze([["working", "topLeft", "start"], ["scrollUp", "topRight", "end"], ["scrollDown", "bottomRight", "end"]]);
 const BORDER_RE = /^[─━═]/;
 const SCROLL_RE = /([↑↓])\s*(\d+)\s*more/;
-const FIELD_ALIASES = Object.freeze({ cwd: "directory", thinking: "effort", stt: "speech", ptt: "speech", mic: "speech", recording: "speech", volume: "meter", level: "meter", db: "meter" });
+const FIELD_ALIASES = Object.freeze({ cwd: "directory", caco: "agent", cacophony: "agent", thinking: "effort", stt: "speech", ptt: "speech", mic: "speech", recording: "speech", volume: "meter", level: "meter", db: "meter" });
 // Chip text that display aliases may rewrite (view only: colours, compaction and logic keep the
 // real values). "provider" and "model" are the model chip's two halves.
 const ALIAS_FIELDS = Object.freeze(["provider", "model", "effort", "directory", "branch"]);
@@ -296,7 +296,10 @@ function chipFor(field, values, theme) {
       part(values.model || "n/a", p.white, p.dark),
     ]);
     case "effort": return values.effortLabel === "" ? "" : renderParts([part(values.effortLabel ?? (values.effort || "off"), p.effort)]);
-    case "directory": return renderParts([part("", p.blue), part(values.directory || ".", p.nord3)], { divider: "rounded" });
+    // A Cacophony agent's chip stands in for the directory (its project and agent determine it),
+    // unless "agent" is placed itself.
+    case "directory": return values.agent && !values.agentPlaced ? agentChip(values, p) : renderParts([part("", p.blue), part(values.directory || ".", p.nord3)], { divider: "rounded" });
+    case "agent": return values.agent ? agentChip(values, p) : "";
     case "branch": return values.inGitRepo ? renderParts([part("", p.blue), ...(values.branchCollapsed ? [] : [part(values.branch, p.nord3)])], { divider: "rounded" }) : "";
     case "diff": return values.inGitRepo ? renderParts([part(`+${values.additions || 0}`, p.green), part(`-${values.deletions || 0}`, p.red)], { divider: "vertical" }) : "";
     // No MCP servers: no chip (a 0 only takes room).
@@ -388,6 +391,12 @@ export function renderSpeechIndicatorLine({ speech, theme, separator = " " } = {
   return [speechChip(speech, p), meterChip(speech, p)].filter(Boolean).join(separator);
 }
 
+/** `project▌name`, as the MCP chip's `3▌MCP`; the name alone once compacted or without a project. */
+function agentChip(values, p) {
+  const { project, name } = values.agent;
+  return renderParts([...(project && !values.agentCompact ? [part(project, p.blue)] : []), part(name, p.nord3)], { divider: "vertical" });
+}
+
 function groupFor(fieldNames, values, theme, separator) {
   return fieldNames.map((field) => chipFor(field, values, theme)).filter(Boolean).join(separator);
 }
@@ -415,6 +424,8 @@ function fitValues(width, config, initialValues, theme, separator) {
   const exceeds = () => rows.some((row) => totalWidth(...row) > width);
   // Only the row that actually carries a chip may compact it.
   const exceedsFor = (field) => rows.some((row) => row.some((group) => group.includes(field)) && totalWidth(...row) > width);
+  // An agent chip sheds its project first; a directory shortens step by step.
+  if (values.agent && (exceedsFor("directory") || exceedsFor("agent"))) values.agentCompact = true;
   while (exceeds() && candidateIndex + 1 < candidates.length) {
     candidateIndex += 1;
     values.directory = candidates[candidateIndex];
@@ -453,7 +464,8 @@ export function buildEditorChipRails({ width, config, values, theme }) {
   const padding = Math.max(0, Math.trunc(Number(config.editorPaddingX) || 0));
   const innerWidth = Math.max(1, safeWidth - padding * 2);
   const separator = rail(theme, values.effort, 1);
-  const fittedValues = fitValues(innerWidth, config, applyChipAliases(values, config.aliases), theme, separator);
+  const placed = { ...values, agentPlaced: editorChipFieldSet(config).has("agent") };
+  const fittedValues = fitValues(innerWidth, config, applyChipAliases(placed, config.aliases), theme, separator);
   const top = composeRailRow({
     width: safeWidth,
     padding,
