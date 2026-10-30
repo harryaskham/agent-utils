@@ -7,6 +7,7 @@ import {
   pendingAfterRecords,
   restoreAfterRecords,
 } from "./lib/after.js";
+import { dispatchScheduled } from "./lib/scheduled-dispatch.js";
 
 export function createAfterExtension({
   now = () => Date.now(),
@@ -39,20 +40,12 @@ export function createAfterExtension({
       // explicit indeterminate receipt rather than duplicating operator intent.
       append({ ...record, status: "delivering", deliveringAt: now() });
       try {
-        if (/^\/compact(?:\s|$)/i.test(record.payload)) {
-          const customInstructions = record.payload.replace(/^\/compact\s*/i, "").trim();
-          sessionCtx.compact?.({
-            ...(customInstructions ? { customInstructions } : {}),
-            onError(error) {
-              try { sessionCtx?.ui?.notify?.(`/after ${id}: compact failed: ${error?.message || String(error)}`, "warning"); } catch {}
-            },
-          });
-        } else {
-          pi.sendUserMessage(record.payload, {
-            deliverAs: "followUp",
-            expandPromptTemplates: record.payload.startsWith("/"),
-          });
-        }
+        dispatchScheduled(pi, sessionCtx, record.payload, {
+          deliverAs: "followUp",
+          onCompactError(error) {
+            try { sessionCtx?.ui?.notify?.(`/after ${id}: compact failed: ${error?.message || String(error)}`, "warning"); } catch {}
+          },
+        });
         append({ ...record, status: "delivered", deliveredAt: now() });
         try { sessionCtx.ui?.notify?.(`/after ${id}: delivered`, "info"); } catch {}
         return true;

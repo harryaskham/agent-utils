@@ -8,18 +8,24 @@ export const LOOPS_EVENT = "agent-utils:loops.v1";
 /** `{ sessionId }`: a consumer wants this session's loops (and is there to draw them). */
 export const LOOPS_REQUEST = "agent-utils:loops-request.v1";
 
-/** A loops document's live loops, as the event carries them. */
+/**
+ * A loops document's live schedules, as the event carries them: a loop's `{ startedAt,
+ * intervalSecs }`, an /after's or /cron's next time `{ nextAt }`.
+ */
 export function liveLoopSchedules(doc) {
-  return Object.values(doc?.loops ?? {})
-    .filter((loop) => loop && !loop.stopped && Number(loop.intervalSecs) > 0 && Number.isFinite(Number(loop.startedAt)))
-    .map((loop) => ({ startedAt: Number(loop.startedAt), intervalSecs: Number(loop.intervalSecs) }));
+  return Object.values(doc?.loops ?? {}).flatMap((loop) => {
+    if (!loop || loop.stopped) return [];
+    if (Number.isFinite(Number(loop.nextAt)) && (loop.kind === "after" || loop.kind === "cron")) return [{ nextAt: Number(loop.nextAt) }];
+    if (Number(loop.intervalSecs) > 0 && Number.isFinite(Number(loop.startedAt))) return [{ startedAt: Number(loop.startedAt), intervalSecs: Number(loop.intervalSecs) }];
+    return [];
+  });
 }
 
 /** How long until the soonest of `loops` fires, at `now`; undefined without loops. */
 export function nextLoopIn(loops, now = Date.now()) {
   let soonest;
   for (const loop of loops ?? []) {
-    const at = nextFireAt(loop.startedAt, loop.intervalSecs * 1000, now);
+    const at = Number.isFinite(loop.nextAt) ? loop.nextAt : nextFireAt(loop.startedAt, loop.intervalSecs * 1000, now);
     if (soonest === undefined || at < soonest) soonest = at;
   }
   return soonest === undefined ? undefined : Math.max(0, soonest - now);

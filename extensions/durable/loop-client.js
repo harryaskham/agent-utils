@@ -25,6 +25,11 @@ export function loopStatus(doc, now = Date.now()) {
   const loops = liveLoops(doc);
   if (loops.length === 0) return undefined;
   const parts = loops.map((loop) => {
+    // An /after or a /cron: its next time, which its task keeps in the document.
+    if (loop.kind === "after" || loop.kind === "cron") {
+      const next = Number(loop.nextAt);
+      return `#${loop.number} ${loop.kind === "after" ? "once" : "cron"}${Number.isFinite(next) ? ` (${loop.kind === "after" ? "in" : "next"} ${shortDuration(Math.max(0, next - now))})` : ""}`;
+    }
     const intervalMs = Number(loop.intervalSecs) * 1000;
     const next = Number.isFinite(intervalMs) && intervalMs > 0 && Number.isFinite(loop.startedAt) ? nextFireAt(loop.startedAt, intervalMs, now) : undefined;
     return `#${loop.number} every ${shortDuration(intervalMs)}${next === undefined ? "" : ` (next ${shortDuration(next - now)})`}`;

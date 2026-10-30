@@ -1,4 +1,5 @@
-// Durable adaptor: /loop for pi-daemon sessions, a repeating prompt as a Durable background task.
+// Durable adaptor: /loop, /after and /cron for pi-daemon sessions, as Durable background tasks
+// that sleep between ticks (pi-durable 1.4 stored sleeps).
 // Commands as the TUI /loop: /loop <interval> [--steer] <prompt> (several at once, numbered),
 // /loop list (or /loops), /loop stop [id|all] (off and end too); the agent manages its own loops
 // with the TUI's tools, create_loop, list_loops and stop_loop, sharing the same numbers.
@@ -17,6 +18,7 @@ const task = createLoopTask({ timeZone: process.env.PI_LOOP_TZ });
 
 const options = {
   task,
+  timeZone: process.env.PI_LOOP_TZ,
   minSecs: Number.isFinite(minSecs) && minSecs > 0 ? minSecs : DEFAULT_MIN_INTERVAL_SECS,
   defaultDelivery: process.env.PI_LOOP_DEFAULT_DELIVERY === "steer" ? "steer" : "followUp",
 };
@@ -24,5 +26,5 @@ const options = {
 // The loop task, and the agent's own tools: create_loop, list_loops, stop_loop.
 export const extension = { name: "agent-utils-loop", tasks: [task], tools: createLoopTools(options) };
 
-// /loop and /loops.
+// /loop, /loops, /after and /cron (a 5-field schedule in PI_LOOP_TZ or tz=, else the worker's zone).
 export const commands = createLoopCommands(options);

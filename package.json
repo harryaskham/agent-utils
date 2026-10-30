@@ -94,6 +94,7 @@
       "./extensions/compact-next.js",
       "./extensions/endless.js",
       "./extensions/after.js",
+      "./extensions/cron.js",
       "./extensions/self-compact.js",
       "./extensions/session-fork.js",
       "./extensions/scrub.js",
