@@ -13,6 +13,8 @@
 
 It is off by default. Enable it at startup with `agentUtils.visualThoughts.enabled` or `PI_VISUAL_THOUGHTS=1`. Incognito sessions (`PI_INCOGNITO=1`) never paint.
 
+![pi-client, two panes side by side, each with its own session's painting behind its text](assets/visual-thoughts/pi-client-split.jpg)
+
 ## How it paints
 
 - **What feeds it.** The run's prompt, streamed reasoning and reply text, and tool calls (names and redacted arguments) go into a bounded digest. Secrets are redacted as for `/narrate`.
@@ -30,10 +32,16 @@ TUI Pi in fullscreen mode (`tuiMode: fullscreen`) on a Kitty-graphics terminal (
 
 - **pi-client: each pane paints its own session.** Add `extensions/visual-thoughts.js` to `client.extensions`. pi-client gives each pane a backdrop (`ctx.ui.backdrop()`, pi-daemon 1.15+): the images sit inside the pane, never over its neighbours, the dividers or the sidebar, and follow splits, zoom and tabs. The focused pane paints and cycles; the others hold their current image still, made again at their new size when the layout changes. A pane switched to another session starts from that session's images. pi-client runs extensions without the agent's process, so the prompt model there is `clientPromptModel` (default `deepseek-v4-flash`) on the OpenAI-compatible endpoint (`LITELLM_BASE_URL`); `promptModel: "litellm/<model>"` does the same in TUI Pi.
 
+![The six transitions midway: fade, ripple, wave (top); dissolve, bloom, drift (bottom)](assets/visual-thoughts/effects.jpg)
+
 - **Holds are sharp and free.** Each image is fitted and uploaded once, at the screen's real resolution (Pi's cell size in device pixels, so HiDPI is right) or the source's, whichever is smaller, then placed over the whole screen under the text. Holding an image costs nothing.
 - **Transitions run on a worker thread.** A transition is one of `ripple` (a ring spreads from a point, the water rippling at its edge), `wave` (heat haze: rows sway while the new image rises through), `dissolve` (soft noise with a faint glow along its edge), `bloom` (both images drift outwards and glow midway) or `drift` (the old image recedes as the new one settles in), or a plain `fade`; `random` (the default) picks one of the first five each time. Frames render at up to `transitionPixels` (400k by default) on a worker and play at `fps` (60 by default; frames the renderer cannot deliver in time are skipped, never queued). A frame costs the renderer 2–10 ms at 690×580 and Pi's own thread a few hundred bytes of output.
 - **Frames travel as files.** When the terminal runs on this machine, a frame is raw RGBA in a temporary file the terminal reads and deletes (`t=t`): no PNG encoding, no base64. Over SSH or inside tmux, frames go inline, zlib-compressed.
 - **With `/gfx full` (pi-graphics' canvas, either renderer), the thoughts blend into its background.** The backdrop sits just above the canvas's background (aurora, nebula, waves, …) and its tint, under its glow, cards and text, at `canvasOpacity` (0.45 by default): the animated background glows through the image's soft edges and shadows, and both keep moving. The canvas tells the backdrop when it starts, stops or clears the screen, and the backdrop comes back at once.
+![TUI Pi with layer over (left: the tool box tinted) and under (right: panels solid, the image around the text)](assets/visual-thoughts/layers-over-under.jpg)
+
+![/gfx full with the gfx-core renderer: the thoughts blended into its aurora, under the glowing editor card](assets/visual-thoughts/gfx-canvas-blend.jpg)
+
 - **Pi's redraws are handled.** Pi deletes every placement when its own images change and frees images on full redraws; the extension watches Pi's output and puts the backdrop back inside the same frame, uploading again what was freed.
 
 tmux is not supported yet (`PI_VISUAL_THOUGHTS_TMUX=1` to try). `PI_VISUAL_THOUGHTS_TRACE=<file>` logs transitions, frames and main-thread stalls.
