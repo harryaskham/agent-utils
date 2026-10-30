@@ -20,6 +20,15 @@ import { serializeKittyGraphicsChunks, serializeKittyGraphicsCommand } from "../
 import { piGraphicsImageId } from "../../pi-graphics/id-space.js";
 
 export const BACKDROP_Z = Object.freeze({ over: -1_048_576, under: -1_073_741_900 });
+/** Above pi-graphics' canvas background (and its tint), below its glow: blended into it. */
+export const CANVAS_BLEND_Z = 2;
+const CANVAS = Symbol.for("agent-utils.pi-graphics.canvas");
+
+/** pi-graphics' full canvas, when it is on (/gfx full): its background's z. */
+export function activeCanvas() {
+  const canvas = globalThis[CANVAS];
+  return canvas?.active ? canvas : null;
+}
 const BSU = "\x1b[?2026h";
 const ESU = "\x1b[?2026l";
 const SAVE = "\x1b7";
@@ -72,7 +81,13 @@ export function createTuiBackdropSurface({ tui, env = process.env, options = () 
   let hadOwnWrite = false;
 
   const serialize = (control) => serializeKittyGraphicsCommand(control, "", { passthrough });
-  const z = () => BACKDROP_Z[backdropLayer(options().layer, env)];
+  // With pi-graphics' canvas on, the backdrop blends into its background (aurora, nebula, …):
+  // just above it, under the canvas's glow, cards and text.
+  const z = () => {
+    const canvas = activeCanvas();
+    return canvas && Number.isFinite(canvas.zBase) ? canvas.zBase + CANVAS_BLEND_Z : BACKDROP_Z[backdropLayer(options().layer, env)];
+  };
+  let unsubscribeCanvas = null;
 
   function screen() {
     if (tui.mode !== undefined && tui.mode !== "fullscreen") return null;
@@ -98,8 +113,21 @@ export function createTuiBackdropSurface({ tui, env = process.env, options = () 
     });
   }
 
+  /** Every image is gone (the host freed them, or the canvas cleared the screen). */
+  function loseAll() {
+    if (!keys.size && !shown) return;
+    const lost = shown?.key ?? null;
+    for (const imageId of keys.values()) if (!free.includes(imageId)) free.push(imageId);
+    keys.clear();
+    shown = null;
+    queueMicrotask(() => onLost(lost));
+  }
+
   function hook() {
     if (hooked) return;
+    // The canvas starting, stopping or clearing erases the screen with its own writes.
+    const canvas = globalThis[CANVAS];
+    if (canvas?.subscribe && !unsubscribeCanvas) unsubscribeCanvas = canvas.subscribe(() => loseAll());
     hadOwnWrite = Object.prototype.hasOwnProperty.call(terminal, "write");
     ownWrite = hadOwnWrite ? terminal.write : undefined;
     const inner = terminal.write;
@@ -110,6 +138,8 @@ export function createTuiBackdropSurface({ tui, env = process.env, options = () 
   }
 
   function unhook() {
+    try { unsubscribeCanvas?.(); } catch {}
+    unsubscribeCanvas = null;
     if (!hooked) return;
     if (hadOwnWrite) terminal.write = ownWrite;
     else delete terminal.write;
@@ -126,11 +156,7 @@ export function createTuiBackdropSurface({ tui, env = process.env, options = () 
     if (key && key !== lastSize) { lastSize = key; queueMicrotask(onResize); }
     if (freed) {
       // Every image is gone: forget them; the engine uploads what it shows again.
-      const lost = shown.key;
-      for (const imageId of keys.values()) if (!free.includes(imageId)) free.push(imageId);
-      keys.clear();
-      shown = null;
-      queueMicrotask(() => onLost(lost));
+      loseAll();
       return data;
     }
     if (now) { shown.cols = now.cols; shown.rows = now.rows; }

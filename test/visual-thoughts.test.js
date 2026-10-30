@@ -17,7 +17,7 @@ import { createRenderCore, holdSize, transitionSize } from "../extensions/lib/vi
 import { createRenderer } from "../extensions/lib/visual-thoughts/renderer.js";
 import { createRotation } from "../extensions/lib/visual-thoughts/rotation.js";
 import { createImageStore } from "../extensions/lib/visual-thoughts/store.js";
-import { BACKDROP_Z, createTuiBackdropSurface } from "../extensions/lib/visual-thoughts/tui-surface.js";
+import { BACKDROP_Z, CANVAS_BLEND_Z, createTuiBackdropSurface } from "../extensions/lib/visual-thoughts/tui-surface.js";
 import { parseKittyGraphicsCommands } from "../extensions/kitty-graphics.js";
 
 /** A solid-colour opaque image as PNG bytes. */
@@ -672,5 +672,37 @@ test("extension in pi-client: each pane paints its own session; prompts over the
     await emit("session_shutdown", {}, rightCtx);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("TUI surface: with pi-graphics' canvas on, the backdrop blends just above its background and returns after it clears", async () => {
+  const CANVAS = Symbol.for("agent-utils.pi-graphics.canvas");
+  const listeners = new Set();
+  const canvas = { active: true, zBase: -1_000_000, subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); } };
+  const previous = globalThis[CANVAS];
+  globalThis[CANVAS] = canvas;
+  try {
+    const { terminal, writes } = fakeTerminal();
+    const lost = [];
+    const surface = createTuiBackdropSurface({ tui: { mode: "fullscreen", terminal }, env: {}, options: () => ({ layer: "over" }), onLost: (key) => lost.push(key), cellSize: () => ({ widthPx: 10, heightPx: 20 }), ids: [7, 8] });
+    surface.upload("hold:a:1", { medium: "d", data: "", width: 1, height: 1 });
+    surface.show("hold:a:1");
+    await flushed();
+    assert.equal(parseKittyGraphicsCommands(writes.at(-1)).find((c) => c.control.a === "p").control.z, String(-1_000_000 + CANVAS_BLEND_Z));
+    // The canvas cleared the screen (its own write): the images are gone, the engine hears it.
+    for (const listener of listeners) listener("cleared");
+    await flushed();
+    assert.deepEqual(lost, ["hold:a:1"]);
+    assert.equal(surface.has("hold:a:1"), false);
+    // Canvas off: the ordinary layer again.
+    canvas.active = false;
+    surface.upload("hold:a:2", { medium: "d", data: "", width: 1, height: 1 });
+    surface.show("hold:a:2");
+    await flushed();
+    assert.equal(parseKittyGraphicsCommands(writes.at(-1)).find((c) => c.control.a === "p").control.z, String(BACKDROP_Z.over));
+    surface.dispose();
+    assert.equal(listeners.size, 0, "unsubscribed");
+  } finally {
+    globalThis[CANVAS] = previous;
   }
 });

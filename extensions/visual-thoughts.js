@@ -20,7 +20,7 @@ import { createImageProvider } from "./lib/visual-thoughts/image-provider.js";
 import { litellmChat } from "./lib/visual-thoughts/litellm-chat.js";
 import { toolCallDigest } from "./lib/visual-thoughts/prompter.js";
 import { createImageStore, visualThoughtsStateDir } from "./lib/visual-thoughts/store.js";
-import { createTuiBackdropSurface } from "./lib/visual-thoughts/tui-surface.js";
+import { activeCanvas, createTuiBackdropSurface } from "./lib/visual-thoughts/tui-surface.js";
 
 const STATUS_KEY = "visual-thoughts";
 const PROVIDER_KEYS = new Set(["provider", "imageModel", "size", "quality", "baseUrl", "apiKeyEnv", "maiEndpoint", "maiAuth", "maiKeyEnv"]);
@@ -183,6 +183,8 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
           provider: providerFor(),
           promptTurn,
           warn: warnOnce,
+          // Blended into pi-graphics' canvas (TUI Pi's /gfx full), stronger.
+          look: () => ({ fit: config.fit, feather: config.feather, opacity: !backdrop && activeCanvas() ? config.canvasOpacity : config.opacity }),
           ...(env.PI_VISUAL_THOUGHTS_TRACE ? { trace: (line) => appendFileSync(env.PI_VISUAL_THOUGHTS_TRACE, `${line}\n`) } : {}),
           onChange: (status) => {
             if (focused !== made) return;

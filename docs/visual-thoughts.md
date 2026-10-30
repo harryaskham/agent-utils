@@ -33,6 +33,7 @@ TUI Pi in fullscreen mode (`tuiMode: fullscreen`) on a Kitty-graphics terminal (
 - **Holds are sharp and free.** Each image is fitted and uploaded once, at the screen's real resolution (Pi's cell size in device pixels, so HiDPI is right) or the source's, whichever is smaller, then placed over the whole screen under the text. Holding an image costs nothing.
 - **Transitions run on a worker thread.** A transition is one of `ripple` (a ring spreads from a point, the water rippling at its edge), `wave` (heat haze: rows sway while the new image rises through), `dissolve` (soft noise with a faint glow along its edge), `bloom` (both images drift outwards and glow midway) or `drift` (the old image recedes as the new one settles in), or a plain `fade`; `random` (the default) picks one of the first five each time. Frames render at up to `transitionPixels` (400k by default) on a worker and play at `fps` (60 by default; frames the renderer cannot deliver in time are skipped, never queued). A frame costs the renderer 2–10 ms at 690×580 and Pi's own thread a few hundred bytes of output.
 - **Frames travel as files.** When the terminal runs on this machine, a frame is raw RGBA in a temporary file the terminal reads and deletes (`t=t`): no PNG encoding, no base64. Over SSH or inside tmux, frames go inline, zlib-compressed.
+- **With `/gfx full` (pi-graphics' canvas, either renderer), the thoughts blend into its background.** The backdrop sits just above the canvas's background (aurora, nebula, waves, …) and its tint, under its glow, cards and text, at `canvasOpacity` (0.45 by default): the animated background glows through the image's soft edges and shadows, and both keep moving. The canvas tells the backdrop when it starts, stops or clears the screen, and the backdrop comes back at once.
 - **Pi's redraws are handled.** Pi deletes every placement when its own images change and frees images on full redraws; the extension watches Pi's output and puts the backdrop back inside the same frame, uploading again what was freed.
 
 tmux is not supported yet (`PI_VISUAL_THOUGHTS_TMUX=1` to try). `PI_VISUAL_THOUGHTS_TRACE=<file>` logs transitions, frames and main-thread stalls.
@@ -51,6 +52,7 @@ tmux is not supported yet (`PI_VISUAL_THOUGHTS_TMUX=1` to try). `PI_VISUAL_THOUG
 | `size`, `quality` | `1536x1024`, `low` | MAI: `1344x768` |
 | `style` | | appended to every prompt |
 | `opacity` | `0.3` | backdrop alpha |
+| `canvasOpacity` | `0.45` | backdrop alpha blended into `/gfx full`'s background (`canvas-opacity` at runtime) |
 | `fit` | `cover` | `cover`, `contain`, `stretch` |
 | `feather` | `0.12` | edge fade, fraction of the shorter side |
 | `layer` | `auto` | `over` cell backgrounds (tints panels), `under` them; `auto`: `under` in tmux |

@@ -568,9 +568,27 @@ export default async function piGraphicsExtension(pi) {
     }
     return regions;
   }
+  // The canvas, as other extensions see it (visual thoughts blend into its background): whether
+  // it is on, its background layer's z, and when it starts, stops or clears the screen (which
+  // removes their images too).
+  const canvasListeners = new Set();
+  const notifyCanvas = (event) => { for (const listener of [...canvasListeners]) { try { listener(event); } catch {} } };
+  globalThis[Symbol.for("agent-utils.pi-graphics.canvas")] = {
+    get active() { return fullCanvasActive(); },
+    get zBase() { return fullCanvas?.zBase?.() ?? CANVAS_Z.base; },
+    subscribe(listener) {
+      if (typeof listener !== "function") return () => {};
+      canvasListeners.add(listener);
+      return () => canvasListeners.delete(listener);
+    },
+  };
   fullCanvas = createFullCanvas({
     getTui: () => hostTui,
-    write: (data) => { const writer = terminalWriter(hostTui?.terminal); if (writer && data) writer(data); },
+    write: (data) => {
+      const writer = terminalWriter(hostTui?.terminal);
+      if (writer && data) writer(data);
+      if (data && (data.includes("\x1b[2J") || /\x1b_Ga=d,d=A[,;\x1b]/.test(data))) notifyCanvas("cleared");
+    },
     serialize: (control, payload = "") => serializeKittyGraphicsCommand(control, payload, { passthrough: state.config.passthrough }),
     serializeRaw: (control, payload = "") => serializeKittyGraphicsCommand(control, payload, { passthrough: "none" }),
     wrapPassthrough: (sequence) => wrapForPassthrough(sequence, "tmux"),
@@ -598,6 +616,7 @@ export default async function piGraphicsExtension(pi) {
     },
     trace,
     onStateChange(active) {
+      queueMicrotask(() => notifyCanvas(active ? "start" : "stop"));
       // Pixel-canvas mode draws its own chrome: drop placeholder decorations
       // and overlays so Pi's composed screen is plain styled text.
       const clear = overlayPlacements.clear();

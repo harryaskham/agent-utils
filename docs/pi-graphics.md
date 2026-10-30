@@ -254,6 +254,8 @@ text change).
 bottom, when the top is scrolled off) of every pending tool pane. Frames
 depend only on the pane width, so streaming output does not re-render them.
 
+**Visual thoughts.** With `/thoughts on` ([visual thoughts](visual-thoughts.md)), the agent's painted thoughts blend into the canvas's background: their backdrop sits just above the background and its tint, under the glow, cards and text. The canvas publishes its state for this (`globalThis[Symbol.for("agent-utils.pi-graphics.canvas")]`: `active`, `zBase`, and `subscribe(listener)` for its starts, stops and screen clears).
+
 **Inside gfxsh.** gfxsh already draws the terminal as a pixel canvas and
 draws Pi — a full-screen program — on it with its own background and
 effects. Pi's canvas would be decoded and re-composited by gfxsh every frame

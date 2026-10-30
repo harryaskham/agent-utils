@@ -2603,6 +2603,8 @@ export function createFullCanvas({
 
   return {
     get active() { return state.active; },
+    /** The background layer's z; the layers up to its glow (+4) leave room to blend others in. */
+    zBase: () => zBase(),
     start,
     stop,
     onFrame,

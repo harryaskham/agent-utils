@@ -31,6 +31,7 @@ export function createVisualThoughtsEngine({
   onChange = () => {},
   createRenderer = defaultCreateRenderer,
   trace = null,
+  look = () => ({ fit: config.fit, feather: config.feather, opacity: config.opacity }),
 }) {
   const log = typeof trace === "function" ? (line) => { try { trace(`${now()} ${line}`); } catch {} } : () => {};
   if (typeof trace === "function") {
@@ -186,14 +187,15 @@ export function createVisualThoughtsEngine({
   function ensureConfigured(size = surface.size()) {
     if (!size) return null;
     const area = { width: size.cols * size.cellWidthPx, height: size.rows * size.cellHeightPx };
-    const key = `${area.width}x${area.height}:${config.fit}:${config.feather}:${config.opacity}:${config.transitionPixels}`;
+    const { fit, feather, opacity } = look();
+    const key = `${area.width}x${area.height}:${fit}:${feather}:${opacity}:${config.transitionPixels}`;
     if (key === areaKey) return configuring;
     areaKey = key;
     holdRequests.clear();
     if (job) endJob();
     holdGen += 1;
     for (const key of [...liveHolds]) if (surface.shown !== key) { surface.drop(key); liveHolds.delete(key); }
-    configuring = ensureRenderer().configure({ area, txPixels: config.transitionPixels, fit: config.fit, feather: config.feather, opacity: config.opacity });
+    configuring = ensureRenderer().configure({ area, txPixels: config.transitionPixels, fit, feather, opacity });
     return configuring;
   }
 
