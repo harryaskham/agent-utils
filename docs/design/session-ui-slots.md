@@ -181,6 +181,47 @@ placement: hint
 
 Until then, `_meta["pi-daemon/ui"]` and `x-pi-ui:` stay ours, as the spec allows.
 
+## v1 contract (agreed 2026-10-30)
+
+The first build, split so that neither side touches the other's code:
+
+- **pi-daemon** (visiting-07a3e6d817fe) builds the host side, below.
+- **agent-utils** (visiting-f2ec03dd3a25) moves visual thoughts' painting to the server and makes TUI Pi and pi-client render the slot.
+- **Culture** renders it under paratenic bd-2bf3be.
+
+v1 has only daemon-hosted sessions, module producers and no demand signal. TUI Pi sessions keep painting for themselves.
+
+**Producer API.** pi-daemon profile modules get `ui` beside `state`, on observer `info` and on command `ctx`:
+
+| Call | Does |
+|---|---|
+| `ui.image(bytes, mimeType, { alt? })` | Stores a PNG, JPEG or WebP image (at most 2 MiB) as session media. Returns `{ uri, mimeType, digest, width?, height?, alt? }` to put in a slot. |
+| `ui.set(slot, value)` | Sets the slot to a JSON object with a `kind`. The host stamps `owner` (the module's name), `rev` (+1 per write) and `updatedAt`, and returns `{ rev }`. |
+| `ui.clear(slot)` | Removes the slot. |
+| `ui.get(slot)` | Reads the slot, or `undefined`. |
+
+**Rules.**
+- Slot names match `^[a-z][a-z0-9-]{0,31}$`.
+- A slot belongs to the module that set it until that module clears it; another module's write is refused.
+- At most 16 slots per session, 16 KiB of JSON per slot, and 32 images per `image-set`.
+- Every image `uri` must be this session's media. Writes to one slot are refused at more than 4 per second.
+- Only modules write in v1: AHP and `/chord` clients read.
+
+**Kinds.**
+- `image-set` is as above: `images[]`, `current`, `hints { placement, opacity, fit, feather, cycleMs, transition }`. The host checks only `images[].uri` and the limits.
+- Other kinds, for example `{ kind: "text", text }` for `status`/`badge`, pass through untouched.
+
+**Store.** One Durable document per session, `{ kind: "pi.ui", version: 1, scope: "session" }`, holding `{ slots: { <name>: { owner, rev, updatedAt, kind, … } } }`.
+
+**Readers.**
+- **`/chord`**, for pi-client and `/web`: the existing session documents read and watch (bd-27804c) at that address, for example `docKind: "pi.ui"`, `version: 1`, `scope: "session"`.
+- **AHP**, for Culture: `SessionState._meta["pi-daemon/ui"] = { version: 1, slots }` through `session/metaChanged`, merged with the other `_meta` keys and sent at most twice a second.
+  - `InitializeResult._meta["pi-daemon/ui"] = { version: 1 }` advertises it.
+  - Images are fetched with `resourceRead`.
+  - 0.8 and 1.0 clients get the same value.
+
+**Not in v1.** `SessionSummary` thumbnails, per-chat slots, client-set slots, demand (`consumers`), the `x-pi-ui:` channel and A2UI content.
+
 ## Plugins that would move to slots
 
 | Plugin | Today | Slot |
