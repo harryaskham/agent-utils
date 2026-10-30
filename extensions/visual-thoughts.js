@@ -229,7 +229,10 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
       if (!enabled) return;
       setTimeout(() => {
         if (!pane.engine.enabled || panes.get(pane.key) !== pane || pane.engine.status().images) return;
-        for (const { kind, text } of recentConversation(ctx)) pane.engine.output(kind, text);
+        // Nothing said yet (a new session): the first run paints.
+        const conversation = recentConversation(ctx);
+        if (!conversation.length) return;
+        for (const { kind, text } of conversation) pane.engine.output(kind, text);
         pane.engine.generateNow();
       }, 1_500).unref?.();
     }
