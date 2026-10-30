@@ -9,7 +9,7 @@ import { MODULE, MODULE_STATE_DOC, createCacophonyModule, identitySection } from
  * `preview` ({ project, source }); a `--project` listed in `conflicts` is refused as caco
  * refuses a project the checkout's remotes do not match.
  */
-function fakeCaco({ id = "visiting-abc", guidance = "Visiting agents coordinate through beads.", fail, preview = { project: "derived", source: "derived path name" }, conflicts = {} } = {}) {
+function fakeCaco({ id = "visiting-abc", guidance = "Visiting agents coordinate through beads.", fail, preview = { project: "derived", source: "derived path name" }, conflicts = {}, olderCaco = false } = {}) {
   const calls = [];
   const cwds = [];
   const execFileImpl = (command, args, options, callback) => {
@@ -19,6 +19,9 @@ function fakeCaco({ id = "visiting-abc", guidance = "Visiting agents coordinate 
     const sessionId = args[args.indexOf("--session-id") + 1];
     setImmediate(() => {
       if (fail) return callback(new Error("exit 1"), "", "caco: daemon unavailable\nmore");
+      if (olderCaco && args.includes("--ahp-host")) {
+        return callback(new Error("exit 1"), "", "Error: bd-4c8fdd: `caco agent register` is a state-mutating command and received unrecognised flag(s): --ahp-host. Refusing to proceed");
+      }
       if (args.includes("--preview")) {
         return callback(null, JSON.stringify({ ok: true, preview: true, project: preview.project, project_source: preview.source, session_id: sessionId }), "");
       }
@@ -86,7 +89,7 @@ test("/caco-agent-register registers the session, keeps its identity and sets it
   const { ctx, notices, env } = sessionContext("pd-session-1");
   await module.commands["caco-agent-register"].run("project=agent-utils", ctx);
   // From the session's directory, which is the visitor's checkout (bd-8c8f5f).
-  assert.deepEqual(caco.calls, [["/opt/caco", "agent", "register", "--project", "agent-utils", "--session-id", "pd-session-1", "--checkout-root", "/work/project", "--json"]]);
+  assert.deepEqual(caco.calls, [["/opt/caco", "agent", "register", "--project", "agent-utils", "--session-id", "pd-session-1", "--checkout-root", "/work/project", "--ahp-host", "pi-daemon", "--json"]]);
   assert.deepEqual(caco.cwds, ["/work/project"]);
   assert.equal(notices.at(-1), "Registered as Cacophony visiting agent visiting-abc in project agent-utils.");
   assert.deepEqual(env, { CACO_AGENT_ID: "visiting-abc", CACO_PROJECT: "agent-utils" });
@@ -94,6 +97,7 @@ test("/caco-agent-register registers the session, keeps its identity and sets it
     agentId: "visiting-abc",
     project: "agent-utils",
     sessionId: "pd-session-1",
+    ahpHost: "pi-daemon",
     registeredAt: 5,
     guidance: "Visiting agents coordinate through beads.",
   });
@@ -158,7 +162,7 @@ test("manual registration reads live /name once and does not rename a visitor on
     module.commands["caco-agent-register"].run("project=p", session.ctx),
     module.commands["caco-agent-register"].run("project=p", session.ctx),
   ]);
-  assert.deepEqual(caco.calls, [["caco", "agent", "register", "--project", "p", "--session-id", "pd-named", "--checkout-root", "/work/named", "--session-name", "Parser / café; $(not-a-shell)", "--json"]]);
+  assert.deepEqual(caco.calls, [["caco", "agent", "register", "--project", "p", "--session-id", "pd-named", "--checkout-root", "/work/named", "--session-name", "Parser / café; $(not-a-shell)", "--ahp-host", "pi-daemon", "--json"]]);
   assert.deepEqual(caco.cwds, ["/work/named"]);
   const receipt = await session.ctx.state.get("identity");
   session.setSessionName("Renamed after registration");
@@ -181,7 +185,7 @@ test("Durable unnamed and older hosts never borrow a display name from environme
     ctx.getSessionName = getSessionName;
     ctx.title = "Not explicit name metadata";
     await module.commands["caco-agent-register"].run("project=p", ctx);
-    assert.deepEqual(caco.calls, [["caco", "agent", "register", "--project", "p", "--session-id", ctx.sessionId, "--checkout-root", ctx.cwd, "--runtime-agent-id", "pd-external", "--json"]]);
+    assert.deepEqual(caco.calls, [["caco", "agent", "register", "--project", "p", "--session-id", ctx.sessionId, "--checkout-root", ctx.cwd, "--runtime-agent-id", "pd-external", "--ahp-host", "pi-daemon", "--json"]]);
   }
 });
 
@@ -278,4 +282,42 @@ test("with auto-registration, a session's first run registers it once; managed s
   assert.equal(caco.calls.length, 1);
   await manual.commands["caco-runtime"].run("", quiet.ctx);
   assert.equal(quiet.notices.at(-1), "not registered; /caco-agent-register");
+});
+
+test("a pi-daemon session registers on the node's pi-daemon host, so caco delivers into it (cacophony bd-6cf22b)", async () => {
+  const caco = fakeCaco({ id: "visiting-host" });
+  const module = createCacophonyModule({ env: { HOME: "/nonexistent" }, settings: { project: "p", autoRegister: true }, execFileImpl: caco.execFileImpl, now: () => 5 });
+  const { ctx } = sessionContext("pd-host", {}, "/work/host");
+  await module.observe({ type: "agent_start" }, { sessionId: ctx.sessionId, state: ctx.state, env: ctx.env, cwd: ctx.cwd });
+  assert.deepEqual(caco.calls.at(-1).slice(-3), ["--ahp-host", "pi-daemon", "--json"]);
+  assert.equal((await ctx.state.get("identity")).ahpHost, "pi-daemon");
+
+  // An older caco refuses the flag: the session registers as before, without a host.
+  const older = fakeCaco({ id: "visiting-older", olderCaco: true });
+  const legacy = createCacophonyModule({ env: { HOME: "/nonexistent" }, settings: { project: "p", autoRegister: true }, execFileImpl: older.execFileImpl, now: () => 5 });
+  const second = sessionContext("pd-older", {}, "/work/older");
+  await legacy.observe({ type: "agent_start" }, { sessionId: second.ctx.sessionId, state: second.ctx.state, env: second.ctx.env, cwd: second.ctx.cwd });
+  assert.equal(older.calls.length, 2);
+  assert.ok(!older.calls[1].includes("--ahp-host"));
+  const identity = await second.ctx.state.get("identity");
+  assert.equal(identity.agentId, "visiting-older");
+  assert.equal(identity.ahpHost, undefined);
+});
+
+test("a visitor registered before host routing gets its host bound once (cacophony bd-6cf22b)", async () => {
+  const caco = fakeCaco({ id: "visiting-old" });
+  const module = createCacophonyModule({ env: { HOME: "/nonexistent" }, settings: {}, execFileImpl: caco.execFileImpl, now: () => 7 });
+  const { ctx } = sessionContext("pd-old", {}, "/work/old");
+  await ctx.state.set("identity", { agentId: "visiting-old", project: "p", sessionId: "pd-old", registeredAt: 1, guidance: "" });
+  const info = { sessionId: ctx.sessionId, state: ctx.state, env: ctx.env, cwd: ctx.cwd };
+  await module.observe({ type: "agent_start" }, info);
+  await module.observe({ type: "agent_start" }, info);
+  assert.equal(caco.calls.length, 1, "bound once");
+  assert.deepEqual(caco.calls[0].slice(0, 8), ["caco", "agent", "register", "--project", "p", "--session-id", "pd-old", "--checkout-root"]);
+  assert.equal((await ctx.state.get("identity")).ahpHost, "pi-daemon");
+  // A migrated session's inherited identity keeps its terminal route.
+  const migrated = sessionContext("pd-migrated-bind", { CACO_AGENT_ID: "visiting-tui", CACO_PROJECT: "p" }, "/work/migrated");
+  await module.observe({ type: "agent_start" }, { sessionId: migrated.ctx.sessionId, state: migrated.ctx.state, env: migrated.ctx.env, cwd: migrated.ctx.cwd });
+  await module.observe({ type: "agent_start" }, { sessionId: migrated.ctx.sessionId, state: migrated.ctx.state, env: migrated.ctx.env, cwd: migrated.ctx.cwd });
+  assert.equal(caco.calls.length, 1);
 });

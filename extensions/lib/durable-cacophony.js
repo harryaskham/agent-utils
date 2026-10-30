@@ -75,6 +75,9 @@ function execJson(execFileImpl, command, args, options = {}) {
   });
 }
 
+/** Cacophony's name for this node's pi-daemon AHP host. */
+export const PI_DAEMON_AHP_HOST = "pi-daemon";
+
 /** Register a pi-daemon session as a visiting agent; the identity and guidance. */
 export async function registerVisiting({ config, project, sessionId, sessionName, cwd, execFileImpl = execFile, now = () => Date.now() }) {
   // The visitor's checkout is the session's directory (bd-8c8f5f): never the pi-daemon worker's,
@@ -83,8 +86,18 @@ export async function registerVisiting({ config, project, sessionId, sessionName
   const args = ["agent", "register", "--project", project, "--session-id", sessionId, "--checkout-root", cwd];
   if (typeof sessionName === "string" && sessionName.trim()) args.push("--session-name", sessionName.trim());
   if (config.runtimeAgentId) args.push("--runtime-agent-id", config.runtimeAgentId);
-  args.push("--json");
-  const response = await execJson(execFileImpl, config.command, args, { cwd });
+  // The session is on this node's pi-daemon: Cacophony delivers its messages into it as to a
+  // native pi-daemon agent (cacophony bd-6cf22b). An older caco refuses the flag; register
+  // without it there, as before.
+  let response;
+  let ahpHost = PI_DAEMON_AHP_HOST;
+  try {
+    response = await execJson(execFileImpl, config.command, [...args, "--ahp-host", ahpHost, "--json"], { cwd });
+  } catch (error) {
+    if (!/--ahp-host|unrecogni[sz]ed flag/i.test(String(error?.message || error))) throw error;
+    ahpHost = undefined;
+    response = await execJson(execFileImpl, config.command, [...args, "--json"], { cwd });
+  }
   const data = response?.data || response;
   const agentId = String(data?.id || data?.agent_id || data?.agentId || "").trim();
   const registeredProject = String(data?.project || project).trim();
@@ -95,6 +108,7 @@ export async function registerVisiting({ config, project, sessionId, sessionName
     project,
     sessionId,
     ...(config.runtimeAgentId ? { runtimeAgentId: config.runtimeAgentId } : {}),
+    ...(ahpHost ? { ahpHost } : {}),
     registeredAt: now(),
     guidance: String(response?.guidance?.text || "").trim().slice(0, 16_000),
   };
@@ -123,6 +137,8 @@ export function identitySection() {
 export function createCacophonyModule({ env = process.env, settings, execFileImpl = execFile, now = () => Date.now() } = {}) {
   const config = resolveConfig(env, settings ?? readCacophonySettings(env));
   const pending = new Map();
+  // Sessions whose host binding was attempted in this process.
+  const rebound = new Set();
 
   /**
    * Register (once at a time per session), keep the identity and set the session's variables.
@@ -237,6 +253,14 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
           await info.state.set("identity", { agentId, project, sessionId: info.sessionId, registeredAt: now(), guidance: "", inherited: true });
           return;
         }
+      }
+      // A visitor this module registered before Cacophony routed by host gets its host bound
+      // once (cacophony bd-6cf22b), so its messages reach this session.
+      if (registered && !identity.ahpHost && !identity.inherited && !rebound.has(info.sessionId) && info.cwd) {
+        rebound.add(info.sessionId);
+        const again = await registerVisiting({ config, project: identity.project, sessionId: info.sessionId, cwd: info.cwd, execFileImpl, now }).catch(() => undefined);
+        if (again?.agentId === identity.agentId && again.ahpHost) await info.state.set("identity", { ...identity, ahpHost: again.ahpHost });
+        return;
       }
       if (!config.autoRegister || !config.project) return;
       if (registered || (await preset(info.env))) return;
