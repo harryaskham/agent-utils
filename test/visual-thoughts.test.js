@@ -576,6 +576,12 @@ test("TUI surface: file transport when local; under in tmux; nothing outside ful
   assert.match(writes.at(-1), /\x1bPtmux;/, "passthrough");
   assert.equal(parseKittyGraphicsCommands(writes.at(-1)).find((c) => c.control.a === "p").control.z, String(BACKDROP_Z.under));
   tmux.dispose();
+  const herdr = createTuiBackdropSurface({ tui: { mode: "fullscreen", terminal }, env: { HERDR_ENV: "1" }, options: () => ({}), ids: [1, 2] });
+  herdr.upload("k", { medium: "d", data: "", width: 1, height: 1 });
+  herdr.show("k");
+  await flushed();
+  assert.equal(parseKittyGraphicsCommands(writes.at(-1)).find((c) => c.control.a === "p").control.z, String(BACKDROP_Z.over), "herdr paints every cell: over");
+  herdr.dispose();
   const regular = createTuiBackdropSurface({ tui: { mode: "regular", terminal }, env: {}, options: () => ({}), ids: [1, 2] });
   assert.equal(regular.size(), null);
   regular.upload("k", { medium: "d", data: "", width: 1, height: 1 });
@@ -652,7 +658,7 @@ test("extension in pi-client: each pane paints its own session; prompts over the
     assert.equal(chat.url, "http://proxy:4000/v1/chat/completions");
     assert.equal(chat.body.model, "deepseek-v4-flash");
     assert.match(chat.body.messages[1].content, /\[prompt\] draw the harbour/);
-    assert.ok(left.log.some((line) => line.endsWith(" over")), "shown over cell backgrounds by default");
+    assert.ok(left.log.some((line) => line.endsWith(" under")), "shown under cell backgrounds by default");
 
     // Focus moves to the right pane, another session: it gets its own engine; the left holds still.
     const rightCtx = ctxFor(right, "s-right");
@@ -704,5 +710,27 @@ test("TUI surface: with pi-graphics' canvas on, the backdrop blends just above i
     assert.equal(listeners.size, 0, "unsubscribed");
   } finally {
     globalThis[CANVAS] = previous;
+  }
+});
+
+test("store: old sessions and an over-full store are pruned, the session in use spared", async () => {
+  const { pruneStore } = await import("../extensions/lib/visual-thoughts/store.js");
+  const { utimesSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "vt-prune-"));
+  try {
+    for (const [id, days] of [["old", 30], ["mid", 3], ["new", 0], ["mine", 40]]) {
+      const store = createImageStore({ root: dir, sessionId: id });
+      await store.save({ id: `${id}-1`, prompt: "p", model: "m", batch: 0, at: 1 }, Buffer.alloc(1000));
+      const when = (Date.now() - days * 86_400_000) / 1000;
+      for (const file of ["index.jsonl", `${id}-1.png`]) utimesSync(join(dir, id, file), when, when);
+    }
+    assert.deepEqual(await pruneStore(dir, { keep: "mine" }), { removed: 1 });
+    assert.equal(existsSync(join(dir, "old")), false);
+    assert.equal(existsSync(join(dir, "mine")), true, "in use");
+    await pruneStore(dir, { maxBytes: 2_500, keep: "mine" });
+    assert.equal(existsSync(join(dir, "mid")), false, "the least recent go first");
+    assert.equal(existsSync(join(dir, "new")), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

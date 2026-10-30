@@ -19,8 +19,8 @@ import { createVisualThoughtsEngine } from "./lib/visual-thoughts/engine.js";
 import { createImageProvider } from "./lib/visual-thoughts/image-provider.js";
 import { litellmChat } from "./lib/visual-thoughts/litellm-chat.js";
 import { toolCallDigest } from "./lib/visual-thoughts/prompter.js";
-import { createImageStore, visualThoughtsStateDir } from "./lib/visual-thoughts/store.js";
-import { activeCanvas, createTuiBackdropSurface } from "./lib/visual-thoughts/tui-surface.js";
+import { createImageStore, pruneStore, visualThoughtsStateDir } from "./lib/visual-thoughts/store.js";
+import { activeCanvas, backdropLayer, createTuiBackdropSurface } from "./lib/visual-thoughts/tui-surface.js";
 
 const STATUS_KEY = "visual-thoughts";
 const PROVIDER_KEYS = new Set(["provider", "imageModel", "size", "quality", "baseUrl", "apiKeyEnv", "maiEndpoint", "maiAuth", "maiKeyEnv"]);
@@ -54,7 +54,7 @@ function describeStatus(status, config) {
 }
 
 /** A pi-client pane's backdrop (`ctx.ui.backdrop()`) as the engine's surface. */
-export function hostSurface(backdrop, { config, onResize, onLost, onClose }) {
+export function hostSurface(backdrop, { config, env = process.env, onResize, onLost, onClose }) {
   const subscriptions = [
     backdrop.onResize?.(onResize),
     backdrop.onLost?.(onLost),
@@ -65,7 +65,7 @@ export function hostSurface(backdrop, { config, onResize, onLost, onClose }) {
     transport: () => backdrop.transport(),
     has: (key) => backdrop.has(key),
     upload: (key, payload) => backdrop.upload(key, payload),
-    show: (key) => backdrop.show(key, { layer: config.layer === "under" ? "under" : "over" }),
+    show: (key) => backdrop.show(key, { layer: backdropLayer(config.layer, env) }),
     get shown() { return backdrop.shown; },
     drop: (key) => backdrop.drop(key),
     clear: () => backdrop.clear(),
@@ -91,6 +91,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
     // Assistant text seen as deltas (TUI Pi): message_end then adds nothing again.
     let deltasSeen = false;
     let lastUserPrompt = "";
+    let pruned = false;
 
     const notify = (message, level = "info", ctx = lastCtx) => { try { ctx?.ui?.notify?.(message, level); } catch {} };
     const warnOnce = (message) => {
@@ -147,6 +148,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
       if (backdrop) {
         return hostSurface(backdrop, {
           config,
+          env,
           onResize: () => holder.current?.engine.resized(),
           onLost: () => holder.current?.engine.lost(),
           onClose: () => disposePane(holder.current),
@@ -169,6 +171,8 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
       let pane = panes.get(key);
       if (pane && pane.sessionId !== sessionId) { disposePane(pane); pane = null; }
       if (!pane) {
+        // Once per process: sessions long gone, and an over-full store, are cleared away.
+        if (!pruned) { pruned = true; pruneStore(visualThoughtsStateDir(env), { keep: sessionId }).catch(() => {}); }
         const holder = { current: null };
         const surface = makeSurface(ctx, backdrop, holder);
         const store = createImageStore({ root: visualThoughtsStateDir(env), sessionId });

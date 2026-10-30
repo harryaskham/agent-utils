@@ -40,7 +40,7 @@ export const DEFAULTS = Object.freeze({
   minChars: 600,
   maxPerRun: 10,
   maxConcurrent: 1,
-  keep: 48,
+  keep: 24,
   transport: "auto",
 });
 

@@ -42,9 +42,14 @@ export function fileTransportUsable(env = process.env) {
   return !env.SSH_CONNECTION && !env.SSH_TTY && !env.SSH_CLIENT && !env.TMUX;
 }
 
+/**
+ * Where the backdrop sits: `under` cell backgrounds (panels, tool boxes and dialogs stay solid; the
+ * image shows around the text), or `over` them (it tints everything). `auto` is `under`, except
+ * inside herdr, which paints its theme background into every cell.
+ */
 export function backdropLayer(layer, env = process.env) {
   if (layer === "over" || layer === "under") return layer;
-  return env.TMUX ? "under" : "over";
+  return env.HERDR_ENV ? "over" : "under";
 }
 
 /** The kitty command that transmits a renderer payload as image `imageId` (no placement). */

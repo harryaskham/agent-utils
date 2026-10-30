@@ -1,6 +1,6 @@
 // Visual thoughts: generated images and their prompts, kept per session on disk so a reloaded
 // or resumed session's backdrop starts from its recent imagery.
-import { appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -54,4 +54,41 @@ export function createImageStore({ root, sessionId }) {
       await writeFile(index, lines.length ? `${lines.join("\n")}\n` : "", { mode: 0o600 });
     },
   };
+}
+
+/**
+ * Keep the store bounded across sessions: drop sessions untouched for `maxAgeDays`, then the
+ * least recently touched until the rest fit in `maxBytes`. `keep` (a session in use) is spared.
+ */
+export async function pruneStore(root, { maxAgeDays = 14, maxBytes = 1_500_000_000, keep = null, now = Date.now() } = {}) {
+  let names = [];
+  try { names = await readdir(root); } catch { return { removed: 0 }; }
+  const sessions = [];
+  for (const name of names) {
+    const dir = join(root, name);
+    let files = [];
+    try { files = await readdir(dir); } catch { continue; }
+    let bytes = 0;
+    let touched = 0;
+    for (const file of files) {
+      try {
+        const info = await stat(join(dir, file));
+        bytes += info.size;
+        touched = Math.max(touched, info.mtimeMs);
+      } catch {}
+    }
+    sessions.push({ name, dir, bytes, touched });
+  }
+  sessions.sort((a, b) => a.touched - b.touched);
+  let total = sessions.reduce((sum, session) => sum + session.bytes, 0);
+  let removed = 0;
+  for (const session of sessions) {
+    if (keep && session.name === safeName(keep)) continue;
+    const stale = now - session.touched > maxAgeDays * 86_400_000;
+    if (!stale && total <= maxBytes) continue;
+    await rm(session.dir, { recursive: true, force: true });
+    total -= session.bytes;
+    removed += 1;
+  }
+  return { removed };
 }

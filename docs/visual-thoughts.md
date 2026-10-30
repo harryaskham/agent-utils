@@ -20,7 +20,7 @@ It is off by default. Enable it at startup with `agentUtils.visualThoughts.enabl
 - **The prompt.** `promptModel` (default `github-copilot/gpt-6-luna`, through Pi's model registry) writes one 20–45 word visual metaphor for the work: no text, code, screens or literal values; soft, low-contrast and mostly dark so text stays readable; varied from the last few prompts. `style` is appended as a house style.
 - **The image.** `provider: "litellm"` posts to an OpenAI-compatible `/v1/images/generations` (`LITELLM_BASE_URL`, key from `LITELLM_MASTER_KEY`); `provider: "mai"` posts to `<maiEndpoint>/mai/images/generations` with an Entra token from `az` (or `maiAuth: "key"`).
 - **The rotation.** Each run's images form a batch. The backdrop cycles the newest batch (each held `holdMs`, crossfaded over `fadeMs`); while it has fewer than `minSet` images the latest earlier ones join, so there is always recent imagery and a new run's images take over one by one. A new image is shown once the current one has had `minShowMs`.
-- **Where images go.** `~/.local/state/agent-utils/visual-thoughts/<session>/` keeps each PNG and an `index.jsonl` of prompts (the newest `keep`). A reloaded or resumed session starts from its recent images.
+- **Where images go.** `~/.local/state/agent-utils/visual-thoughts/<session>/` keeps each PNG and an `index.jsonl` of prompts (the newest `keep`). A reloaded or resumed session starts from its recent images. Sessions untouched for 14 days go, and the oldest go while the store is over 1.5 GB.
 
 Measured on 2026-10-30 (sandbox deployments, ~30-word prompts): `gpt-image-2.5-flare` at 1536×1024 `quality=low` ~14 s through LiteLLM; `MAI-Image-2.5-Flash` / `2.6-Flash` ~10 s at 768×768 and ~13 s at 1344×768 (768 px minimum per side), limited to 2 requests a minute per deployment; `gpt-image-2` / `2.5-sunburst` ~22 s; `gpt-image-1.5` ~28 s. The prompt model adds 2–5 s.
 
@@ -55,7 +55,7 @@ tmux is not supported yet (`PI_VISUAL_THOUGHTS_TMUX=1` to try). `PI_VISUAL_THOUG
 | `canvasOpacity` | `0.45` | backdrop alpha blended into `/gfx full`'s background (`canvas-opacity` at runtime) |
 | `fit` | `cover` | `cover`, `contain`, `stretch` |
 | `feather` | `0.12` | edge fade, fraction of the shorter side |
-| `layer` | `auto` | `over` cell backgrounds (tints panels), `under` them; `auto`: `under` in tmux |
+| `layer` | `auto` | `under` cell backgrounds (panels, tool boxes and dialogs stay solid; the image shows around the text) or `over` them (tints everything); `auto`: `under`, but `over` inside herdr |
 | `holdMs`, `fadeMs` | `18000`, `2800` | |
 | `effect` | `random` | `ripple`, `wave`, `dissolve`, `bloom`, `drift`, `fade` |
 | `fps` | `60` | transition frame rate |
@@ -63,7 +63,7 @@ tmux is not supported yet (`PI_VISUAL_THOUGHTS_TMUX=1` to try). `PI_VISUAL_THOUG
 | `minIntervalMs` | `12000` | between paintings |
 | `firstChars`, `minChars` | `160`, `600` | new output needed |
 | `maxPerRun`, `maxImages`, `minSet` | `10`, `8`, `3` | |
-| `keep` | `48` | stored images per session |
+| `keep` | `24` | stored images per session |
 | `transport` | `auto` | `file` (`t=t`) or `stream` (inline) |
 
 Environment: `PI_VISUAL_THOUGHTS`, `PI_VISUAL_THOUGHTS_PROMPT_MODEL`, `PI_VISUAL_THOUGHTS_IMAGE_MODEL`, `PI_VISUAL_THOUGHTS_PROVIDER`, `PI_VISUAL_THOUGHTS_OPACITY`, `PI_VISUAL_THOUGHTS_DIR`, `PI_VISUAL_THOUGHTS_SESSION` (use another session's stored images), `PI_VISUAL_THOUGHTS_TRACE`.
