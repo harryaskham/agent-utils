@@ -84,6 +84,7 @@
       "./extensions/tts-queue.js",
       "./extensions/read-aloud.js",
       "./extensions/tts-narration.js",
+      "./extensions/visual-thoughts.js",
       "./extensions/choice.js",
       "./extensions/herdr-input-state.js",
       "./extensions/omni-input.js",
