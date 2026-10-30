@@ -1,16 +1,20 @@
 // Visual thoughts: images of the agent's work crossfading behind the screen.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
+import { createHash } from "node:crypto";
 
 import { DEFAULTS, parseSettingChange, resolveVisualThoughtsConfig } from "../extensions/lib/visual-thoughts/config.js";
 import { createVisualThoughtsEngine } from "../extensions/lib/visual-thoughts/engine.js";
 import { ImageRateLimitError, createImageProvider, maiDimensions, retryAfterMs } from "../extensions/lib/visual-thoughts/image-provider.js";
 import { buildImagePromptRequest, createDigest, normalizeImagePrompt, toolCallDigest } from "../extensions/lib/visual-thoughts/prompter.js";
-import { backdropRasterSize, blendBackdrops, decodeImage, encodeBackdropPng, prepareBackdrop } from "../extensions/lib/visual-thoughts/raster.js";
+import { decodeImage, encodeBackdropPng, prepareBackdrop } from "../extensions/lib/visual-thoughts/raster.js";
+import { EFFECTS, createTransitionRenderer, planTransition } from "../extensions/lib/visual-thoughts/effects.js";
+import { createRenderCore, holdSize, transitionSize } from "../extensions/lib/visual-thoughts/render-core.js";
+import { createRenderer } from "../extensions/lib/visual-thoughts/renderer.js";
 import { createRotation } from "../extensions/lib/visual-thoughts/rotation.js";
 import { createImageStore } from "../extensions/lib/visual-thoughts/store.js";
 import { BACKDROP_Z, createTuiBackdropSurface } from "../extensions/lib/visual-thoughts/tui-surface.js";
@@ -46,24 +50,94 @@ test("raster: PNG round trip, fit, feathered edges and opacity", () => {
   const stretch = prepareBackdrop(decoded, { width: 10, height: 30, fit: "stretch", feather: 0, opacity: 1 });
   assert.equal(pixel(stretch, 0, 0)[3], 255);
 
-  // The raster's size follows the screen, bounded.
-  assert.deepEqual(backdropRasterSize({ cols: 100, rows: 30, detail: 2, cellAspect: 2 }), { width: 200, height: 120 });
-  const big = backdropRasterSize({ cols: 1000, rows: 300, detail: 4, cellAspect: 2, maxPixels: 100_000 });
-  assert.ok(big.width * big.height <= 100_000);
+  // Hold images: the screen's shape, no more pixels than the screen or the source's visible part.
+  assert.deepEqual(holdSize({ width: 1536, height: 1024 }, { width: 3000, height: 2000 }), { width: 1536, height: 1024 });
+  assert.deepEqual(holdSize({ width: 1536, height: 1024 }, { width: 900, height: 1000 }), { width: 900, height: 1000 });
+  const portrait = holdSize({ width: 1536, height: 1024 }, { width: 2700, height: 3000 });
+  assert.equal(portrait.width, 922, "cover shows 922 source columns of a 1536×1024 image on a 0.9 aspect screen");
+  const small = transitionSize({ width: 2700, height: 3000 }, 400_000);
+  assert.ok(small.width * small.height <= 400_000 && Math.abs(small.width / small.height - 0.9) < 0.01);
 });
 
-test("raster: crossfades blend premultiplied, and from nothing fade in", () => {
-  const red = prepareBackdrop(decodeImage(solidPng(8, 8, [255, 0, 0])), { width: 8, height: 8, fit: "stretch", feather: 0, opacity: 1 });
-  const blue = prepareBackdrop(decodeImage(solidPng(8, 8, [0, 0, 255])), { width: 8, height: 8, fit: "stretch", feather: 0, opacity: 1 });
-  assert.deepEqual(pixel(blendBackdrops(red, blue, 0.5), 4, 4), [127, 0, 127, 255]);
-  assert.deepEqual(pixel(blendBackdrops(red, blue, 1), 4, 4), [0, 0, 255, 255]);
-  assert.deepEqual(pixel(blendBackdrops(null, blue, 0.5), 4, 4), [0, 0, 255, 127]);
-  // A transparent side keeps the other's colour as it fades.
-  const clear = { width: 8, height: 8, rgba: new Uint8Array(8 * 8 * 4) };
-  assert.deepEqual(pixel(blendBackdrops(clear, red, 0.5), 1, 1), [255, 0, 0, 127]);
-  // The encoder's Sub filter decodes back exactly.
-  const frame = blendBackdrops(red, blue, 0.25);
-  assert.deepEqual([...decodeImage(encodeBackdropPng(frame)).rgba], [...frame.rgba]);
+test("effects: every transition starts at the old image, ends at the new, and is deterministic", () => {
+  const red = prepareBackdrop(decodeImage(solidPng(24, 16, [255, 0, 0])), { width: 24, height: 16, fit: "stretch", feather: 0, opacity: 1 });
+  const blue = prepareBackdrop(decodeImage(solidPng(24, 16, [0, 0, 255])), { width: 24, height: 16, fit: "stretch", feather: 0, opacity: 1 });
+  for (const effect of EFFECTS) {
+    const plan = planTransition({ width: 24, height: 16, effect, seed: 5 });
+    assert.equal(plan.effect, effect);
+    const renderer = createTransitionRenderer(plan, red, blue);
+    const start = renderer.frame(0);
+    const end = renderer.frame(1);
+    const mid = renderer.frame(0.5);
+    assert.deepEqual([...start.subarray(4 * 50, 4 * 50 + 4)], [255, 0, 0, 255], `${effect} starts at the old image`);
+    assert.deepEqual([...end.subarray(4 * 50, 4 * 50 + 4)], [0, 0, 255, 255], `${effect} ends at the new one`);
+    assert.ok([...mid].some((v, i) => i % 4 === 2 && v > 0) && [...mid].some((v, i) => i % 4 === 0 && v > 0), `${effect} shows both midway`);
+    assert.deepEqual(createTransitionRenderer(planTransition({ width: 24, height: 16, effect, seed: 5 }), red, blue).frame(0.37), renderer.frame(0.37), `${effect} is deterministic`);
+  }
+  // From nothing: fades in from transparent.
+  const fade = createTransitionRenderer(planTransition({ width: 24, height: 16, effect: "fade" }), null, blue);
+  assert.equal(fade.frame(0)[3], 0);
+  assert.deepEqual([...fade.frame(0.5).subarray(0, 4)], [0, 0, 255, 127]);
+  // Random never picks the plain fade.
+  const picks = new Set(Array.from({ length: 40 }, (_, seed) => planTransition({ width: 8, height: 8, seed }).effect));
+  assert.ok(!picks.has("fade") && picks.size >= 4);
+});
+
+test("render core: images prepared at the screen's size, frames encoded for the terminal", () => {
+  const dir = mkdtempSync(join(tmpdir(), "vt-core-"));
+  try {
+    for (const transport of ["stream", "file"]) {
+      const core = createRenderCore({ dir, transport, pid: 7 });
+      assert.match(core.handle({ type: "add", id: "a", png: solidPng(64, 32, [9, 9, 9]), ref: 1 }).error, /no display area/);
+      core.handle({ type: "configure", area: { width: 200, height: 100 }, txPixels: 5_000, fit: "cover", feather: 0, opacity: 0.5 });
+      const added = core.handle({ type: "add", id: "a", png: solidPng(64, 32, [9, 9, 9]), ref: 2 });
+      assert.equal(added.ref, 2);
+      assert.deepEqual([added.payload.width, added.payload.height], [64, 32], "no more than the source");
+      const bytes = (payload) => (payload.medium === "t" ? readFileSync(payload.path) : inflateSync(Buffer.from(payload.data, "base64")));
+      const hold = bytes(added.payload);
+      assert.equal(hold.length, 64 * 32 * 4);
+      assert.deepEqual([...hold.subarray(0, 4)], [9, 9, 9, 127], "opacity in the alpha");
+      if (transport === "file") {
+        assert.equal(added.payload.medium, "t");
+        assert.match(added.payload.path, /tty-graphics-protocol-vt-7-\d+\.rgba$/);
+        assert.equal(statSync(added.payload.path).mode & 0o777, 0o600);
+      } else assert.equal(added.payload.compressed, true);
+      core.handle({ type: "add", id: "b", png: solidPng(64, 32, [200, 9, 9]) });
+      const begun = core.handle({ type: "begin", seq: 1, from: "a", to: "b", effect: "wave", seed: 1 });
+      assert.equal(begun.effect, "wave");
+      assert.ok(begun.width * begun.height <= 5_000);
+      const frame = core.handle({ type: "frame", seq: 1, k: 1, t: 0.5 });
+      assert.equal(bytes(frame.payload).length, begun.width * begun.height * 4);
+      assert.ok(frame.ms >= 0);
+      assert.equal(core.handle({ type: "frame", seq: 2, k: 1, t: 0.5 }).stale, true, "another transition's frame");
+      core.handle({ type: "end", seq: 1 });
+      assert.equal(core.handle({ type: "frame", seq: 1, k: 2, t: 0.6 }).stale, true);
+      assert.match(core.handle({ type: "hold", id: "missing" }).error, /no image missing/);
+      assert.match(core.handle({ type: "bogus" }).error, /unknown message/);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("renderer: the same answers from a worker thread and in this thread", async () => {
+  for (const useWorker of [true, false]) {
+    const renderer = createRenderer({ transport: "stream", useWorker });
+    try {
+      assert.equal(renderer.threaded, useWorker);
+      await renderer.configure({ area: { width: 120, height: 80 }, txPixels: 4_000, fit: "contain", feather: 0.1, opacity: 1 });
+      const png = solidPng(30, 20, [1, 2, 3]);
+      const added = await renderer.add("x", png);
+      assert.equal(png.length > 0, true, "the caller's buffer is not consumed");
+      assert.equal(added.payload.width, 30);
+      await renderer.begin({ seq: 3, from: null, to: "x", effect: "ripple", seed: 2 });
+      const frame = await renderer.frame(3, 1, 0.25);
+      assert.equal(frame.k, 1);
+      await assert.rejects(renderer.hold("nope"), /no image nope/);
+    } finally {
+      renderer.close();
+    }
+  }
 });
 
 test("rotation: fades in, holds, cycles the newest batch, and shows a new image after minShow", () => {
@@ -205,38 +279,79 @@ function fakeTime() {
     async advance(ms) {
       const end = now + ms;
       for (;;) {
+        await settle();
         const due = [...timers.entries()].filter(([, t]) => t.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
         if (!due) break;
         timers.delete(due[0]);
         now = Math.max(now, due[1].at);
         due[1].fn();
-        await new Promise((resolve) => setImmediate(resolve));
       }
       now = end;
-      await new Promise((resolve) => setImmediate(resolve));
+      await settle();
     },
   };
 }
 
-const settle = async () => { for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve)); };
+const settle = async () => { for (let i = 0; i < 8; i += 1) await new Promise((resolve) => setImmediate(resolve)); };
+
+/** A surface that records what it shows (the shape tui-surface.js and pi-client provide). */
+function fakeSurface({ size = { cols: 40, rows: 12, cellWidthPx: 10, cellHeightPx: 20 } } = {}) {
+  const keys = new Set();
+  const log = [];
+  let shown = null;
+  return {
+    log,
+    size: () => size,
+    transport: () => "stream",
+    has: (key) => keys.has(key),
+    upload(key, payload) { keys.add(key); log.push(`upload ${key} ${payload.width}x${payload.height}`); },
+    show(key) { if (key !== null && !keys.has(key)) return false; shown = key; log.push(`show ${key}`); return true; },
+    get shown() { return shown; },
+    drop(key) { keys.delete(key); if (shown === key) shown = null; log.push(`drop ${key}`); },
+    clear() { keys.clear(); shown = null; log.push("clear"); },
+    lose() { keys.clear(); shown = null; },
+  };
+}
+
+/** The renderer, answering at once (frames are tiny payloads). */
+function fakeRenderer() {
+  const calls = [];
+  const payload = (width, height) => ({ medium: "d", data: "", compressed: true, width, height });
+  return {
+    calls,
+    create: () => ({
+      threaded: false,
+      transport: "stream",
+      configure: async (options) => { calls.push(`configure ${options.area.width}x${options.area.height}`); return {}; },
+      add: async (id) => { calls.push(`add ${id}`); return { id, payload: payload(400, 240) }; },
+      hold: async (id) => { calls.push(`hold ${id}`); return { id, payload: payload(400, 240) }; },
+      drop: async (id) => { calls.push(`drop ${id}`); return { id }; },
+      begin: async ({ seq, effect }) => { calls.push(`begin ${seq}`); return { seq, effect: effect === "random" ? "wave" : effect, width: 100, height: 60 }; },
+      frame: async (seq, k) => ({ seq, k, payload: payload(100, 60), ms: 1 }),
+      end: async (seq) => { calls.push(`end ${seq}`); return { seq }; },
+      close() { calls.push("close"); },
+    }),
+  };
+}
 
 function engineHarness(overrides = {}) {
   const time = fakeTime();
-  const config = { ...DEFAULTS, minIntervalMs: 1_000, firstChars: 10, minChars: 50, maxPerRun: 3, holdMs: 5_000, fadeMs: 100, fadeSteps: 2, minShowMs: 0, ...overrides };
+  const config = { ...DEFAULTS, minIntervalMs: 1_000, firstChars: 10, minChars: 50, maxPerRun: 3, holdMs: 5_000, fadeMs: 100, fps: 50, minShowMs: 0, ...overrides };
   const prompts = [];
-  const shown = [];
+  const surface = fakeSurface();
+  const renderer = fakeRenderer();
   let painted = 0;
-  const colours = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]];
   const engine = createVisualThoughtsEngine({
     config,
     now: time.now,
     timers: time.timers,
+    surface,
+    createRenderer: renderer.create,
     promptTurn: async (request) => { prompts.push(request.messages[0].content[0].text); return `scene ${prompts.length}`; },
-    provider: { describe: () => "fake", generate: async (prompt) => ({ png: solidPng(16, 9, colours[painted++ % colours.length]), model: "fake", ms: 5, prompt }) },
-    surface: { size: () => ({ cols: 20, rows: 6 }), show: (frame) => shown.push(frame), clear: () => shown.push("clear") },
+    provider: { describe: () => "fake", generate: async () => ({ png: solidPng(16, 9, [painted++ * 40, 0, 0]), model: "fake", ms: 5 }) },
     warn: (message) => { throw new Error(`unexpected warning: ${message}`); },
   });
-  return { engine, time, config, prompts, shown, painted: () => painted };
+  return { engine, time, config, prompts, surface, renderer, painted: () => painted };
 }
 
 test("engine: paints from a run's output past the thresholds, spaced by the interval, capped per run", async () => {
@@ -250,11 +365,8 @@ test("engine: paints from a run's output past the thresholds, spaced by the inte
   await settle();
   assert.equal(h.prompts.length, 1, "the first image needs only firstChars");
   assert.match(h.prompts[0], /\[prompt\] make it fast/);
-  await settle();
+  await h.time.advance(0);
   assert.equal(h.painted(), 1);
-  // Shown: a fade-in frame at once (decodes as the backdrop raster).
-  const first = h.shown.find((frame) => frame !== "clear");
-  assert.ok(first?.png && first.width > 0);
   // More output, but the interval holds the next one back until it passes.
   h.engine.output("text", "y".repeat(60));
   await settle();
@@ -265,12 +377,47 @@ test("engine: paints from a run's output past the thresholds, spaced by the inte
   // The per-run cap.
   for (let i = 0; i < 5; i += 1) { h.engine.output("text", "z".repeat(60)); await h.time.advance(1_000); }
   assert.equal(h.prompts.length, 3);
-  // After the run, the cycle keeps crossfading the images.
   h.engine.runEnd();
-  const before = h.shown.length;
-  await h.time.advance(6_000);
-  assert.ok(h.shown.length > before, "the rotation keeps going between runs");
   assert.equal(h.engine.status().images, 3);
+  h.engine.dispose();
+  assert.ok(h.renderer.calls.includes("close"));
+});
+
+test("engine: holds upload once and show; transitions play renderer frames, then the next hold", async () => {
+  const h = engineHarness({ fadeMs: 200, fps: 50 });
+  h.engine.setEnabled(true);
+  h.engine.runStart();
+  h.engine.output("user", "first painting please");
+  await h.time.advance(0);
+  // Prepared and uploaded before it joins the rotation; then a fade in from nothing.
+  assert.deepEqual(h.renderer.calls.slice(0, 2), ["configure 400x240", h.renderer.calls[1]]);
+  assert.match(h.renderer.calls[1], /^add vt-/);
+  await h.time.advance(300);
+  const id = h.engine.status().current;
+  assert.ok(id);
+  assert.equal(h.surface.shown, `hold:${id}`, "the hold image once the fade-in ends");
+  const frames = h.surface.log.filter((line) => /^show tx:/.test(line)).length;
+  assert.ok(frames >= 5 && frames <= 11, `about fadeMs × fps frames (${frames})`);
+  assert.ok(h.surface.log.some((line) => line.startsWith("upload tx:0 100x60")));
+  // A second image: crossfade from the first.
+  h.engine.output("text", "q".repeat(60));
+  await h.time.advance(1_000);
+  await h.time.advance(300);
+  const second = h.engine.status().current;
+  assert.notEqual(second, id);
+  assert.equal(h.surface.shown, `hold:${second}`);
+  assert.equal(h.renderer.calls.filter((c) => c.startsWith("begin")).length, 2);
+  assert.ok(h.renderer.calls.filter((c) => c.startsWith("end")).length >= 1);
+  // The terminal freed everything: the shown hold uploads again.
+  h.surface.lose();
+  h.engine.lost();
+  await h.time.advance(50);
+  assert.equal(h.surface.shown, `hold:${second}`);
+  assert.ok(h.renderer.calls.includes(`hold ${second}`));
+  // Off: nothing shown.
+  h.engine.setEnabled(false);
+  assert.equal(h.surface.shown, null);
+  h.engine.dispose();
 });
 
 test("engine: rate limits wait their reset; failures back off and are reported", async () => {
@@ -279,10 +426,10 @@ test("engine: rate limits wait their reset; failures back off and are reported",
   let attempt = 0;
   const config = { ...DEFAULTS, minIntervalMs: 0, firstChars: 1, minChars: 1, maxPerRun: 10 };
   const engine = createVisualThoughtsEngine({
-    config, now: time.now, timers: time.timers,
+    config, now: time.now, timers: time.timers, createRenderer: fakeRenderer().create,
     promptTurn: async () => "scene",
     provider: { generate: async () => { attempt += 1; if (attempt === 1) throw new ImageRateLimitError("limited", 30_000); throw new Error("boom"); } },
-    surface: { size: () => ({ cols: 10, rows: 4 }), show() {}, clear() {} },
+    surface: fakeSurface(),
     warn: (message) => warnings.push(message),
   });
   engine.setEnabled(true);
@@ -298,7 +445,7 @@ test("engine: rate limits wait their reset; failures back off and are reported",
   assert.equal(attempt, 2);
   assert.match(warnings[0], /boom/);
   assert.ok(engine.status().waitMs >= 14_000, "a failure backs off");
-  engine.setEnabled(false);
+  engine.dispose();
 });
 
 test("engine: restored images show at once; turning off clears the surface", async () => {
@@ -317,10 +464,12 @@ test("engine: restored images show at once; turning off clears the surface", asy
     const h = engineHarness();
     h.engine.setEnabled(true);
     h.engine.restore(await store.recent(5));
-    assert.ok(h.shown.some((frame) => frame.png), "drawn from the stored file");
-    assert.equal(h.engine.status().images, 1);
+    await h.time.advance(300);
+    assert.equal(h.surface.shown, "hold:vt-2", "drawn from the stored file");
+    assert.ok(h.renderer.calls.includes("add vt-2"));
     h.engine.setEnabled(false);
-    assert.equal(h.shown.at(-1), "clear");
+    assert.equal(h.surface.log.at(-1), "clear");
+    h.engine.dispose();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -336,74 +485,81 @@ function fakeTerminal() {
   return { terminal, writes };
 }
 
-test("TUI surface: double-buffered frames at the top-left, put back after Pi clears them", () => {
+const flushed = () => new Promise((resolve) => queueMicrotask(resolve));
+
+test("TUI surface: keyed images placed over the screen in one update, put back after Pi clears them", async () => {
   const { terminal, writes } = fakeTerminal();
   const tui = { mode: "fullscreen", terminal };
   let resized = 0;
-  const surface = createTuiBackdropSurface({ tui, env: {}, options: () => ({ layer: "over", transport: "stream" }), onResize: () => { resized += 1; }, ids: [11, 22] });
-  assert.deepEqual(surface.size(), { cols: 80, rows: 24 });
-  const png = solidPng(4, 4, [1, 2, 3]);
-  surface.show({ png });
-  const first = parseKittyGraphicsCommands(writes[0]);
+  const lost = [];
+  const surface = createTuiBackdropSurface({ tui, env: {}, options: () => ({ layer: "over", transport: "stream" }), onResize: () => { resized += 1; }, onLost: (key) => lost.push(key), cellSize: () => ({ widthPx: 10, heightPx: 20 }), ids: [11, 22, 33] });
+  assert.deepEqual(surface.size(), { cols: 80, rows: 24, cellWidthPx: 10, cellHeightPx: 20 });
+  assert.equal(surface.transport(), "stream");
+  surface.upload("hold:a", { medium: "d", data: "eJw=", compressed: true, width: 4, height: 2 });
+  surface.show("hold:a");
+  await flushed();
+  assert.equal(writes.length, 1, "one write per turn");
   assert.match(writes[0], /^\x1b\[\?2026h\x1b7/);
   assert.match(writes[0], /\x1b8\x1b\[\?2026l$/);
+  const first = parseKittyGraphicsCommands(writes[0]);
   assert.deepEqual(first.map((c) => c.control.a), ["t", "p"]);
-  assert.equal(first[0].control.i, "11");
-  assert.deepEqual(Buffer.from(first[0].payloadBase64, "base64"), png);
-  assert.equal(first[1].control.z, String(BACKDROP_Z.over));
-  assert.equal(first[1].control.c, "80");
-  assert.equal(first[1].control.r, "24");
-  // The next frame uses the other id and deletes the first.
-  surface.show({ png });
+  assert.deepEqual([first[0].control.f, first[0].control.s, first[0].control.v, first[0].control.o, first[0].control.i], ["32", "4", "2", "z", "11"]);
+  assert.deepEqual([first[1].control.c, first[1].control.r, first[1].control.z], ["80", "24", String(BACKDROP_Z.over)]);
+  // A frame as a file: t=t; shown in place of the hold, whose placement goes.
+  surface.upload("tx:0", { medium: "t", path: "/tmp/tty-graphics-protocol-vt-1-1.rgba", width: 4, height: 2 });
+  surface.show("tx:0");
+  await flushed();
   const second = parseKittyGraphicsCommands(writes[1]);
-  assert.deepEqual(second.map((c) => `${c.control.a}${c.control.i}`), ["t22", "p22", "d11"]);
+  assert.deepEqual(second.map((c) => `${c.control.a}${c.control.i}`), ["t22", "d11", "p22"]);
+  assert.equal(second[0].control.t, "t");
+  assert.equal(Buffer.from(second[0].payloadBase64, "base64").toString(), "/tmp/tty-graphics-protocol-vt-1-1.rgba");
+  assert.equal(second[1].control.d, "i", "the hold's data stays");
+  assert.equal(surface.shown, "tx:0");
+  assert.equal(surface.show("missing"), false);
 
-  // Pi deleted every placement in a frame: the backdrop is placed again before the frame ends.
+  // Pi deleted every placement in a frame: the shown image goes back before the frame ends.
   terminal.write("\x1b[?2026h\x1b_Ga=d,d=a,q=2\x1b\\rows\x1b[?2026l");
-  const replaced = writes.at(-1);
-  assert.match(replaced, /rows\x1b7\x1b\[1;1H\x1b_Ga=p,i=22,[^\x1b]*\x1b\\\x1b8\x1b\[\?2026l$/);
-  assert.equal(parseKittyGraphicsCommands(replaced).filter((c) => c.control.a === "t").length, 0, "data kept: no re-send");
-  // Pi freed the images (a full redraw at a new size): data re-sent, placed at the new size.
+  assert.match(writes.at(-1), /rows\x1b7\x1b\[1;1H\x1b_Ga=p,i=22,[^\x1b]*\x1b\\\x1b8\x1b\[\?2026l$/);
+  // Pi freed the images at a new size: the surface forgets them and asks for them again.
   terminal.columns = 100;
   terminal.write("\x1b[?2026h\x1b_Ga=d,d=A,q=2\x1b\\\x1b[2J\x1b[?2026l");
-  const freed = parseKittyGraphicsCommands(writes.at(-1));
-  assert.deepEqual(freed.map((c) => c.control.a), ["d", "t", "p"]);
-  assert.equal(freed[2].control.c, "100");
+  await flushed();
+  assert.deepEqual(lost, ["tx:0"]);
+  assert.equal(resized, 1);
+  assert.equal(surface.has("hold:a"), false);
+  assert.equal(surface.shown, null);
   // Ordinary output passes through untouched.
   terminal.write("plain");
   assert.equal(writes.at(-1), "plain");
+  // Drop frees; dispose frees what is left and unhooks.
+  surface.upload("hold:b", { medium: "d", data: "", width: 1, height: 1 });
+  surface.drop("hold:b");
+  await flushed();
+  assert.equal(parseKittyGraphicsCommands(writes.at(-1)).at(-1).control.d, "I");
+  surface.upload("hold:c", { medium: "d", data: "", width: 1, height: 1 });
+  await flushed();
   surface.dispose();
-  assert.deepEqual(parseKittyGraphicsCommands(writes.at(-1)).map((c) => `${c.control.a}${c.control.d}${c.control.i}`), ["dI11", "dI22"]);
+  assert.deepEqual(parseKittyGraphicsCommands(writes.at(-1)).map((c) => `${c.control.a}${c.control.d}`), ["dI"]);
   terminal.write("after");
   assert.equal(writes.at(-1), "after", "unhooked");
-  return new Promise((resolve) => queueMicrotask(() => { assert.equal(resized, 1); resolve(); }));
 });
 
-test("TUI surface: frames as files when local; layer under in tmux; nothing outside fullscreen", () => {
+test("TUI surface: file transport when local; under in tmux; nothing outside fullscreen", async () => {
   const { terminal, writes } = fakeTerminal();
-  const surface = createTuiBackdropSurface({ tui: { mode: "fullscreen", terminal }, env: {}, options: () => ({ transport: "auto" }), ids: [1, 2] });
-  surface.show({ png: solidPng(2, 2, [5, 5, 5]) });
-  const [transmit, place] = parseKittyGraphicsCommands(writes[0]);
-  assert.equal(transmit.control.t, "f");
-  const path = Buffer.from(transmit.payloadBase64, "base64").toString();
-  assert.deepEqual(readFileSync(path), solidPng(2, 2, [5, 5, 5]));
-  assert.equal(place.control.z, String(BACKDROP_Z.over));
-  surface.dispose();
-  assert.equal(existsSync(path), false, "frame files removed");
-
+  assert.equal(createTuiBackdropSurface({ tui: { mode: "fullscreen", terminal }, env: {}, options: () => ({ transport: "auto" }), ids: [1] }).transport(), "file");
+  assert.equal(createTuiBackdropSurface({ tui: { mode: "fullscreen", terminal }, env: { SSH_CONNECTION: "x" }, options: () => ({ transport: "auto" }), ids: [1] }).transport(), "stream");
   const tmux = createTuiBackdropSurface({ tui: { mode: "fullscreen", terminal }, env: { TMUX: "/tmp/tmux" }, options: () => ({}), ids: [1, 2] });
-  writes.length = 0;
-  tmux.show({ png: solidPng(2, 2, [5, 5, 5]) });
-  assert.match(writes[0], /\x1bPtmux;/, "passthrough");
-  assert.equal(parseKittyGraphicsCommands(writes[0]).find((c) => c.control.a === "p").control.z, String(BACKDROP_Z.under));
-  assert.notEqual(parseKittyGraphicsCommands(writes[0])[0].control.t, "f", "streamed inside tmux");
+  assert.equal(tmux.transport(), "stream");
+  tmux.upload("k", { medium: "d", data: "", width: 1, height: 1 });
+  tmux.show("k");
+  await flushed();
+  assert.match(writes.at(-1), /\x1bPtmux;/, "passthrough");
+  assert.equal(parseKittyGraphicsCommands(writes.at(-1)).find((c) => c.control.a === "p").control.z, String(BACKDROP_Z.under));
   tmux.dispose();
-
   const regular = createTuiBackdropSurface({ tui: { mode: "regular", terminal }, env: {}, options: () => ({}), ids: [1, 2] });
   assert.equal(regular.size(), null);
-  writes.length = 0;
-  regular.show({ png: solidPng(2, 2, [5, 5, 5]) });
-  assert.equal(writes.length, 0);
+  regular.upload("k", { medium: "d", data: "", width: 1, height: 1 });
+  assert.equal(regular.show("k"), false);
 });
 
 test("the encoded backdrop is a valid RGBA PNG", () => {

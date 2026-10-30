@@ -8,7 +8,7 @@
 /thoughts now             paint from the current output now
 /thoughts next            crossfade to the next image
 /thoughts clear           drop the images (the files stay)
-/thoughts opacity 0.4     change a setting for this session (see below)
+/thoughts opacity 0.4     change a setting for this session (see below; effect ripple, fps 30, …)
 ```
 
 It is off by default. Enable it at startup with `agentUtils.visualThoughts.enabled` or `PI_VISUAL_THOUGHTS=1`. Incognito sessions (`PI_INCOGNITO=1`) never paint.
@@ -26,7 +26,14 @@ Measured on 2026-10-30 (sandbox deployments, ~30-word prompts): `gpt-image-2.5-f
 
 ## Display
 
-TUI Pi in fullscreen mode (`tuiMode: fullscreen`) on a Kitty-graphics terminal (Kitty, Ghostty, WezTerm). The backdrop is one image placed over the whole screen under the text, double-buffered so crossfade steps never flicker. Pi deletes every placement when its own images change and frees images on full redraws; the extension watches Pi's output and puts the backdrop back inside the same frame. Frames go to the terminal as files when it runs on this machine, else inline. tmux is not supported yet (`PI_VISUAL_THOUGHTS_TMUX=1` to try).
+TUI Pi in fullscreen mode (`tuiMode: fullscreen`) on a Kitty-graphics terminal (Kitty, Ghostty, WezTerm).
+
+- **Holds are sharp and free.** Each image is fitted and uploaded once, at the screen's real resolution (Pi's cell size in device pixels, so HiDPI is right) or the source's, whichever is smaller, then placed over the whole screen under the text. Holding an image costs nothing.
+- **Transitions run on a worker thread.** A transition is one of `ripple` (a ring spreads from a point, the water rippling at its edge), `wave` (heat haze: rows sway while the new image rises through), `dissolve` (soft noise with a faint glow along its edge), `bloom` (both images drift outwards and glow midway) or `drift` (the old image recedes as the new one settles in), or a plain `fade`; `random` (the default) picks one of the first five each time. Frames render at up to `transitionPixels` (400k by default) on a worker and play at `fps` (60 by default; frames the renderer cannot deliver in time are skipped, never queued). A frame costs the renderer 2–10 ms at 690×580 and Pi's own thread a few hundred bytes of output.
+- **Frames travel as files.** When the terminal runs on this machine, a frame is raw RGBA in a temporary file the terminal reads and deletes (`t=t`): no PNG encoding, no base64. Over SSH or inside tmux, frames go inline, zlib-compressed.
+- **Pi's redraws are handled.** Pi deletes every placement when its own images change and frees images on full redraws; the extension watches Pi's output and puts the backdrop back inside the same frame, uploading again what was freed.
+
+tmux is not supported yet (`PI_VISUAL_THOUGHTS_TMUX=1` to try). `PI_VISUAL_THOUGHTS_TRACE=<file>` logs transitions, frames and main-thread stalls.
 
 ## Settings
 
@@ -44,11 +51,14 @@ TUI Pi in fullscreen mode (`tuiMode: fullscreen`) on a Kitty-graphics terminal (
 | `fit` | `cover` | `cover`, `contain`, `stretch` |
 | `feather` | `0.12` | edge fade, fraction of the shorter side |
 | `layer` | `auto` | `over` cell backgrounds (tints panels), `under` them; `auto`: `under` in tmux |
-| `holdMs`, `fadeMs` | `18000`, `3000` | |
+| `holdMs`, `fadeMs` | `18000`, `2800` | |
+| `effect` | `random` | `ripple`, `wave`, `dissolve`, `bloom`, `drift`, `fade` |
+| `fps` | `60` | transition frame rate |
+| `transitionPixels` | `400000` | transition frame size (`pixels` at runtime) |
 | `minIntervalMs` | `12000` | between paintings |
 | `firstChars`, `minChars` | `160`, `600` | new output needed |
 | `maxPerRun`, `maxImages`, `minSet` | `10`, `8`, `3` | |
 | `keep` | `48` | stored images per session |
-| `transport` | `auto` | `file` or `stream` |
+| `transport` | `auto` | `file` (`t=t`) or `stream` (inline) |
 
-Environment: `PI_VISUAL_THOUGHTS`, `PI_VISUAL_THOUGHTS_PROMPT_MODEL`, `PI_VISUAL_THOUGHTS_IMAGE_MODEL`, `PI_VISUAL_THOUGHTS_PROVIDER`, `PI_VISUAL_THOUGHTS_OPACITY`, `PI_VISUAL_THOUGHTS_DIR`.
+Environment: `PI_VISUAL_THOUGHTS`, `PI_VISUAL_THOUGHTS_PROMPT_MODEL`, `PI_VISUAL_THOUGHTS_IMAGE_MODEL`, `PI_VISUAL_THOUGHTS_PROVIDER`, `PI_VISUAL_THOUGHTS_OPACITY`, `PI_VISUAL_THOUGHTS_DIR`, `PI_VISUAL_THOUGHTS_SESSION` (use another session's stored images), `PI_VISUAL_THOUGHTS_TRACE`.

@@ -3,11 +3,11 @@
 // image model paints it. Finished images join the rotation, which crossfades the backdrop
 // between them. Hosts supply the surface (where frames go), the prompt model and the provider;
 // the engine never blocks the agent and every failure is a warning at most.
-import { readFileSync } from "node:fs";
+import { readFileSync, unlinkSync } from "node:fs";
 
 import { ImageRateLimitError } from "./image-provider.js";
 import { buildImagePromptRequest, createDigest, normalizeImagePrompt } from "./prompter.js";
-import { backdropRasterSize, blendBackdrops, decodeImage, encodeBackdropPng, prepareBackdrop } from "./raster.js";
+import { createRenderer as defaultCreateRenderer } from "./renderer.js";
 import { createRotation } from "./rotation.js";
 
 const ease = (t) => t * t * (3 - 2 * t);
@@ -15,7 +15,9 @@ const ease = (t) => t * t * (3 - 2 * t);
 /**
  * `config` is the live config object (runtime changes mutate it, then call `configure()`).
  * `promptTurn(request, signal)` resolves the prompt model's reply text; `provider.generate`
- * paints; `surface` is `{ size() → { cols, rows } | null, show({ png, width, height }), clear() }`.
+ * paints; `surface` keeps named images in the terminal and shows one (tui-surface.js has the
+ * shape: size, transport, has, upload, show, shown, drop, clear); `createRenderer` makes the
+ * renderer (renderer.js).
  */
 export function createVisualThoughtsEngine({
   config,
@@ -27,14 +29,24 @@ export function createVisualThoughtsEngine({
   timers = { setTimeout, clearTimeout },
   warn = () => {},
   onChange = () => {},
+  createRenderer = defaultCreateRenderer,
+  trace = null,
 }) {
+  const log = typeof trace === "function" ? (line) => { try { trace(`${now()} ${line}`); } catch {} } : () => {};
+  if (typeof trace === "function") {
+    // Main-thread stalls, while tracing.
+    let expected = Date.now() + 10;
+    const lagTimer = setInterval(() => {
+      const late = Date.now() - expected;
+      if (late > 30) log(`stall ${late}ms`);
+      expected = Date.now() + 10;
+    }, 10);
+    lagTimer.unref?.();
+  }
   const digest = createDigest();
   const rotation = createRotation(rotationOptions());
-  /** id → { id, prompt, model, batch, at, ms, png?, path? } */
+  /** id → { id, prompt, model, batch, at, ms, png?, path?, sent? } */
   const images = new Map();
-  /** id → prepared raster for the current display key. */
-  const prepared = new Map();
-  let preparedKey = "";
   const inflight = new Set();
   const recentPrompts = [];
   let enabled = false;
@@ -46,7 +58,6 @@ export function createVisualThoughtsEngine({
   let failures = 0;
   let displayTimer = null;
   let wakeTimer = null;
-  let lastFrameKey = "";
   let seq = 0;
   let activity = "idle"; // idle | prompting | painting
   let lastError = "";
@@ -120,7 +131,9 @@ export function createVisualThoughtsEngine({
       failures = 0;
       lastError = "";
       if (enabled) {
-        try { prepare(id); } catch (error) { images.delete(id); throw error; }
+        // Prepared (and its hold uploaded) before it joins the rotation, so it shows at once.
+        await ensureHold(id);
+        if (disposed || !enabled) return;
         rotation.add({ id, batch }, now());
         dropUnused();
         render();
@@ -146,37 +159,147 @@ export function createVisualThoughtsEngine({
   }
 
   // ── display ──────────────────────────────────────────────────────────────
+  // Holds: each image is uploaded once at up to the screen's resolution and placed while it is
+  // shown. Transitions: the renderer draws frames at a lower resolution, uploaded and swapped at
+  // `fps` (two keys, alternating), then the next image's hold takes over.
 
-  function displayKey(size) {
-    const raster = backdropRasterSize({ cols: size.cols, rows: size.rows, detail: config.detail, cellAspect: config.cellAspect });
-    return { raster, key: `${raster.width}x${raster.height}:${config.fit}:${config.feather}:${config.opacity}` };
+  let renderer = null;
+  let areaKey = "";
+  let configuring = null;
+  const holdRequests = new Map(); // id → promise
+  let job = null; // { seq, from, to, frames, ready: Map(k → payload), requested: Set, shownK, alt, begun }
+  let jobSeq = 0;
+
+  function ensureRenderer() {
+    if (renderer) return renderer;
+    renderer = createRenderer({ transport: surface.transport?.() || "stream", useWorker: config.worker !== false, onError: (error) => warn(`visual thoughts: renderer thread failed (${error?.message || error}); rendering in this thread`) });
+    return renderer;
   }
 
-  function prepare(id, size = surface.size()) {
+  /** The renderer configured for the surface's current size and look; null when not shown. */
+  function ensureConfigured(size = surface.size()) {
     if (!size) return null;
-    const { raster, key } = displayKey(size);
-    if (key !== preparedKey) { prepared.clear(); preparedKey = key; }
-    if (prepared.has(id)) return prepared.get(id);
-    const image = images.get(id);
-    if (!image) return null;
-    const png = image.png || (image.path ? readFileSync(image.path) : null);
-    if (!png) return null;
-    const ready = prepareBackdrop(decodeImage(png), { ...raster, fit: config.fit, feather: config.feather, opacity: config.opacity });
-    prepared.set(id, ready);
-    return ready;
+    const area = { width: size.cols * size.cellWidthPx, height: size.rows * size.cellHeightPx };
+    const key = `${area.width}x${area.height}:${config.fit}:${config.feather}:${config.opacity}:${config.transitionPixels}`;
+    if (key === areaKey) return configuring;
+    areaKey = key;
+    holdRequests.clear();
+    if (job) endJob();
+    for (const id of images.keys()) surface.drop(`hold:${id}`);
+    configuring = ensureRenderer().configure({ area, txPixels: config.transitionPixels, fit: config.fit, feather: config.feather, opacity: config.opacity });
+    return configuring;
   }
 
-  /** Forget images the rotation dropped (their files stay in the store). */
-  function dropUnused() {
-    const keep = new Set(rotation.ids());
-    for (const id of images.keys()) if (!keep.has(id)) { images.delete(id); prepared.delete(id); }
+  /** Make sure `id`'s hold image is in the terminal; resolves true once it is. */
+  function ensureHold(id) {
+    const key = `hold:${id}`;
+    if (surface.has(key)) return Promise.resolve(true);
+    const ready = ensureConfigured();
+    if (!ready) return Promise.resolve(false);
+    let request = holdRequests.get(id);
+    if (!request) {
+      const image = images.get(id);
+      const sendPng = image && !image.sent;
+      request = ready
+        .then(() => {
+          if (!sendPng) return renderer.hold(id);
+          const png = image.png || (image.path ? readFileSync(image.path) : null);
+          if (!png) throw new Error(`image ${id} has no data`);
+          image.sent = true;
+          image.png = null; // the renderer keeps it now
+          return renderer.add(id, png);
+        })
+        .then((reply) => {
+          if (disposed || holdRequests.get(id) !== request) return false;
+          if (!images.has(id)) { void renderer.drop(id).catch(() => {}); return false; }
+          surface.upload(key, reply.payload);
+          return true;
+        })
+        .catch((error) => {
+          if (holdRequests.get(id) === request) holdRequests.delete(id);
+          lastError = error?.message || String(error);
+          warn(`visual thoughts: ${lastError}`);
+          return false;
+        });
+      holdRequests.set(id, request);
+      request.then((ok) => { if (!ok && holdRequests.get(id) === request) holdRequests.delete(id); });
+    }
+    return request;
   }
+
+  /** Drop terminal copies of holds that are neither shown nor about to be. */
+  function trimHolds(keep) {
+    for (const id of images.keys()) {
+      if (keep.has(id)) continue;
+      const key = `hold:${id}`;
+      if (surface.has(key) && surface.shown !== key) { surface.drop(key); holdRequests.delete(id); }
+    }
+  }
+
+  function endJob() {
+    if (!job) return;
+    const ended = job;
+    job = null;
+    for (const payload of ended.ready.values()) discard(payload);
+    for (const key of ["tx:0", "tx:1"]) if (surface.shown !== key) surface.drop(key);
+    void renderer?.end(ended.seq).catch(() => {});
+  }
+
+  /** A frame payload never shown: its file is ours to delete. */
+  function discard(payload) {
+    if (payload?.medium === "t" && payload.path) { try { unlinkSync(payload.path); } catch {} }
+  }
+
+  function startJob(view) {
+    if (job) endJob();
+    // Configure first: a new size ends any job, and this one must outlive that.
+    const ready = ensureConfigured();
+    if (!ready) return;
+    jobSeq += 1;
+    const frames = Math.max(2, Math.round((config.fadeMs / 1000) * config.fps));
+    const current = { seq: jobSeq, from: view.from, to: view.to, frames, ready: new Map(), requested: new Set(), shownK: 0, alt: 0, begun: false, failed: false };
+    job = current;
+    log(`job ${current.seq} ${view.from}->${view.to} frames=${frames}`);
+    const holds = [ensureHold(view.to), ...(view.from ? [ensureHold(view.from)] : [])];
+    ready
+      .then(() => Promise.all(holds))
+      .then(() => renderer.begin({ seq: current.seq, from: current.from, to: current.to, effect: config.effect, seed: (Math.random() * 2 ** 31) | 0 }))
+      .then((reply) => { log(`begin ${current.seq} ${reply?.effect} ${reply?.width}x${reply?.height}`); if (job === current) { current.begun = true; pump(lastViewT); } })
+      .catch((error) => { log(`begin failed ${current.seq} ${error?.message}`); if (job === current) { current.failed = true; lastError = error?.message || String(error); } });
+  }
+
+  /**
+   * Keep the frames playback will want next requested: from the frame due shortly (now plus the
+   * renderer's typical turnaround) a few ahead. Frames already behind playback are never asked for.
+   */
+  function pump(t = 0) {
+    const current = job;
+    if (!current?.begun) return;
+    const lead = Math.max(1, Math.ceil((frameMs + 1000 / config.fps) / (config.fadeMs / current.frames)));
+    const from = Math.max(current.shownK + 1, Math.ceil(t * current.frames) + 1);
+    const ahead = 3;
+    for (let k = from; k <= Math.min(current.frames, from + lead + ahead); k += 1) {
+      if (current.requested.has(k) || current.ready.has(k)) continue;
+      if (current.requested.size > ahead) break; // the renderer is busy enough
+      current.requested.add(k);
+      renderer.frame(current.seq, k, ease(k / current.frames)).then((reply) => {
+        current.requested.delete(k);
+        if (job !== current || reply.stale || k <= current.shownK) { discard(reply.payload); return; }
+        current.ready.set(k, reply.payload);
+        frameMs = frameMs ? frameMs * 0.8 + reply.ms * 0.2 : reply.ms;
+        log(`frame ${current.seq}:${k} ${reply.ms.toFixed(1)}ms`);
+      }).catch(() => { current.requested.delete(k); });
+    }
+  }
+
+  let frameMs = 0;
+  let lastViewT = 0;
 
   function scheduleRender(ms) {
     if (displayTimer) timers.clearTimeout(displayTimer);
     displayTimer = null;
     if (!Number.isFinite(ms)) return;
-    displayTimer = timers.setTimeout(() => { displayTimer = null; render(); }, Math.max(16, ms));
+    displayTimer = timers.setTimeout(() => { displayTimer = null; render(); }, Math.max(4, ms));
     displayTimer?.unref?.();
   }
 
@@ -185,34 +308,68 @@ export function createVisualThoughtsEngine({
     const at = now();
     const view = rotation.tick(at);
     if (!view) { scheduleRender(rotation.wakeIn(at)); return; }
-    const size = surface.size();
-    if (!size) { scheduleRender(1_000); return; }
+    if (!surface.size()) { scheduleRender(1_000); return; }
     try {
-      let frame;
-      let frameKey;
       if (view.id) {
-        frameKey = `${view.id}@${preparedKey}`;
-        if (frameKey !== lastFrameKey) frame = prepare(view.id, size);
-      } else {
-        const steps = Math.max(1, Math.round(config.fadeSteps));
-        const step = Math.min(steps, Math.max(1, Math.round(ease(view.t) * steps)));
-        frameKey = `${view.from}>${view.to}:${step}/${steps}@${preparedKey}`;
-        if (frameKey !== lastFrameKey) {
-          const to = prepare(view.to, size);
-          const from = view.from ? prepare(view.from, size) : null;
-          if (to) frame = step >= steps ? to : blendBackdrops(from, to, step / steps);
+        if (job && job.to === view.id && surface.has(`hold:${view.id}`)) endJob();
+        const key = `hold:${view.id}`;
+        if (surface.shown !== key) {
+          if (surface.has(key)) {
+            surface.show(key);
+            log(`hold ${view.id}`);
+            if (job) endJob();
+          } else {
+            void ensureHold(view.id).then((ok) => { if (ok) render(); });
+          }
         }
+        const { cycle, pending } = rotation.status();
+        const at = cycle.indexOf(view.id);
+        trimHolds(new Set([view.id, pending, cycle.length ? cycle[(at + 1) % cycle.length] : null].filter(Boolean)));
+        scheduleRender(rotation.wakeIn(now()));
+        return;
       }
-      if (frame) {
-        surface.show({ png: encodeBackdropPng(frame), width: frame.width, height: frame.height });
-        lastFrameKey = frameKey;
+      lastViewT = view.t;
+      if (!job || job.from !== view.from || job.to !== view.to) startJob(view);
+      const current = job;
+      if (current && !current.failed) {
+        const target = Math.min(current.frames, Math.max(1, Math.ceil(view.t * current.frames)));
+        let best = 0;
+        for (const k of current.ready.keys()) if (k <= target && k > best) best = k;
+        if (best > current.shownK) {
+          const payload = current.ready.get(best);
+          for (const [k, stale] of current.ready) if (k < best) { discard(stale); current.ready.delete(k); }
+          current.ready.delete(best);
+          const key = `tx:${current.alt}`;
+          current.alt ^= 1;
+          surface.upload(key, payload);
+          surface.show(key);
+          log(`show ${current.seq}:${best}/${current.frames} t=${view.t.toFixed(3)}`);
+          current.shownK = best;
+          lastFrameAt = at;
+          shownFrames += 1;
+        }
+        pump(view.t);
       }
+      scheduleRender(1000 / Math.max(1, config.fps));
     } catch (error) {
       lastError = error?.message || String(error);
       warn(`visual thoughts: ${lastError}`);
+      scheduleRender(1_000);
     }
-    const wake = view.id ? rotation.wakeIn(now()) : Math.max(16, config.fadeMs / Math.max(1, config.fadeSteps));
-    scheduleRender(wake);
+  }
+
+  let lastFrameAt = 0;
+  let shownFrames = 0;
+
+  function dropUnused() {
+    const keep = new Set(rotation.ids());
+    for (const id of images.keys()) {
+      if (keep.has(id)) continue;
+      images.delete(id);
+      surface.drop(`hold:${id}`);
+      holdRequests.delete(id);
+      void renderer?.drop(id).catch(() => {});
+    }
   }
 
   function status() {
@@ -257,13 +414,16 @@ export function createVisualThoughtsEngine({
     setEnabled(next) {
       if (disposed) return;
       enabled = Boolean(next);
-      if (enabled) { lastFrameKey = ""; render(); maybeGenerate(); }
+      if (enabled) { render(); maybeGenerate(); }
       else {
         for (const controller of inflight) controller.abort();
         if (displayTimer) timers.clearTimeout(displayTimer);
         if (wakeTimer) timers.clearTimeout(wakeTimer);
-        displayTimer = null; wakeTimer = null; lastFrameKey = "";
+        displayTimer = null; wakeTimer = null;
+        endJob();
         try { surface.clear(); } catch {}
+        // Images stay with the renderer; their holds upload again when shown.
+        holdRequests.clear();
         setActivity("idle");
       }
     },
@@ -294,27 +454,37 @@ export function createVisualThoughtsEngine({
       if (nextProvider) currentProvider = nextProvider;
       rotation.configure(rotationOptions());
       dropUnused();
-      prepared.clear();
-      preparedKey = "";
-      lastFrameKey = "";
       render();
     },
-    /** The surface changed size: re-prepare and redraw. */
+    /** The surface changed size: images are prepared again for it. */
     resized() {
-      lastFrameKey = "";
+      render();
+    },
+    /** The terminal freed the images: upload what is shown again. */
+    lost() {
+      log("lost");
+      holdRequests.clear();
+      if (job) endJob();
       render();
     },
     clear() {
+      endJob();
+      for (const id of images.keys()) void renderer?.drop(id).catch(() => {});
       rotation.clear();
       images.clear();
-      prepared.clear();
-      lastFrameKey = "";
+      holdRequests.clear();
       try { surface.clear(); } catch {}
+    },
+    /** Frames shown and the renderer's cost, for status. */
+    stats() {
+      return { frames: shownFrames, frameMs, threaded: renderer?.threaded ?? null, transport: renderer?.transport ?? null };
     },
     dispose() {
       if (disposed) return;
       this.setEnabled(false);
       disposed = true;
+      renderer?.close();
+      renderer = null;
     },
   };
 }

@@ -1,9 +1,8 @@
 // Visual thoughts: images prepared as a terminal backdrop, and crossfades between them.
 //
-// A generated image (about 1.5 megapixels) becomes a small raster the size of the backdrop at
-// a low resolution (the terminal scales it up smoothly; a dreamy backdrop wants no detail):
-// fitted (cover, contain or stretch), its edges feathered into transparency, and its alpha
-// scaled by the opacity. Crossfades blend two prepared rasters; each frame is a small PNG.
+// A generated image becomes a raster the shape of the backdrop: fitted (cover, contain or
+// stretch), its edges feathered into transparency, and its alpha scaled by the opacity. The
+// PNG encoder is for tests and tools; frames reach the terminal as raw RGBA (render-core.js).
 import { deflateSync } from "node:zlib";
 
 import { decodePng } from "../../pi-graphics/canvas/png-decode.js";
@@ -13,22 +12,6 @@ export const FITS = Object.freeze(["cover", "contain", "stretch"]);
 /** A decoded PNG: { width, height, rgba } (straight alpha). */
 export function decodeImage(png) {
   return decodePng(png);
-}
-
-/**
- * The raster size of a backdrop of `cols`×`rows` cells: `detail` pixels per column, rows at the
- * cell's aspect (height/width), bounded so a frame stays small.
- */
-export function backdropRasterSize({ cols, rows, detail = 2, cellAspect = 2.1, maxPixels = 250_000 }) {
-  let width = Math.max(8, Math.round(Math.max(1, cols) * Math.max(0.25, detail)));
-  let height = Math.max(8, Math.round(Math.max(1, rows) * Math.max(0.25, detail) * Math.max(0.5, cellAspect)));
-  const pixels = width * height;
-  if (pixels > maxPixels) {
-    const shrink = Math.sqrt(maxPixels / pixels);
-    width = Math.max(8, Math.floor(width * shrink));
-    height = Math.max(8, Math.floor(height * shrink));
-  }
-  return { width, height };
 }
 
 function smoothstep(edge, x) {
@@ -111,36 +94,6 @@ export function prepareBackdrop(src, { width, height, fit = "cover", feather = 0
     }
   }
   return { width, height, rgba: out };
-}
-
-/**
- * The crossfade of two prepared rasters of one size at `t` (0: `from`, 1: `to`), blended with
- * premultiplied alpha so differently shaped (letterboxed) images fade correctly. A missing
- * `from` fades `to` in from nothing.
- */
-export function blendBackdrops(from, to, t, out = new Uint8Array(to.width * to.height * 4)) {
-  const k = Math.max(0, Math.min(1, t));
-  const b = to.rgba;
-  if (!from) {
-    for (let i = 0; i < b.length; i += 4) {
-      out[i] = b[i]; out[i + 1] = b[i + 1]; out[i + 2] = b[i + 2]; out[i + 3] = b[i + 3] * k;
-    }
-    return { width: to.width, height: to.height, rgba: out };
-  }
-  if (from.width !== to.width || from.height !== to.height) throw new Error("blendBackdrops: rasters differ in size");
-  const a = from.rgba;
-  const j = 1 - k;
-  for (let i = 0; i < b.length; i += 4) {
-    const aa = a[i + 3] * j;
-    const ba = b[i + 3] * k;
-    const alpha = aa + ba;
-    if (alpha <= 0) { out[i] = 0; out[i + 1] = 0; out[i + 2] = 0; out[i + 3] = 0; continue; }
-    out[i] = (a[i] * aa + b[i] * ba) / alpha;
-    out[i + 1] = (a[i + 1] * aa + b[i + 1] * ba) / alpha;
-    out[i + 2] = (a[i + 2] * aa + b[i + 2] * ba) / alpha;
-    out[i + 3] = alpha;
-  }
-  return { width: to.width, height: to.height, rgba: out };
 }
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

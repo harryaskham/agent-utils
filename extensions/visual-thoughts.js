@@ -8,6 +8,8 @@
 //   /thoughts next            crossfade to the next image
 //   /thoughts clear           drop the images (the files stay)
 //   /thoughts <key> <value>   change a setting for this session (opacity 0.4, fit contain, …)
+import { appendFileSync } from "node:fs";
+
 import { readAgentSettings, agentSettingsPath } from "./pi-graphics/agent-io.js";
 import { captureTuiFromUi } from "./pi-graphics/host-components.js";
 import { runPiTextTurn } from "./lib/pi-inference.js";
@@ -43,6 +45,7 @@ function describeStatus(status, config) {
     `  ${config.fit}, opacity ${config.opacity}, feather ${config.feather}, hold ${config.holdMs / 1000}s, fade ${config.fadeMs / 1000}s`,
   ];
   if (status.generated) lines.push(`  ${status.generated} painted this session; last took ${(status.lastMs / 1000).toFixed(1)}s`);
+  if (status.stats?.frames) lines.push(`  transitions: ${config.effect}, ${config.fps} fps target, ${status.stats.frameMs.toFixed(1)} ms/frame ${status.stats.threaded ? "on a worker thread" : "in Pi's thread"}, frames by ${status.stats.transport}`);
   if (status.prompt) lines.push(`  last prompt: ${status.prompt.slice(0, 200)}`);
   if (status.lastError) lines.push(`  last error: ${status.lastError}`);
   return lines.join("\n");
@@ -75,9 +78,11 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
       if (env.TMUX && !/^(1|true|on|yes)$/i.test(String(env.PI_VISUAL_THOUGHTS_TMUX || ""))) {
         throw new Error("visual thoughts do not run inside tmux yet (PI_VISUAL_THOUGHTS_TMUX=1 to try)");
       }
-      surface = createTuiBackdropSurface({ tui, env, options: () => config, onResize: () => engine?.resized() });
+      surface = createTuiBackdropSurface({ tui, env, options: () => config, onResize: () => engine?.resized(), onLost: () => engine?.lost() });
       let sessionId = "session";
       try { sessionId = String(ctx.sessionManager?.getSessionId?.() || sessionId); } catch {}
+      // A fixed store (another session's images), e.g. for --no-session runs.
+      if (env.PI_VISUAL_THOUGHTS_SESSION) sessionId = String(env.PI_VISUAL_THOUGHTS_SESSION);
       const store = createImageStore({ root: visualThoughtsStateDir(env), sessionId });
       engine = createVisualThoughtsEngine({
         config,
@@ -92,6 +97,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
           return response.text;
         },
         warn: warnOnce,
+        ...(env.PI_VISUAL_THOUGHTS_TRACE ? { trace: (line) => appendFileSync(env.PI_VISUAL_THOUGHTS_TRACE, `${line}\n`) } : {}),
         onChange: (status) => {
           try { lastCtx?.ui?.setStatus?.(STATUS_KEY, status.enabled && status.activity !== "idle" ? `✧ ${status.activity}` : undefined); } catch {}
         },
@@ -186,7 +192,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         const verb = (words[0] || "status").toLowerCase();
         if (verb === "status") {
           if (unavailable && !engine) return notify(`visual thoughts unavailable: ${unavailable}`, "warning", ctx);
-          return notify(describeStatus(engine?.status() || { enabled: false }, config), "info", ctx);
+          return notify(describeStatus(engine ? { ...engine.status(), stats: engine.stats() } : { enabled: false }, config), "info", ctx);
         }
         if (verb === "on" || verb === "off" || verb === "toggle") {
           const on = verb === "toggle" ? !engine?.enabled : verb === "on";

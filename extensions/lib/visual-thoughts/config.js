@@ -21,12 +21,12 @@ export const DEFAULTS = Object.freeze({
   opacity: 0.3,
   fit: "cover",
   feather: 0.12,
-  detail: 2,
-  cellAspect: 2.1,
   layer: "auto",
   holdMs: 18_000,
-  fadeMs: 3_000,
-  fadeSteps: 10,
+  fadeMs: 2_800,
+  fps: 60,
+  effect: "random",
+  transitionPixels: 400_000,
   minShowMs: 5_000,
   minSet: 3,
   maxImages: 8,
@@ -41,13 +41,14 @@ export const DEFAULTS = Object.freeze({
 });
 
 const NUMERIC = Object.freeze({
-  opacity: [0, 1], feather: [0, 0.5], detail: [0.25, 8], cellAspect: [0.5, 4],
-  holdMs: [1_000, 600_000], fadeMs: [0, 60_000], fadeSteps: [1, 60], minShowMs: [0, 600_000],
+  opacity: [0, 1], feather: [0, 0.5], fps: [1, 120], transitionPixels: [20_000, 2_000_000],
+  holdMs: [1_000, 600_000], fadeMs: [0, 60_000], minShowMs: [0, 600_000],
   minSet: [1, 32], maxImages: [1, 64], minIntervalMs: [0, 3_600_000], firstChars: [0, 100_000],
   minChars: [0, 100_000], maxPerRun: [0, 1_000], maxConcurrent: [1, 4], keep: [0, 10_000],
 });
 const CHOICES = Object.freeze({
   fit: ["cover", "contain", "stretch"],
+  effect: ["random", "fade", "ripple", "wave", "dissolve", "bloom", "drift"],
   layer: ["auto", "over", "under"],
   provider: ["litellm", "mai"],
   maiAuth: ["entra", "key"],
@@ -57,8 +58,8 @@ const STRINGS = new Set(["promptModel", "imageModel", "size", "quality", "baseUr
 /** Seconds-friendly aliases for the millisecond settings, and short names. */
 const ALIASES = Object.freeze({
   hold: ["holdMs", 1000], fade: ["fadeMs", 1000], interval: ["minIntervalMs", 1000], "min-show": ["minShowMs", 1000],
-  model: ["imageModel", 1], "image-model": ["imageModel", 1], "prompt-model": ["promptModel", 1], steps: ["fadeSteps", 1],
-  "max-images": ["maxImages", 1], "per-run": ["maxPerRun", 1], "min-set": ["minSet", 1], aspect: ["cellAspect", 1],
+  model: ["imageModel", 1], "image-model": ["imageModel", 1], "prompt-model": ["promptModel", 1],
+  "max-images": ["maxImages", 1], "per-run": ["maxPerRun", 1], "min-set": ["minSet", 1], pixels: ["transitionPixels", 1],
 });
 
 function bool(value, fallback) {
