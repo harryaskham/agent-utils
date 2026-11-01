@@ -33,7 +33,7 @@ const PI_UI_DOC = Object.freeze({ kind: "pi.ui", version: 1, scope: "session" })
 const BACKDROP_SLOT = "backdrop";
 const EMPTY_SLOT = Object.freeze({ kind: "image-set", images: [], current: 0 });
 /** Settings about how this client shows images; the rest is the painter's (the host's, where it paints). */
-const LOCAL_KEYS = new Set(["layer", "fps", "effect", "transitionPixels", "transport", "fadeMs", "minShowMs", "canvasOpacity"]);
+const LOCAL_KEYS = new Set(["layer", "area", "fps", "effect", "transitionPixels", "transport", "fadeMs", "minShowMs", "canvasOpacity"]);
 const PROVIDER_KEYS = new Set(["provider", "imageModel", "size", "quality", "baseUrl", "apiKeyEnv", "maiEndpoint", "maiAuth", "maiKeyEnv"]);
 
 export function resolvePromptModel(registry, reference) {
@@ -66,17 +66,26 @@ function describeStatus(status, config) {
 
 /** A pi-client pane's backdrop (`ctx.ui.backdrop()`) as the engine's surface. */
 export function hostSurface(backdrop, { config, env = process.env, onResize, onLost, onClose }) {
+  // pi-client's region (pi-daemon 1.15+): the transcript only, or the whole pane.
+  let applied = null;
+  const region = () => {
+    const want = config.area === "screen" ? "pane" : "transcript";
+    if (want === applied || typeof backdrop.region !== "function") return;
+    applied = want;
+    try { backdrop.region(want); } catch {}
+  };
+  region();
   const subscriptions = [
     backdrop.onResize?.(onResize),
     backdrop.onLost?.(onLost),
     backdrop.onClose?.(onClose),
   ].filter((stop) => typeof stop === "function");
   return {
-    size: () => backdrop.size() ?? null,
+    size: () => { region(); return backdrop.size() ?? null; },
     transport: () => backdrop.transport(),
     has: (key) => backdrop.has(key),
     upload: (key, payload) => backdrop.upload(key, payload),
-    show: (key) => backdrop.show(key, { layer: backdropLayer(config.layer, env) }),
+    show: (key) => { region(); return backdrop.show(key, { layer: backdropLayer(config.layer, env) }); },
     get shown() { return backdrop.shown; },
     drop: (key) => backdrop.drop(key),
     clear: () => backdrop.clear(),
@@ -158,10 +167,10 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
     }
 
     /** A new surface for the pane; throws where none can be drawn. */
-    function makeSurface(ctx, backdrop, holder) {
+    function makeSurface(ctx, backdrop, holder, paneConfig = config) {
       if (backdrop) {
         return hostSurface(backdrop, {
-          config,
+          config: paneConfig,
           env,
           onResize: () => holder.current?.engine.resized(),
           onLost: () => holder.current?.engine.lost(),
@@ -175,7 +184,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         throw new Error("visual thoughts do not run inside tmux yet (PI_VISUAL_THOUGHTS_TMUX=1 to try)");
       }
       return createTuiBackdropSurface({
-        tui, env, options: () => config,
+        tui, env, options: () => paneConfig,
         ...(typeof host?.cellSize === "function" ? { cellSize: host.cellSize } : {}),
         onResize: () => holder.current?.engine.resized(),
         onLost: () => holder.current?.engine.lost(),
@@ -193,10 +202,10 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         // Once per process: sessions long gone, and an over-full store, are cleared away.
         if (!pruned) { pruned = true; pruneStore(visualThoughtsStateDir(env), { keep: sessionId }).catch(() => {}); }
         const holder = { current: null };
-        const surface = makeSurface(ctx, backdrop, holder);
-        const store = createImageStore({ root: visualThoughtsStateDir(env), sessionId });
         // Each pane its own settings (pi-client: `/thoughts opacity 1` is that pane's session's).
         const paneConfig = { ...config };
+        const surface = makeSurface(ctx, backdrop, holder, paneConfig);
+        const store = createImageStore({ root: visualThoughtsStateDir(env), sessionId });
         pane = { key, sessionId, surface, store, config: paneConfig, off: false, engine: null, host: false, stopWatch: null };
         holder.current = pane;
         const made = pane;

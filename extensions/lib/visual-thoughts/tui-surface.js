@@ -51,6 +51,24 @@ export function backdropLayer(layer, env = process.env) {
   return "over";
 }
 
+/** The first scroll view in a pi-tui layout (Pi's transcript in fullscreen mode), or null. */
+export function findScrollView(root) {
+  const seen = new Set();
+  const queue = [root];
+  while (queue.length && seen.size < 500) {
+    const node = queue.shift();
+    if (!node || typeof node !== "object" || seen.has(node)) continue;
+    seen.add(node);
+    if (node !== root && typeof node.viewportHeight === "number" && "isFollowingEnd" in node) return node;
+    for (const key of ["layoutRoot", "entries", "component", "children"]) {
+      const value = node[key];
+      if (Array.isArray(value)) queue.push(...value);
+      else if (value && typeof value === "object") queue.push(value);
+    }
+  }
+  return null;
+}
+
 /** The kitty command that transmits a renderer payload as image `imageId` (no placement). */
 export function transmitCommand(imageId, payload, passthrough = "none") {
   const base = { a: "t", f: 32, s: payload.width, v: payload.height, i: imageId, q: 2 };
@@ -94,10 +112,26 @@ export function createTuiBackdropSurface({ tui, env = process.env, options = () 
   };
   let unsubscribeCanvas = null;
 
+  /** Pi's transcript (the scroll view above the editor's dock), found once in its layout. */
+  let transcriptView = null;
+  function transcript() {
+    if (transcriptView && typeof transcriptView.viewportHeight === "number") return transcriptView;
+    transcriptView = findScrollView(tui);
+    return transcriptView;
+  }
+
+  /**
+   * Where the backdrop goes, in cells from the top-left: the whole screen, or (`area:
+   * "transcript"`, the default) Pi's transcript only, above the editor, its chips and the footer.
+   */
   function screen() {
     if (tui.mode !== undefined && tui.mode !== "fullscreen") return null;
     const cols = Math.max(1, Number(terminal.columns) || 0);
-    const rows = Math.max(1, Number(terminal.rows) || 0);
+    let rows = Math.max(1, Number(terminal.rows) || 0);
+    if ((options().area || "transcript") === "transcript") {
+      const view = Number(transcript()?.viewportHeight) || 0;
+      if (view > 1) rows = Math.min(rows, view);
+    }
     return cols > 1 && rows > 1 ? { cols, rows } : null;
   }
 
@@ -151,9 +185,24 @@ export function createTuiBackdropSurface({ tui, env = process.env, options = () 
     hooked = false;
   }
 
-  /** Pi's output, with the backdrop put back where Pi removed it. */
+  /** Pi's output, with the backdrop put back where Pi removed it (or resized with the transcript). */
   function afterHostWrite(data) {
-    if (!shown || !data.includes("\x1b_G") && !data.includes("\x1b[2J") && !data.includes("\x1b[3J")) return data;
+    if (shown && !data.includes("\x1b_G") && !data.includes("\x1b[2J") && !data.includes("\x1b[3J")) {
+      // The editor grew or shrank: the transcript's area changed. Placed anew now (scaled), and
+      // fitted anew by the engine.
+      const now = screen();
+      if (now && (now.rows !== shown.rows || now.cols !== shown.cols)) {
+        shown.cols = now.cols;
+        shown.rows = now.rows;
+        lastSize = `${now.cols}x${now.rows}`;
+        queueMicrotask(onResize);
+        const at = data.lastIndexOf(ESU);
+        const restore = `${SAVE}${placeCommand(shown)}${RESTORE}`;
+        return at < 0 ? `${data}${restore}` : `${data.slice(0, at)}${restore}${data.slice(at)}`;
+      }
+      return data;
+    }
+    if (!shown) return data;
     const freed = FREE_IMAGES.test(data) || data.includes("\x1b[2J") || data.includes("\x1b[3J");
     if (!freed && !DELETE_PLACEMENTS.test(data)) return data;
     const now = screen();

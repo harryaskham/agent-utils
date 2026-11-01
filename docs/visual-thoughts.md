@@ -76,6 +76,7 @@ tmux is not supported yet (`PI_VISUAL_THOUGHTS_TMUX=1` to try). `PI_VISUAL_THOUG
 | `canvasOpacity` | `0.45` | backdrop alpha blended into `/gfx full`'s background (`canvas-opacity` at runtime) |
 | `fit` | `cover` | `cover`, `contain`, `stretch` |
 | `feather` | `0.12` | edge fade, fraction of the shorter side |
+| `area` | `transcript` | `transcript`: only above the editor (the editor, its chips and the footer stay plain; the image follows the editor as it grows), or the whole `screen` (pi-client: pane). pi-client needs pi-daemon with backdrop regions |
 | `layer` | `auto` | `over` cell backgrounds and under the text (kitty z between −2³⁰ and 0: tool boxes, panels and dialogs are tinted by the image, text stays on top), or `under` them (backgrounds stay solid; the image shows only around the text); `auto` is `over` |
 | `holdMs`, `fadeMs` | `18000`, `2800` | |
 | `effect` | `random` | `ripple`, `wave`, `dissolve`, `bloom`, `drift`, `fade` |

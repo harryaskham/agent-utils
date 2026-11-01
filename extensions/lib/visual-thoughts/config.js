@@ -26,6 +26,8 @@ export const DEFAULTS = Object.freeze({
   fit: "cover",
   feather: 0.12,
   layer: "auto",
+  // The transcript only (above the editor, its chips and the footer), or the whole screen/pane.
+  area: "transcript",
   holdMs: 18_000,
   fadeMs: 2_800,
   fps: 60,
@@ -67,6 +69,7 @@ const CHOICES = Object.freeze({
   fit: ["cover", "contain", "stretch"],
   effect: ["random", "fade", "ripple", "wave", "dissolve", "bloom", "drift"],
   layer: ["auto", "over", "under"],
+  area: ["transcript", "screen"],
   provider: ["litellm", "mai"],
   maiAuth: ["entra", "key"],
   transport: ["auto", "file", "stream"],

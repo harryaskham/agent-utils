@@ -614,8 +614,9 @@ function fakeBackdrop(name) {
   const keys = new Set();
   const listeners = { resize: [], lost: [], close: [] };
   const backdrop = {
-    name, log: [], shownKey: null, visible: true,
-    size: () => (backdrop.visible ? { cols: 40, rows: 12, cellWidthPx: 10, cellHeightPx: 20 } : undefined),
+    name, log: [], shownKey: null, visible: true, area: "pane",
+    size: () => (backdrop.visible ? { cols: 40, rows: backdrop.area === "transcript" ? 9 : 12, cellWidthPx: 10, cellHeightPx: 20 } : undefined),
+    region(area) { backdrop.area = area; backdrop.log.push(`region ${area}`); },
     transport: () => "stream",
     has: (key) => keys.has(key),
     upload(key) { keys.add(key); backdrop.log.push(`upload ${key}`); },
@@ -671,6 +672,7 @@ test("extension in pi-client: each pane paints its own session; prompts over the
     assert.equal(chat.body.model, "deepseek-v4-flash");
     assert.match(chat.body.messages[1].content, /\[prompt\] draw the harbour/);
     assert.ok(left.log.some((line) => line.endsWith(" over")), "shown above cell backgrounds, below text, by default");
+    assert.equal(left.area, "transcript", "on the transcript only: the editor, its chips and the footer stay solid");
 
     // Focus moves to the right pane, another session: it gets its own engine; the left holds still.
     const rightCtx = ctxFor(right, "s-right");
@@ -687,6 +689,10 @@ test("extension in pi-client: each pane paints its own session; prompts over the
     assert.match(notices.at(-1), /opacity 0\.9/);
     await commands.get("thoughts").handler("status", leftCtx);
     assert.match(notices.at(-1), /opacity 0\.3/);
+    await commands.get("thoughts").handler("area screen", rightCtx);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(right.area, "pane", "area screen: the whole pane");
+    assert.equal(left.area, "transcript");
 
     // The right pane switches to another session: its old one's images go.
     await emit("session_start", {}, ctxFor(right, "s-other"));
@@ -699,6 +705,33 @@ test("extension in pi-client: each pane paints its own session; prompts over the
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("TUI surface: the transcript only by default, following the editor as it grows", async () => {
+  const { findScrollView } = await import("../extensions/lib/visual-thoughts/tui-surface.js");
+  const writes = [];
+  const terminal = { columns: 80, rows: 30, write(data) { writes.push(String(data)); } };
+  const transcriptView = { viewportHeight: 24, isFollowingEnd: true, scrollTop: 0 };
+  const tui = { mode: "fullscreen", terminal, layoutRoot: { entries: [{ component: transcriptView }, { component: { render: () => [] } }] } };
+  assert.equal(findScrollView(tui), transcriptView);
+  let resized = 0;
+  const surface = createTuiBackdropSurface({ tui, env: {}, options: () => ({}), ids: [1, 2], onResize: () => { resized += 1; } });
+  assert.equal(surface.size().rows, 24, "above the editor's dock");
+  surface.upload("k", { medium: "d", data: "", width: 1, height: 1 });
+  surface.show("k");
+  await flushed();
+  assert.equal(parseKittyGraphicsCommands(writes.at(-1)).find((c) => c.control.a === "p").control.r, "24");
+  // The editor grows two lines: placed anew in Pi's next frame, and the engine told.
+  transcriptView.viewportHeight = 22;
+  terminal.write("\x1b[?2026hdraw\x1b[?2026l");
+  await flushed();
+  assert.equal(parseKittyGraphicsCommands(writes.at(-1)).find((c) => c.control.a === "p").control.r, "22");
+  assert.equal(resized, 1);
+  // area screen: the whole screen.
+  const whole = createTuiBackdropSurface({ tui, env: {}, options: () => ({ area: "screen" }), ids: [3] });
+  assert.equal(whole.size().rows, 30);
+  surface.dispose();
+  whole.dispose();
 });
 
 test("TUI surface: with pi-graphics' canvas on, the backdrop blends just above its background and returns after it clears", async () => {
