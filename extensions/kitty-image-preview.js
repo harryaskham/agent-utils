@@ -146,6 +146,10 @@ import {
 import { buildPassthroughProbePlan } from "./kitty-image-preview/passthrough-probe.js";
 
 const TOOL_PREFIX = "kitty_image_preview";
+// The gallery shown, hidden or cleared by a command (not a tool, whose result keeps a snapshot):
+// a session entry, so a reopened session restores what was last chosen; a later image's tool
+// result shows it again.
+export const VIEW_ENTRY_TYPE = "agent-utils-kitty-preview-view";
 const WIDGET_ID = "kitty-image-preview";
 const DEFAULT_Z_INDEX = 0;
 const DEFAULT_BG_Z_INDEX = -1073741824;
@@ -1427,6 +1431,13 @@ export default function kittyImagePreviewExtension(pi) {
     for (const entry of ctx.sessionManager.getBranch()) {
       if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName?.startsWith(TOOL_PREFIX)) {
         restorePublicState(state, entry.message.details);
+      } else if (entry.type === "custom" && entry.customType === VIEW_ENTRY_TYPE) {
+        // Hidden (or cleared) since that snapshot: it stays so until a later image shows it.
+        state.visible = entry.data?.visible === true && state.items.length > 0;
+        if (entry.data?.cleared === true) {
+          state.items = [];
+          state.index = 0;
+        }
       }
     }
     // Temporary screenshots may have disappeared since the persisted snapshot.
@@ -2212,6 +2223,7 @@ export default function kittyImagePreviewExtension(pi) {
       return;
     }
     state.visible = true;
+    pi.appendEntry?.(VIEW_ENTRY_TYPE, { visible: true });
     // Explicit recovery after terminal reattach, eviction, or a disposed UI.
     // Re-upload every visible page image, not only the selected image.
     resetTransmissionGuard(state);
@@ -2289,6 +2301,7 @@ export default function kittyImagePreviewExtension(pi) {
     }
     state.lastDeleteCommand = buildScopedDeleteCommand(state);
     state.visible = false;
+    pi.appendEntry?.(VIEW_ENTRY_TYPE, { visible: false });
     stopAnimation(state);
     stopCycle(state);
     flashDeleteWidget(ctx, state, state.lastDeleteCommand);
@@ -2306,6 +2319,7 @@ export default function kittyImagePreviewExtension(pi) {
     state.visible = false;
     state.items = [];
     state.index = 0;
+    pi.appendEntry?.(VIEW_ENTRY_TYPE, { visible: false, cleared: true });
     state.currentCommand = undefined;
     stopAnimation(state);
     stopCycle(state);
