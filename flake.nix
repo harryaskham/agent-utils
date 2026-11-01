@@ -140,7 +140,7 @@
             echo 'export * from "./extensions/durable/media.mjs";' > $out/media.mjs
             # An image budget for model requests (bd-cf6146).
             echo 'export * from "./extensions/durable/image-budget.mjs";' > $out/image-budget.mjs
-            # /loop as Durable background tasks.
+            # /loop, /after, /cron and /goal as Durable background tasks.
             echo 'export * from "./extensions/durable/loop.mjs";' > $out/loop.mjs
             # /call, /stt and /ptt run by the daemon (bd-6ffaf9).
             echo 'export * from "./extensions/durable/voice.mjs";' > $out/voice.mjs
@@ -186,7 +186,8 @@
               if (typeof loopClient.default !== 'function' || typeof loopClient.loopStatus !== 'function') process.exit(1);
               if (caco.extension?.sections?.[0]?.key !== 'cacophony' || typeof caco.commands?.['caco-agent-register']?.run !== 'function' || typeof caco.observe !== 'function') process.exit(1);
               const loopTools = (loop.extension?.tools ?? []).map((tool) => tool.name).join(',');
-              if (loop.extension?.tasks?.[0]?.definition?.name !== 'agent-utils.loop' || typeof loop.commands?.loop?.run !== 'function' || typeof loop.commands?.loops?.run !== 'function' || loopTools !== 'create_loop,list_loops,stop_loop') process.exit(1);
+              const loopTasks = (loop.extension?.tasks ?? []).map((task) => task.definition?.name).join(',');
+              if (loopTasks !== 'agent-utils.loop,agent-utils.goal' || typeof loop.commands?.loop?.run !== 'function' || typeof loop.commands?.loops?.run !== 'function' || typeof loop.commands?.goal?.run !== 'function' || loop.extension?.sections?.[0]?.key !== 'goal' || loopTools !== 'create_loop,list_loops,stop_loop,goal_done') process.exit(1);
             "
           '';
           uncheckedJoin = pkgs.symlinkJoin {
