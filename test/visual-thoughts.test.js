@@ -202,6 +202,12 @@ test("digest and prompts: bounded, labelled, redacted; replies normalized", () =
   const tool = toolCallDigest("bash", { command: "curl -H 'Authorization: Bearer abcdefghijklmnop' x", token: "s3cret" });
   assert.doesNotMatch(tool, /abcdefghijklmnop|s3cret/);
 
+  // The task stays however much output follows it.
+  const tasked = createDigest({ maxChars: 100 });
+  tasked.add("user", "fix the flaky login test");
+  tasked.add("text", "y".repeat(500));
+  assert.equal(tasked.task, "fix the flaky login test");
+  assert.match(buildImagePromptRequest({ digest: tasked.snapshot(), task: tasked.task }).messages[0].content[0].text, /task the agent was given[\s\S]*fix the flaky login test/);
   const request = buildImagePromptRequest({ digest: "[reply] done", recentPrompts: ["a lighthouse", "a forest"], style: "ink wash" });
   assert.match(request.systemPrompt, /Never depict text/);
   const text = request.messages[0].content[0].text;

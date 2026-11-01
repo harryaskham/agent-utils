@@ -87,7 +87,7 @@ export function createPainter({
       const snapshot = digest.snapshot();
       digest.mark();
       setActivity("prompting");
-      const request = buildImagePromptRequest({ digest: snapshot, recentPrompts, style: config.style });
+      const request = buildImagePromptRequest({ digest: snapshot, task: digest.task, recentPrompts, style: config.style });
       const reply = await promptTurn(request, controller.signal);
       if (controller.signal.aborted) return;
       const prompt = normalizeImagePrompt(reply, { style: config.style });
