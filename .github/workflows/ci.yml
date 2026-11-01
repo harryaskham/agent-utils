@@ -37,7 +37,9 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # test/durable-git.test.js needs Node 24 (Node 22 leaves its promises
+          # pending); the flake's devShell is on Node 24 too.
+          node-version: 24
       - name: Run JS test suite
         run: npm test
       - name: Validate generated docs
