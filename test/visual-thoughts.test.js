@@ -1,7 +1,7 @@
 // Visual thoughts: images of the agent's work crossfading behind the screen.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, existsSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
@@ -1127,6 +1127,69 @@ test("engine slot mode: what shows stays until the slot has an image to replace 
     assert.match(h.surface.shown, /^hold:slot-sha256-new:/);
     assert.equal(engine.status().images, 1);
     engine.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("frame files: never left to the terminal alone; one that keeps them gets inline frames", async () => {
+  const { FILE_GRACE_MS, MAX_OUTSTANDING_FILES } = await import("../extensions/lib/visual-thoughts/render-core.js");
+  const { sweepStaleFrames } = await import("../extensions/lib/visual-thoughts/renderer.js");
+  const dir = mkdtempSync(join(tmpdir(), "vt-frames-"));
+  try {
+    let clock = 0;
+    const timers = { setInterval: () => 1, clearInterval: () => {} };
+    const frames = () => readdirSync(dir).filter((name) => name.startsWith("tty-graphics-protocol-vt-"));
+    const setup = (core) => {
+      core.handle({ type: "configure", area: { width: 40, height: 20 }, txPixels: 5_000, fit: "cover", feather: 0, opacity: 0.5 });
+      core.handle({ type: "add", id: "a", png: solidPng(8, 8, [1, 2, 3]), ref: 1 });
+    };
+
+    // A terminal that reads and deletes them (kitty, Ghostty): files stay `t=t`.
+    const taking = createRenderCore({ dir, transport: "file", pid: 11, now: () => clock, timers });
+    setup(taking);
+    for (let i = 0; i < 5; i += 1) {
+      const { payload } = taking.handle({ type: "hold", id: "a", ref: 2 + i });
+      assert.equal(payload.medium, "t");
+      rmSync(payload.path); // the terminal took it
+      clock += FILE_GRACE_MS;
+    }
+    taking.handle({ type: "hold", id: "a", ref: 9 });
+    assert.equal(taking.files().fellBack, false);
+    assert.ok(taking.files().consumed >= 5);
+    taking.dispose();
+    assert.deepEqual(frames(), [], "the last one deleted on close");
+
+    // A terminal that keeps them (caco tui read them and left them): deleted after their grace,
+    // then frames go inline for good.
+    const keeping = createRenderCore({ dir, transport: "file", pid: 12, now: () => clock, timers });
+    setup(keeping);
+    for (let i = 0; i < 4; i += 1) {
+      keeping.handle({ type: "hold", id: "a", ref: 20 + i });
+      clock += FILE_GRACE_MS;
+    }
+    const after = keeping.handle({ type: "hold", id: "a", ref: 30 });
+    assert.equal(after.payload.medium, "d", "inline once the terminal is seen keeping them");
+    assert.equal(keeping.files().fellBack, true);
+    assert.ok(frames().length <= 1, "the kept ones deleted");
+    keeping.dispose();
+    assert.deepEqual(frames(), []);
+
+    // A burst (a 60 fps transition): never more than the cap waiting at once.
+    const burst = createRenderCore({ dir, transport: "file", pid: 13, now: () => clock, timers });
+    setup(burst);
+    for (let i = 0; i < MAX_OUTSTANDING_FILES + 20; i += 1) burst.handle({ type: "hold", id: "a", ref: 40 + i });
+    assert.ok(frames().length <= MAX_OUTSTANDING_FILES + 1);
+    burst.dispose();
+
+    // Left behind: a gone process's files go; a live process's fresh ones stay, its old ones go.
+    writeFileSync(join(dir, "tty-graphics-protocol-vt-999999-1.rgba"), "x");
+    writeFileSync(join(dir, `tty-graphics-protocol-vt-${process.pid}-1.rgba`), "x");
+    writeFileSync(join(dir, "unrelated.rgba"), "x");
+    assert.equal(sweepStaleFrames(dir, { self: -1 }), 1);
+    assert.deepEqual(frames(), [`tty-graphics-protocol-vt-${process.pid}-1.rgba`]);
+    assert.equal(sweepStaleFrames(dir, { self: -1, now: Date.now() + 11 * 60_000 }), 1, "a live process's old frame");
+    assert.deepEqual(frames(), []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

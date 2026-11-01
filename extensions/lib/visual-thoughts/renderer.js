@@ -1,7 +1,7 @@
 // Visual thoughts: the main thread's handle on the renderer. Requests are promises; the render
 // core runs on a worker thread, or in this thread when workers are unavailable (slower, but the
 // same frames).
-import { readdirSync, rmSync } from "node:fs";
+import { readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
@@ -16,12 +16,57 @@ export function frameDirectory() {
   return tmpdir();
 }
 
+const FRAME_FILE = /^tty-graphics-protocol-vt-(\d+)-\d+\.rgba$/;
+/** Frame files of a live process older than this are left over too (single-use, long read). */
+const STALE_FRAME_MS = 10 * 60_000;
+let sweptStale = false;
+
+function alive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error?.code === "EPERM"; }
+}
+
+/**
+ * Frame files left behind: by processes that are gone (killed before they could delete theirs),
+ * or older than STALE_FRAME_MS (a terminal that never deleted them). Each is read once, at most
+ * seconds after it is written, so these are never needed. Returns how many were deleted.
+ */
+export function sweepStaleFrames(dir = frameDirectory(), { now = Date.now(), self = process.pid } = {}) {
+  let removed = 0;
+  let names = [];
+  try { names = readdirSync(dir); } catch { return 0; }
+  for (const name of names) {
+    const match = FRAME_FILE.exec(name);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    const path = join(dir, name);
+    let stale = pid !== self && !alive(pid);
+    if (!stale) {
+      try { stale = now - statSync(path).mtimeMs > STALE_FRAME_MS; } catch { continue; }
+    }
+    if (!stale) continue;
+    try { rmSync(path, { force: true }); removed += 1; } catch {}
+  }
+  return removed;
+}
+
+/** This process's frame files, deleted (closing, or exiting). */
+function removeOwnFrames(dir) {
+  const prefix = `tty-graphics-protocol-vt-${process.pid}-`;
+  try { for (const name of readdirSync(dir)) if (name.startsWith(prefix)) rmSync(join(dir, name), { force: true }); } catch {}
+}
+
 /**
  * The renderer thread (or in-thread core) for one transport, shared: every backdrop gets a
  * context of its own on it. Kept while any context is open.
  */
 function createRendererProcess({ transport, useWorker, onError }) {
   const dir = frameDirectory();
+  if (transport === "file" && !sweptStale) {
+    sweptStale = true;
+    sweepStaleFrames(dir);
+    // A process that exits without closing (Ctrl+C, /quit) deletes its frames too.
+    process.once("exit", () => removeOwnFrames(dir));
+  }
   const pending = new Map();
   let ref = 0;
   let worker = null;
@@ -75,8 +120,8 @@ function createRendererProcess({ transport, useWorker, onError }) {
       worker = null;
       // Frame files the terminal never read.
       if (transport === "file") {
-        const prefix = `tty-graphics-protocol-vt-${process.pid}-`;
-        try { for (const name of readdirSync(dir)) if (name.startsWith(prefix)) rmSync(join(dir, name), { force: true }); } catch {}
+        local?.dispose?.();
+        removeOwnFrames(dir);
       }
     },
   };
@@ -111,6 +156,8 @@ export function createRenderer({ transport = "file", useWorker = true, onError =
       return request({ type: "add", id, png: bytes }, [bytes.buffer]);
     },
     hold: (id) => request({ type: "hold", id }),
+    /** Frame files: written, taken by the terminal, deleted here, and whether frames went inline. */
+    files: () => request({ type: "files" }),
     drop: (id) => request({ type: "drop", id }),
     begin: (options) => request({ type: "begin", ...options }),
     frame: (seq, k, t) => request({ type: "frame", seq, k, t }),

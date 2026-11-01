@@ -3,12 +3,24 @@
 // for the terminal: raw RGBA written to a temporary file the terminal reads and deletes (`t=t`,
 // when the terminal is on this machine), else zlib-compressed RGBA inline (`o=z`). The main
 // thread only forwards the result, so a 60 fps crossfade costs it a few hundred bytes a frame.
-import { writeFileSync } from "node:fs";
+//
+// Frame files are never left to the terminal alone: a file still there `FILE_GRACE_MS` after it
+// was written is deleted here, and at most `MAX_OUTSTANDING_FILES` wait at once. A terminal that
+// does not delete them (one that reads `t=t` and keeps the file, as a multiplexer passing images
+// on may, or one that never reads them) makes the renderer switch to inline frames for good.
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 
 import { createTransitionRenderer, planTransition } from "./effects.js";
 import { decodeImage, encodeBackdropPng, prepareBackdrop } from "./raster.js";
+
+/** How long a frame file may wait for the terminal before the renderer deletes it. */
+export const FILE_GRACE_MS = 5_000;
+/** Frame files waiting at once, at most (each up to a few MB): the oldest goes first. */
+export const MAX_OUTSTANDING_FILES = 48;
+/** Files found undeleted after their grace (and none deleted by the terminal) before frames go inline. */
+const UNCONSUMED_LIMIT = 3;
 
 /** Largest hold image (device pixels): a still image needs no more than the screen or its source. */
 const MAX_HOLD_PIXELS = 4_200_000;
@@ -40,9 +52,33 @@ export function transitionSize(area, pixels = 400_000) {
  * Each message names its context (`ctx`: one per backdrop, so one renderer serves every pane);
  * a context has its own area, look, images and transition.
  */
-export function createRenderCore({ dir, transport = "file", pid = process.pid } = {}) {
+export function createRenderCore({ dir, transport = "file", pid = process.pid, now = () => Date.now(), timers = { setInterval, clearInterval } } = {}) {
   const contexts = new Map();
   let fileSeq = 0;
+  let medium = transport;
+  /** Frame files written and not yet seen gone: { path, at }, oldest first. */
+  const outstanding = [];
+  const files = { written: 0, consumed: 0, unconsumed: 0, fellBack: false };
+  let sweeper = null;
+
+  /** Files past their grace (or beyond the cap) are checked: gone (the terminal took them) or deleted here. */
+  function sweep(all = false) {
+    const at = now();
+    while (outstanding.length && (all || outstanding.length > MAX_OUTSTANDING_FILES || at - outstanding[0].at >= FILE_GRACE_MS)) {
+      const { path } = outstanding.shift();
+      if (existsSync(path)) {
+        files.unconsumed += 1;
+        try { rmSync(path, { force: true }); } catch {}
+      } else {
+        files.consumed += 1;
+      }
+    }
+    if (!files.fellBack && medium === "file" && files.consumed === 0 && files.unconsumed >= UNCONSUMED_LIMIT) {
+      medium = "stream";
+      files.fellBack = true;
+    }
+    if (!outstanding.length && sweeper) { timers.clearInterval(sweeper); sweeper = null; }
+  }
 
   function context(name = "default") {
     let state = contexts.get(name);
@@ -54,10 +90,17 @@ export function createRenderCore({ dir, transport = "file", pid = process.pid } 
   }
 
   function encode({ width, height, rgba }) {
-    if (transport === "file") {
+    if (medium === "file") {
+      sweep();
       fileSeq += 1;
       const path = join(dir, `tty-graphics-protocol-vt-${pid}-${fileSeq}.rgba`);
       writeFileSync(path, rgba, { mode: 0o600 });
+      files.written += 1;
+      outstanding.push({ path, at: now() });
+      if (!sweeper) {
+        sweeper = timers.setInterval(() => sweep(), 1_000);
+        sweeper?.unref?.();
+      }
       return { medium: "t", path, width, height };
     }
     return { medium: "d", data: deflateSync(rgba, { level: 1 }).toString("base64"), compressed: true, width, height };
@@ -147,7 +190,12 @@ export function createRenderCore({ dir, transport = "file", pid = process.pid } 
   };
 
   return {
+    /** Frame files: written, taken by the terminal, deleted here; whether frames went inline. */
+    files: () => ({ ...files, outstanding: outstanding.length, medium }),
+    /** Delete every frame file still waiting (closing). */
+    dispose() { sweep(true); },
     handle(message) {
+      if (message?.type === "files") return { type: "files", ref: message.ref, ...files, outstanding: outstanding.length, medium };
       const handler = handlers[message?.type];
       if (!handler) return { type: "error", ref: message?.ref, error: `unknown message ${message?.type}` };
       try {
