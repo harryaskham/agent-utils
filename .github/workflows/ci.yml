@@ -27,10 +27,9 @@ concurrency:
 jobs:
   js:
     name: JS tests + docs check
-    # bd-37d130: routed to the azure-ephemeral self-hosted runner pool per
-    # operator directive (2026-06-28) to move CI compute onto dedicated
-    # ephemeral x86 runners.
-    runs-on: [self-hosted, azure-ephemeral]
+    # GitHub-hosted: agent-utils is public (free minutes; fleet runners never
+    # serve public repositories). The azure-ephemeral pool it targeted is gone.
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Check out repository
@@ -58,7 +57,7 @@ jobs:
     # seconds; pi-wasm changes get the full gate with immediate per-change
     # detection (cheaper than tags-only, which would catch regressions only at
     # release).
-    runs-on: [self-hosted, azure-ephemeral]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
       run:
@@ -98,9 +97,10 @@ jobs:
 
   rust:
     name: Rust tests + clippy
-    runs-on: [self-hosted, azure-ephemeral]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - uses: DeterminateSystems/determinate-nix-action@v3
       - name: Check out repository
         uses: actions/checkout@v6
       - name: Install Rust toolchain
@@ -134,7 +134,7 @@ jobs:
 
   audit:
     name: Dependency audit (cargo audit)
-    runs-on: [self-hosted, azure-ephemeral]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Check out repository
@@ -158,10 +158,11 @@ jobs:
     # that the JS/Rust/audit jobs do not. --no-build keeps it fast: it
     # instantiates the current system's flake outputs without building them.
     # Drop --no-build if a future operator wants full build validation.
-    runs-on: [self-hosted, azure-ephemeral]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+      - uses: DeterminateSystems/determinate-nix-action@v3
       - name: Nix flake check (eval-only)
         run: nix --extra-experimental-features 'nix-command flakes' flake check --no-build

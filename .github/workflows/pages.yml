@@ -1,6 +1,6 @@
 name: Deploy GitHub Pages
 
-# Shared self-hosted gh-pages publisher (harryaskham.github.io publish-pages.yml):
+# Shared gh-pages publisher (harryaskham.github.io publish-pages.yml):
 # deploys docs/ to a.skh.am/agent-utils/ whenever render inputs change on main.
 # Previously tag-only (bd-e9884a); tags were rejected by the github-pages
 # environment (main only) and the azure-ephemeral pool is retired, so the site
@@ -23,5 +23,7 @@ jobs:
   pages:
     uses: harryaskham/harryaskham.github.io/.github/workflows/publish-pages.yml@main
     with:
+      # Public repository: GitHub-hosted (free); fleet runners never serve public repos.
+      runs-on: '["ubuntu-latest"]'
       path: site
       build: nix shell nixpkgs#python3 --command python3 scripts/check-site.py
