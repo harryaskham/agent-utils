@@ -88,6 +88,14 @@ Manual and startup registration share the same in-flight request, durable receip
 
 `extensions/durable/cacophony.mjs` provides the equivalent `/caco-agent-register` (with the same project inference) and `/caco-runtime` commands for Durable sessions. With auto-registration enabled, it registers on the session's first agent run. It passes the session's `cwd` as both the CLI working directory and `--checkout-root`, never the worker/server directory. It requires per-session environment support (pi-daemon 1.12+) and session directory metadata (1.13+).
 
+The Durable module registers with `--ahp-host pi-daemon` (cacophony bd-6cf22b), so Cacophony delivers the visitor's messages into its session, as it does for a native pi-daemon agent. A caco older than 1.2.1911 refuses the flag. The session then registers without it, and its messages wait in `caco msg inbox`.
+
+A visitor registered before host delivery is bound later with the same identity:
+- automatically on a later run, at most every 30 minutes, until a caco that can bind is installed;
+- at once with `/caco-agent-register`, which reports the result.
+
+`/caco-runtime` shows where the session's messages go.
+
 For names it feature-detects and awaits `getSessionName(): Promise<string | undefined>` on the command context or observer info (pi-daemon bd-5fbc06). This generic host API returns the current session's **explicit** name, not an automatically generated title. Hosts without that API, including pi-daemon 1.13.0, continue to register without `--session-name`; no environment, catalog-file, or ID fallback is attempted. Named sessions also require the Cacophony bd-ab5288 CLI option described above.
 
 Commands and observers share one registration flight per logical session, including asynchronous metadata reads. A same-session receipt or an existing environment identity is reused without asking the CLI to rename it. Child conversations (`/fork` within a Durable session) share that session's visitor; a different logical session cannot restore its parent's receipt. The module stores identity in session-local state and sets only that session's `CACO_AGENT_ID` / `CACO_PROJECT` overrides. Disable policy and managed identities take precedence in both manual and automatic registration.

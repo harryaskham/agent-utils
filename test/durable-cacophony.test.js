@@ -76,7 +76,7 @@ test("a session migrated from TUI Pi keeps its visiting agent's identity from it
   assert.deepEqual(caco.calls, [], "no registration: it already is the agent");
   assert.deepEqual(await ctx.state.get("identity"), { agentId: "visiting-tui", project: "pi-daemon", sessionId: "pd-migrated", registeredAt: 9, guidance: "", inherited: true });
   await module.commands["caco-runtime"].run("", ctx);
-  assert.equal(notices.at(-1), "visiting visiting-tui in pi-daemon (carried over by /migrate)");
+  assert.equal(notices.at(-1), "visiting visiting-tui in pi-daemon (carried over by /migrate); messages follow the agent's original route");
   // A managed agent's identity in the environment is not taken as a visitor's.
   const managed = sessionContext("pd-managed-2", { CACO_AGENT_ID: "cluster-ctrl", CACO_PROJECT: "cacophony" });
   await module.observe({ type: "agent_start" }, { sessionId: "pd-managed-2", state: managed.ctx.state, env: managed.ctx.env });
@@ -302,6 +302,50 @@ test("a pi-daemon session registers on the node's pi-daemon host, so caco delive
   const identity = await second.ctx.state.get("identity");
   assert.equal(identity.agentId, "visiting-older");
   assert.equal(identity.ahpHost, undefined);
+});
+
+test("an older caco cannot bind a visitor: it is retried later, and /caco-agent-register binds it on demand", async () => {
+  let clock = 1_000;
+  let older = true;
+  const calls = [];
+  const execFileImpl = (command, args, options, callback) => {
+    calls.push(args);
+    setImmediate(() => {
+      if (older && args.includes("--ahp-host")) return callback(new Error("exit 1"), "", "received unrecognised flag(s): --ahp-host. Refusing to proceed");
+      callback(null, JSON.stringify({ data: { id: "visiting-old", project: "p", session_id: "pd-retry" } }), "");
+    });
+  };
+  const module = createCacophonyModule({ env: { HOME: "/nonexistent" }, settings: {}, execFileImpl, now: () => clock });
+  const { ctx, notices } = sessionContext("pd-retry", { CACO_AGENT_ID: "visiting-old", CACO_PROJECT: "p" }, "/work/retry");
+  await ctx.state.set("identity", { agentId: "visiting-old", project: "p", sessionId: "pd-retry", registeredAt: 1, guidance: "" });
+  const info = { sessionId: ctx.sessionId, state: ctx.state, env: ctx.env, cwd: ctx.cwd };
+
+  await module.commands["caco-runtime"].run("", ctx);
+  assert.match(notices.at(-1), /^visiting visiting-old in p \(registered .*\); messages wait in `caco msg inbox`/);
+
+  // The node's caco predates host delivery: the identity stays unbound, and the next run within
+  // the retry interval does not ask again.
+  await module.observe({ type: "agent_start" }, info);
+  const tried = calls.length;
+  assert.equal((await ctx.state.get("identity")).ahpHost, undefined);
+  clock += 60_000;
+  await module.observe({ type: "agent_start" }, info);
+  assert.equal(calls.length, tried);
+
+  // /caco-agent-register binds on demand (an older caco says why it cannot).
+  await module.commands["caco-agent-register"].run("", ctx);
+  assert.match(notices.at(-1), /^Visiting agent visiting-old in p: messages wait in `caco msg inbox`/);
+
+  // caco is updated: the next attempt after the interval binds the same identity.
+  older = false;
+  clock += 31 * 60_000;
+  await module.observe({ type: "agent_start" }, info);
+  assert.equal((await ctx.state.get("identity")).ahpHost, "pi-daemon");
+  assert.equal((await ctx.state.get("identity")).agentId, "visiting-old");
+  await module.commands["caco-runtime"].run("", ctx);
+  assert.match(notices.at(-1), /; messages arrive in this session \(pi-daemon host\)$/);
+  await module.commands["caco-agent-register"].run("", ctx);
+  assert.equal(notices.at(-1), "Already the visiting agent visiting-old in p: messages arrive in this session (pi-daemon host).");
 });
 
 test("a visitor registered before host routing gets its host bound once (cacophony bd-6cf22b)", async () => {

@@ -78,6 +78,16 @@ function execJson(execFileImpl, command, args, options = {}) {
 /** Cacophony's name for this node's pi-daemon AHP host. */
 export const PI_DAEMON_AHP_HOST = "pi-daemon";
 
+/** How long an unbound visitor waits before its next automatic host-binding attempt. */
+export const HOST_BIND_RETRY_MS = 30 * 60_000;
+
+/** Where a visitor's messages go, for /caco-runtime and /caco-agent-register. */
+function deliveryOf(identity) {
+  if (identity.ahpHost) return `messages arrive in this session (${identity.ahpHost} host)`;
+  if (identity.inherited) return "messages follow the agent's original route";
+  return "messages wait in `caco msg inbox`; once this node's caco can deliver into sessions (1.2.1911+), /caco-agent-register binds it";
+}
+
 /** Register a pi-daemon session as a visiting agent; the identity and guidance. */
 export async function registerVisiting({ config, project, sessionId, sessionName, cwd, execFileImpl = execFile, now = () => Date.now() }) {
   // The visitor's checkout is the session's directory (bd-8c8f5f): never the pi-daemon worker's,
@@ -137,8 +147,25 @@ export function identitySection() {
 export function createCacophonyModule({ env = process.env, settings, execFileImpl = execFile, now = () => Date.now() } = {}) {
   const config = resolveConfig(env, settings ?? readCacophonySettings(env));
   const pending = new Map();
-  // Sessions whose host binding was attempted in this process.
-  const rebound = new Set();
+  // When each session's host binding was last attempted in this process: an older caco cannot
+  // bind, so the attempt is repeated after HOST_BIND_RETRY_MS (a caco update needs no restart).
+  const rebound = new Map();
+
+  /**
+   * Bind a visitor this module registered before Cacophony routed by host (cacophony
+   * bd-6cf22b): register again (same session and checkout, so the same identity) with the host.
+   * The identity, with `ahpHost` when caco bound it.
+   */
+  const bindHost = async (scope, identity) => {
+    rebound.set(scope.sessionId, now());
+    const again = await registerVisiting({ config, project: identity.project, sessionId: scope.sessionId, cwd: scope.cwd, execFileImpl, now });
+    if (again.agentId !== identity.agentId || !again.ahpHost) return identity;
+    const bound = { ...identity, ahpHost: again.ahpHost };
+    await scope.state.set("identity", bound);
+    return bound;
+  };
+  const unbound = (identity, sessionId) =>
+    Boolean(identity?.agentId) && identity.sessionId === sessionId && !identity.ahpHost && !identity.inherited;
 
   /**
    * Register (once at a time per session), keep the identity and set the session's variables.
@@ -211,6 +238,16 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
           if (text && !match) return ctx.notify("Usage: /caco-agent-register [project=<name>] (defaults to CACO_PROJECT or agentUtils.cacophony.project, else the project this checkout's git remotes match)");
           const project = match?.[1] || config.project;
           try {
+            // A visitor registered here before host routing: bind it now, so its messages reach
+            // this session (cacophony bd-6cf22b).
+            const own = await ctx.state.get("identity");
+            if (own?.agentId && own.sessionId === ctx.sessionId) {
+              const identity = unbound(own, ctx.sessionId) && ctx.cwd ? await bindHost(ctx, own) : own;
+              // The session's receipt wins over variables that need restoring.
+              await ctx.env.set({ CACO_AGENT_ID: identity.agentId, CACO_PROJECT: identity.project });
+              const lead = identity === own && own.ahpHost ? "Already the visiting agent" : "Visiting agent";
+              return ctx.notify(`${lead} ${identity.agentId} in ${identity.project}: ${deliveryOf(identity)}.`);
+            }
             if (await preset(ctx.env)) return ctx.notify("This session already has a Cacophony identity; use /caco-runtime.");
             const { identity, note } = await register(ctx, project, { infer: true });
             ctx.notify(`Registered as Cacophony visiting agent ${identity.agentId} in project ${identity.project}${note ? ` (${note})` : ""}.`);
@@ -225,11 +262,8 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
           const identity = await ctx.state.get("identity");
           const vars = (await ctx.env?.get?.()) ?? {};
           if (identity?.agentId) {
-            return ctx.notify(
-              identity.inherited
-                ? `visiting ${identity.agentId} in ${identity.project} (carried over by /migrate)`
-                : `visiting ${identity.agentId} in ${identity.project} (registered ${new Date(identity.registeredAt).toISOString()})`,
-            );
+            const origin = identity.inherited ? "carried over by /migrate" : `registered ${new Date(identity.registeredAt).toISOString()}`;
+            return ctx.notify(`visiting ${identity.agentId} in ${identity.project} (${origin}); ${deliveryOf(identity)}`);
           }
           if (vars.CACO_AGENT_ID) return ctx.notify(`managed ${vars.CACO_AGENT_ID} in ${vars.CACO_PROJECT ?? "?"} (environment)`);
           ctx.notify(config.disabled ? "disabled" : `not registered${config.autoRegister ? " (registers on the next run)" : "; /caco-agent-register"}`);
@@ -255,11 +289,13 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
         }
       }
       // A visitor this module registered before Cacophony routed by host gets its host bound
-      // once (cacophony bd-6cf22b), so its messages reach this session.
-      if (registered && !identity.ahpHost && !identity.inherited && !rebound.has(info.sessionId) && info.cwd) {
-        rebound.add(info.sessionId);
-        const again = await registerVisiting({ config, project: identity.project, sessionId: info.sessionId, cwd: info.cwd, execFileImpl, now }).catch(() => undefined);
-        if (again?.agentId === identity.agentId && again.ahpHost) await info.state.set("identity", { ...identity, ahpHost: again.ahpHost });
+      // (cacophony bd-6cf22b), so its messages reach this session. An older caco cannot bind:
+      // the attempt is repeated at most every HOST_BIND_RETRY_MS.
+      if (unbound(identity, info.sessionId)) {
+        const last = rebound.get(info.sessionId);
+        if (info.cwd && (last === undefined || now() - last >= HOST_BIND_RETRY_MS)) {
+          await bindHost(info, identity).catch(() => undefined);
+        }
         return;
       }
       if (!config.autoRegister || !config.project) return;
