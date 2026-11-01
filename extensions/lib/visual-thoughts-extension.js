@@ -256,6 +256,8 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
       pane.capable = true;
       pane.host = true;
       void pane.engine.syncSlot(EMPTY_SLOT);
+      // Until the host paints the session, its stored images (from before) show; nothing paints here.
+      pane.store.recent(config.maxImages).then((records) => { if (panes.get(pane.key) === pane) pane.engine.restore(records); }).catch(() => {});
       await watchSlot(pane);
     }
 
@@ -441,6 +443,8 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         // (for every client); only how this pane shows it stays here.
         const local = words.length >= 2 && LOCAL_KEYS.has(parseSettingChange(words[0], words.slice(1).join(" ")).key);
         if (pane?.host && !local) {
+          // The host empties the slot; what this pane shows from before goes too.
+          if (verb === "off" || verb === "clear") pane.engine.clear();
           if (verb === "status") notify(`this pane: ${pane.engine.status().images} image(s) from the session's backdrop slot; showing ${pane.engine.status().current || "nothing yet"}`, "info", ctx);
           try { ctx.sendUserMessage?.(`/thoughts ${String(args || "").trim()}`.trim()); }
           catch (error) { notify(`visual thoughts: ${error?.message || error}`, "warning", ctx); }

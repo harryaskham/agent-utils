@@ -1,7 +1,7 @@
 // Visual thoughts: images of the agent's work crossfading behind the screen.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, existsSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, existsSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
@@ -1043,4 +1043,36 @@ test("paint budget: one process-wide turn queue, a per-minute cap, and a shared 
   assert.ok(isTransientPaintError(new ImageRateLimitError("rate limited", 1_000)));
   assert.ok(!isTransientPaintError(new Error("the prompt model returned no prompt")));
   assert.ok(!isTransientPaintError(new Error("gpt-image-2.5-flare: HTTP 400 Bad Request")));
+});
+
+test("engine slot mode: what shows stays until the slot has an image to replace it", async () => {
+  const h = engineHarness({ fadeMs: 100 });
+  const dir = mkdtempSync(join(tmpdir(), "vt-keep-"));
+  try {
+    const path = join(dir, "old.png");
+    writeFileSync(path, solidPng(8, 8, [5, 5, 5]));
+    const media = new Map([["u1", solidPng(8, 8, [1, 1, 1])]]);
+    const engine = createVisualThoughtsEngine({
+      config: h.config, now: h.time.now, timers: h.time.timers, surface: h.surface, createRenderer: h.renderer.create,
+      promptTurn: async () => "", provider: { generate: async () => { throw new Error("none"); } },
+      fetchImage: async (uri) => media.get(uri),
+    });
+    engine.setEnabled(true);
+    engine.restore([{ id: "old", prompt: "an earlier painting", path }]);
+    await h.time.advance(300);
+    assert.match(h.surface.shown, /^hold:old:/);
+    // The host claims the slot, empty (a new prompt): the earlier painting stays.
+    await engine.syncSlot({ kind: "image-set", rev: 1, images: [], current: 0 });
+    await h.time.advance(300);
+    assert.match(h.surface.shown, /^hold:old:/);
+    assert.equal(engine.status().images, 1);
+    // The host's first painting replaces it.
+    await engine.syncSlot({ kind: "image-set", rev: 2, images: [{ uri: "u1", digest: "sha256:new" }], current: 0 });
+    await h.time.advance(400);
+    assert.match(h.surface.shown, /^hold:slot-sha256-new:/);
+    assert.equal(engine.status().images, 1);
+    engine.dispose();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

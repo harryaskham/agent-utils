@@ -422,10 +422,9 @@ export function createVisualThoughtsEngine({
         return;
       }
       if (!slotMode) {
+        // What shows stays until the slot has an image of its own to show instead.
         slotMode = true;
         painter.setEnabled(false);
-        rotation.clear();
-        for (const id of [...images.keys()]) forget(id);
       }
       if (Number.isFinite(slot.rev) && slot.rev <= slotRev) return;
       // A slot cleared and set again starts its revisions afresh.
@@ -437,7 +436,9 @@ export function createVisualThoughtsEngine({
       }
       const refs = (Array.isArray(slot.images) ? slot.images : []).filter((ref) => typeof ref?.uri === "string");
       const ids = refs.map(slotImageId);
-      for (const id of [...images.keys()]) if (!ids.includes(id)) forget(id);
+      // Slot images the slot dropped go. Other images (painted or stored here) stay until a slot
+      // image is ready to replace them: an empty or new slot never blanks the backdrop.
+      for (const id of [...images.keys()]) if (id.startsWith("slot-") && !ids.includes(id)) forget(id);
       for (let index = 0; index < refs.length; index += 1) {
         const id = ids[index];
         if (images.has(id)) continue;
@@ -449,6 +450,7 @@ export function createVisualThoughtsEngine({
           if (enabled) await ensureHold(id);
           if (!images.has(id)) continue;
           rotation.add({ id, batch: 0 }, now());
+          for (const other of [...images.keys()]) if (!other.startsWith("slot-")) forget(other);
         } catch (error) {
           lastError = `slot image: ${error?.message || error}`;
           warn(`visual thoughts: ${lastError}`);
@@ -481,6 +483,8 @@ export function createVisualThoughtsEngine({
     },
     /** Images from an earlier run of this session (store records with paths), shown at once. */
     restore(records = []) {
+      // Stored images are for a backdrop with nothing better: never alongside the slot's.
+      if (slotMode && [...images.keys()].some((id) => id.startsWith("slot-"))) return;
       for (const record of records) {
         if (!record?.id || images.has(record.id)) continue;
         images.set(record.id, { id: record.id, prompt: record.prompt, model: record.model, batch: -1, at: record.at, path: record.path });
