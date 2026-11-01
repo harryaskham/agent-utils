@@ -209,7 +209,7 @@ test("digest and prompts: bounded, labelled, redacted; replies normalized", () =
   assert.equal(tasked.task, "fix the flaky login test");
   assert.match(buildImagePromptRequest({ digest: tasked.snapshot(), task: tasked.task }).messages[0].content[0].text, /task the agent was given[\s\S]*fix the flaky login test/);
   const request = buildImagePromptRequest({ digest: "[reply] done", recentPrompts: ["a lighthouse", "a forest"], style: "ink wash" });
-  assert.match(request.systemPrompt, /Never depict text/);
+  assert.match(request.systemPrompt, /Never depict readable text/);
   const text = request.messages[0].content[0].text;
   assert.match(text, /House style to keep to: ink wash/);
   assert.match(text, /- a lighthouse/);
