@@ -10,11 +10,13 @@ export const LOOPS_REQUEST = "agent-utils:loops-request.v1";
 
 /**
  * A loops document's live schedules, as the event carries them: a loop's `{ startedAt,
- * intervalSecs }`, an /after's or /cron's next time `{ nextAt }`.
+ * intervalSecs }`, an /after's or /cron's next time `{ nextAt }`, a /goal's `{ goal: true }`.
  */
 export function liveLoopSchedules(doc) {
   return Object.values(doc?.loops ?? {}).flatMap((loop) => {
     if (!loop || loop.stopped) return [];
+    // A /goal: it counts, but fires when the agent goes idle, not at a time.
+    if (loop.kind === "goal") return [{ goal: true }];
     if (Number.isFinite(Number(loop.nextAt)) && (loop.kind === "after" || loop.kind === "cron")) return [{ nextAt: Number(loop.nextAt) }];
     if (Number(loop.intervalSecs) > 0 && Number.isFinite(Number(loop.startedAt))) return [{ startedAt: Number(loop.startedAt), intervalSecs: Number(loop.intervalSecs) }];
     return [];
@@ -25,6 +27,7 @@ export function liveLoopSchedules(doc) {
 export function nextLoopIn(loops, now = Date.now()) {
   let soonest;
   for (const loop of loops ?? []) {
+    if (loop.goal) continue;
     const at = Number.isFinite(loop.nextAt) ? loop.nextAt : nextFireAt(loop.startedAt, loop.intervalSecs * 1000, now);
     if (soonest === undefined || at < soonest) soonest = at;
   }

@@ -18,6 +18,9 @@ import { parseAfterCommand } from "./after.js";
 import { localTimeZone, nextCronAt, parseCronArgs } from "./cron.js";
 
 export const LOOP_TASK = "agent-utils.loop";
+/** A /goal's task (./durable-goal.js): its entries share the loops document and numbers. */
+export const GOAL_TASK = "agent-utils.goal";
+export const DEFAULT_GOAL_MAX_NUDGES = 50;
 export const DEFAULT_MIN_INTERVAL_SECS = 30;
 
 const USAGE = "Usage: /loop <interval> [--steer] <prompt> | /loop list (or /loops) | /loop stop [id|all] (off and end too); e.g. /loop 5m Check the inbox";
@@ -333,7 +336,10 @@ export function loopOperations({ task, now = () => Date.now() }) {
     async stop(commit, which, kind) {
       return commit(async (tx) => {
         const doc = await tx.doc(LOOPS_DOC);
-        const targets = live(doc).filter((loop) => (which === "all" ? kind === undefined || (loop.kind ?? "loop") === kind : loop.number === which));
+        // "all" is every schedule (of `kind`), never a goal: /goal stop or its number ends one.
+        const targets = live(doc).filter((loop) =>
+          which === "all" ? (kind === undefined ? loop.kind !== "goal" : (loop.kind ?? "loop") === kind) : loop.number === which,
+        );
         for (const loop of targets) doc.loops[String(loop.number)].stopped = true;
         return targets.map((loop) => ({ number: loop.number, taskId: loop.taskId }));
       });
@@ -351,6 +357,7 @@ export function loopOperations({ task, now = () => Date.now() }) {
         const known = new Set(Object.values(doc.loops ?? {}).map((entry) => entry.taskId));
         for (const entry of liveTasks) {
           const input = entry.input ?? {};
+          if (entry.kind === GOAL_TASK) continue;
           if (known.has(String(entry.id)) || !Number.isInteger(input.number) || doc.loops[String(input.number)] !== undefined) continue;
           doc.loops[String(input.number)] = {
             taskId: String(entry.id),
@@ -368,6 +375,10 @@ export function loopOperations({ task, now = () => Date.now() }) {
 }
 
 function describeLoop(loop, now) {
+  if (loop.kind === "goal") {
+    const nudges = Number(loop.nudges) || 0;
+    return `#${loop.number}: goal — "${summarize(loop.prompt)}" (${nudges} nudge${nudges === 1 ? "" : "s"} of ${Number(loop.maxNudges) || DEFAULT_GOAL_MAX_NUDGES}, running ${formatRunning(now - (loop.startedAt ?? now))})`;
+  }
   if (loop.kind === "after") return `#${loop.number}: once, in ${formatRunning(Math.max(0, Number(loop.nextAt) - now))} — "${summarize(loop.prompt)}"`;
   if (loop.kind === "cron") {
     const next = Number(loop.nextAt);
@@ -404,8 +415,8 @@ export function createLoopCommands({ task, now = () => Date.now(), minSecs = DEF
   const prune = async (ctx) => {
     if (typeof ctx.harness.inspect !== "function") return;
     const tasks = (await ctx.harness.inspect(ctx.context)).tasks
-      .filter((entry) => entry.record.kind === LOOP_TASK && !entry.record.abortRequested)
-      .map((entry) => ({ id: entry.record.id, input: entry.record.input, conversationId: entry.record.conversationId }));
+      .filter((entry) => (entry.record.kind === LOOP_TASK || entry.record.kind === GOAL_TASK) && !entry.record.abortRequested)
+      .map((entry) => ({ id: entry.record.id, kind: entry.record.kind, input: entry.record.input, conversationId: entry.record.conversationId }));
     await ops.reconcile(commitOf(ctx), tasks);
     const doc = typeof ctx.harness.snapshot === "function" ? await Promise.resolve(ctx.harness.snapshot(LOOPS_DOC, ctx.context)).catch(() => undefined) : undefined;
     const stopped = new Set(Object.values(doc?.loops ?? {}).filter((entry) => entry?.stopped === true).map((entry) => String(entry.taskId)));

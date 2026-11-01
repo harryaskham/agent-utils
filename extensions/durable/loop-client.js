@@ -25,6 +25,7 @@ export function loopStatus(doc, now = Date.now()) {
   const loops = liveLoops(doc);
   if (loops.length === 0) return undefined;
   const parts = loops.map((loop) => {
+    if (loop.kind === "goal") return `#${loop.number} goal (${Number(loop.nudges) || 0} nudged)`;
     // An /after or a /cron: its next time, which its task keeps in the document.
     if (loop.kind === "after" || loop.kind === "cron") {
       const next = Number(loop.nextAt);

@@ -1,5 +1,6 @@
 // Durable adaptor: /loop, /after and /cron for pi-daemon sessions, as Durable background tasks
-// that sleep between ticks (pi-durable 1.4 stored sleeps).
+// that sleep between ticks (pi-durable 1.4 stored sleeps); and /goal, a goal the agent is nudged
+// toward whenever it goes idle until it calls goal_done (../lib/durable-goal.js).
 // Commands as the TUI /loop: /loop <interval> [--steer] <prompt> (several at once, numbered),
 // /loop list (or /loops), /loop stop [id|all] (off and end too); the agent manages its own loops
 // with the TUI's tools, create_loop, list_loops and stop_loop, sharing the same numbers.
@@ -12,6 +13,7 @@
 // Environment: PI_LOOP_MIN_INTERVAL_SECS (default 30), PI_LOOP_DEFAULT_DELIVERY (steer, else
 // follow-up while busy), PI_LOOP_TZ (time zone of the delivered timestamp; default the worker's).
 import { DEFAULT_MIN_INTERVAL_SECS, createLoopCommands, createLoopTask, createLoopTools } from "../lib/durable-loop.js";
+import { createGoalCommands, createGoalTask, createGoalTools, goalSection } from "../lib/durable-goal.js";
 
 const minSecs = Number.parseInt(process.env.PI_LOOP_MIN_INTERVAL_SECS ?? "", 10);
 const task = createLoopTask({ timeZone: process.env.PI_LOOP_TZ });
@@ -23,8 +25,17 @@ const options = {
   defaultDelivery: process.env.PI_LOOP_DEFAULT_DELIVERY === "steer" ? "steer" : "followUp",
 };
 
-// The loop task, and the agent's own tools: create_loop, list_loops, stop_loop.
-export const extension = { name: "agent-utils-loop", tasks: [task], tools: createLoopTools(options) };
+const goalTask = createGoalTask({ timeZone: process.env.PI_LOOP_TZ });
 
-// /loop, /loops, /after and /cron (a 5-field schedule in PI_LOOP_TZ or tz=, else the worker's zone).
-export const commands = createLoopCommands(options);
+// The loop and goal tasks, the agent's own tools (create_loop, list_loops, stop_loop, goal_done)
+// and the live goal's system prompt section.
+export const extension = {
+  name: "agent-utils-loop",
+  tasks: [task, goalTask],
+  tools: [...createLoopTools(options), ...createGoalTools({ task: goalTask })],
+  sections: [goalSection()],
+};
+
+// /loop, /loops, /after and /cron (a 5-field schedule in PI_LOOP_TZ or tz=, else the worker's
+// zone), and /goal.
+export const commands = { ...createLoopCommands(options), ...createGoalCommands({ task: goalTask }) };
