@@ -19,6 +19,7 @@ import { readAgentSettings, agentSettingsPath } from "../pi-graphics/agent-io.js
 import { captureTuiFromUi } from "../pi-graphics/host-components.js";
 import { runPiTextTurn } from "./pi-inference.js";
 import { parseSettingChange, resolveVisualThoughtsConfig } from "./visual-thoughts/config.js";
+import { createPaintBudget } from "./visual-thoughts/budget.js";
 import { createVisualThoughtsEngine } from "./visual-thoughts/engine.js";
 import { createImageProvider } from "./visual-thoughts/image-provider.js";
 import { litellmChat } from "./visual-thoughts/litellm-chat.js";
@@ -30,6 +31,7 @@ const STATUS_KEY = "visual-thoughts";
 /** pi-daemon's session UI slots document (1.15) and the slot visual thoughts paints. */
 const PI_UI_DOC = Object.freeze({ kind: "pi.ui", version: 1, scope: "session" });
 const BACKDROP_SLOT = "backdrop";
+const EMPTY_SLOT = Object.freeze({ kind: "image-set", images: [], current: 0 });
 /** Settings about how this client shows images; the rest is the painter's (the host's, where it paints). */
 const LOCAL_KEYS = new Set(["layer", "fps", "effect", "transitionPixels", "transport", "fadeMs", "minShowMs", "canvasOpacity"]);
 const PROVIDER_KEYS = new Set(["provider", "imageModel", "size", "quality", "baseUrl", "apiKeyEnv", "maiEndpoint", "maiAuth", "maiKeyEnv"]);
@@ -109,7 +111,9 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
       warned.add(key);
       notify(message, "warning");
     };
-    const providerFor = () => createImageProvider(config, { env, ...(fetchImpl ? { fetchImpl } : {}) });
+    const providerFor = (cfg = config) => createImageProvider(cfg, { env, ...(fetchImpl ? { fetchImpl } : {}) });
+    // pi-client's panes paint in turn: one budget for the whole client.
+    const budget = createPaintBudget({ concurrent: config.budgetConcurrent, perMinute: config.budgetPerMinute, ...(now ? { now } : {}) });
 
     /** The prompt model: Pi's registry where there is one, else the chat endpoint (pi-client). */
     async function promptTurn(request, signal) {
@@ -191,21 +195,24 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         const holder = { current: null };
         const surface = makeSurface(ctx, backdrop, holder);
         const store = createImageStore({ root: visualThoughtsStateDir(env), sessionId });
-        pane = { key, sessionId, surface, store, engine: null, host: false, stopWatch: null };
+        // Each pane its own settings (pi-client: `/thoughts opacity 1` is that pane's session's).
+        const paneConfig = { ...config };
+        pane = { key, sessionId, surface, store, config: paneConfig, off: false, engine: null, host: false, stopWatch: null };
         holder.current = pane;
         const made = pane;
         // pi-client: the pane's own ctx, so slot reads and media follow this pane's session.
         const paneCtx = typeof ctx?.pinned === "function" ? ctx.pinned() : ctx;
         pane.engine = createVisualThoughtsEngine({
-          config,
+          config: paneConfig,
           surface,
           store,
           ...(now ? { now } : {}),
-          provider: providerFor(),
+          provider: providerFor(paneConfig),
           promptTurn,
+          budget,
           warn: warnOnce,
           // Blended into pi-graphics' canvas (TUI Pi's /gfx full), stronger.
-          look: () => ({ fit: config.fit, feather: config.feather, opacity: !backdrop && activeCanvas() ? config.canvasOpacity : config.opacity }),
+          look: () => ({ fit: paneConfig.fit, feather: paneConfig.feather, opacity: !backdrop && activeCanvas() ? paneConfig.canvasOpacity : paneConfig.opacity }),
           ...(env.PI_VISUAL_THOUGHTS_TRACE ? { trace: (line) => appendFileSync(env.PI_VISUAL_THOUGHTS_TRACE, `${line}\n`) } : {}),
           fetchImage: async (uri) => {
             const item = await paneCtx?.sessionMedia?.(uri);
@@ -232,10 +239,10 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
     }
 
     /**
-     * pi-client: when the session's host runs the visual-thoughts module on pi-daemon 1.15+, it
-     * paints once for every client into the session's backdrop slot (claimed, empty, as soon as the
-     * module meets the session), and this pane only shows it. Otherwise (an older host, a profile
-     * without the module, a TUI Pi session through the bridge) the pane paints locally.
+     * pi-client: when the session's host runs the visual-thoughts module (pi-daemon 1.15+), the
+     * host paints, once for every client, into the session's backdrop slot, and this pane only
+     * shows it (empty until the session paints: never a painting of its own as well). Otherwise (a
+     * profile without the module, a TUI Pi session through the bridge) the pane paints locally.
      */
     async function followHost(pane, paneCtx) {
       let capable = false;
@@ -247,6 +254,8 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
       pane.paneCtx = paneCtx;
       if (!capable) return void paintHere(pane);
       pane.capable = true;
+      pane.host = true;
+      void pane.engine.syncSlot(EMPTY_SLOT);
       await watchSlot(pane);
     }
 
@@ -254,21 +263,14 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
     function paintHere(pane) {
       if (pane.local) return;
       pane.local = true;
-      pane.store.recent(config.maxImages).then((records) => { if (!pane.host) pane.engine.restore(records); }).catch(() => {});
+      pane.store.recent(config.maxImages).then((records) => pane.engine.restore(records)).catch(() => {});
       seedSoon(pane, pane.paneCtx);
     }
 
     function slotValue(pane, value) {
       if (panes.get(pane.key) !== pane) return;
       const slot = value?.slots?.[BACKDROP_SLOT];
-      if (slot?.kind === "image-set") {
-        pane.host = true;
-        void pane.engine.syncSlot(slot);
-        return;
-      }
-      pane.host = false;
-      if (pane.engine.slotMode) void pane.engine.syncSlot(null);
-      paintHere(pane);
+      void pane.engine.syncSlot(slot?.kind === "image-set" ? slot : EMPTY_SLOT);
     }
 
     /**
@@ -290,7 +292,6 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         else stop?.();
       } catch (error) {
         warnOnce(`visual thoughts: cannot follow this session's backdrop: ${error?.message || error}`);
-        if (!pane.host) paintHere(pane);
       }
     }
 
@@ -344,7 +345,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
       try {
         enabled = true;
         const pane = focus(ctx);
-        for (const other of panes.values()) other.engine.setEnabled(true);
+        for (const other of panes.values()) other.engine.setEnabled(!other.off);
         seedSoon(pane, ctx);
         unavailable = "";
         return true;
@@ -447,7 +448,14 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         }
         if (verb === "status") {
           if (unavailable && !pane) return notify(`visual thoughts unavailable: ${unavailable}`, "warning", ctx);
-          return notify(describeStatus(pane ? { ...pane.engine.status(), stats: pane.engine.stats() } : { enabled: false }, config), "info", ctx);
+          return notify(describeStatus(pane ? { ...pane.engine.status(), stats: pane.engine.stats() } : { enabled: false }, pane ? pane.config : config), "info", ctx);
+        }
+        // pi-client panes (not TUI Pi's one screen): on/off and settings are the pane's own.
+        const own = pane && pane.key !== "tui" ? pane : null;
+        if (own && enabled && (verb === "on" || verb === "off" || verb === "toggle")) {
+          own.off = verb === "toggle" ? !own.off : verb === "off";
+          own.engine.setEnabled(!own.off);
+          return notify(own.off ? "visual thoughts off in this pane" : `visual thoughts on in this pane: painting with ${own.config.imageModel}`, "info", ctx);
         }
         if (verb === "on" || verb === "off" || verb === "toggle") {
           const on = verb === "toggle" ? !enabled : verb === "on";
@@ -464,9 +472,13 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         if (words.length >= 2) {
           const change = parseSettingChange(words[0], words.slice(1).join(" "));
           if (change.error) return notify(`/thoughts: ${change.error}`, "warning", ctx);
-          config[change.key] = change.value;
-          for (const each of panes.values()) each.engine.configure(PROVIDER_KEYS.has(change.key) ? { provider: providerFor() } : {});
-          return notify(`visual thoughts: ${change.key} = ${change.value} (this session)`, "info", ctx);
+          const targets = own ? [own] : [...panes.values()];
+          if (!own) config[change.key] = change.value;
+          for (const each of targets) {
+            each.config[change.key] = change.value;
+            each.engine.configure(PROVIDER_KEYS.has(change.key) ? { provider: providerFor(each.config) } : {});
+          }
+          return notify(`visual thoughts: ${change.key} = ${change.value} (${own ? "this pane" : "this session"})`, "info", ctx);
         }
         notify("Usage: /thoughts [on|off|toggle|status|now|next|clear|<setting> <value>]", "warning", ctx);
       },

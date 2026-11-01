@@ -42,6 +42,16 @@ export const DEFAULTS = Object.freeze({
   minChars: 600,
   maxPerRun: 10,
   maxConcurrent: 1,
+  // A painting request that takes longer is dropped (it would hold the budget).
+  timeoutMs: 120_000,
+  // One budget for every painting of a process (a pi-daemon worker's sessions, a pi-client's
+  // panes): at most this many at once, and started per minute; struggling providers pause all.
+  budgetConcurrent: 1,
+  budgetPerMinute: 4,
+  // pi-daemon sessions (visual-thoughts.mjs): which paint. `watched`: while a client shows the
+  // session (hosts that can tell; others paint only sessions turned on with /thoughts on);
+  // `manual`: only sessions turned on; `all`: every session that works.
+  daemon: "watched",
   keep: 24,
   transport: "auto",
 });
@@ -51,6 +61,7 @@ const NUMERIC = Object.freeze({
   holdMs: [1_000, 600_000], fadeMs: [0, 60_000], minShowMs: [0, 600_000],
   minSet: [1, 32], maxImages: [1, 64], slotImages: [1, 32], minIntervalMs: [0, 3_600_000], firstChars: [0, 100_000],
   minChars: [0, 100_000], maxPerRun: [0, 1_000], maxConcurrent: [1, 4], keep: [0, 10_000],
+  budgetConcurrent: [1, 8], budgetPerMinute: [1, 60], timeoutMs: [10_000, 600_000],
 });
 const CHOICES = Object.freeze({
   fit: ["cover", "contain", "stretch"],
@@ -59,13 +70,14 @@ const CHOICES = Object.freeze({
   provider: ["litellm", "mai"],
   maiAuth: ["entra", "key"],
   transport: ["auto", "file", "stream"],
+  daemon: ["watched", "manual", "all"],
 });
 const STRINGS = new Set(["promptModel", "clientPromptModel", "imageModel", "size", "quality", "baseUrl", "apiKeyEnv", "maiEndpoint", "maiKeyEnv", "style"]);
 /** Seconds-friendly aliases for the millisecond settings, and short names. */
 const ALIASES = Object.freeze({
   hold: ["holdMs", 1000], "canvas-opacity": ["canvasOpacity", 1], fade: ["fadeMs", 1000], interval: ["minIntervalMs", 1000], "min-show": ["minShowMs", 1000],
   model: ["imageModel", 1], "image-model": ["imageModel", 1], "prompt-model": ["promptModel", 1],
-  "max-images": ["maxImages", 1], images: ["slotImages", 1], "slot-images": ["slotImages", 1], "per-run": ["maxPerRun", 1], "min-set": ["minSet", 1], pixels: ["transitionPixels", 1],
+  "max-images": ["maxImages", 1], images: ["slotImages", 1], "slot-images": ["slotImages", 1], "per-run": ["maxPerRun", 1], "per-minute": ["budgetPerMinute", 1], concurrent: ["budgetConcurrent", 1], "min-set": ["minSet", 1], pixels: ["transitionPixels", 1],
 });
 
 function bool(value, fallback) {

@@ -668,6 +668,14 @@ test("extension in pi-client: each pane paints its own session; prompts over the
     await waitFor("the right pane's image shown", () => right.log.some((line) => /^show hold:/.test(line)));
     assert.match(requests.filter((r) => r.url.endsWith("/chat/completions")).at(-1).body.messages[1].content, /\[thinking\] the lighthouse beam sweeps/);
 
+    // Settings and on/off are each pane's own: the right pane's opacity leaves the left's alone.
+    await commands.get("thoughts").handler("opacity 0.9", rightCtx);
+    assert.match(notices.at(-1), /opacity = 0\.9 \(this pane\)/);
+    await commands.get("thoughts").handler("status", rightCtx);
+    assert.match(notices.at(-1), /opacity 0\.9/);
+    await commands.get("thoughts").handler("status", leftCtx);
+    assert.match(notices.at(-1), /opacity 0\.3/);
+
     // The right pane switches to another session: its old one's images go.
     await emit("session_start", {}, ctxFor(right, "s-other"));
     assert.ok(right.log.includes("clear"));
@@ -736,7 +744,7 @@ test("store: old sessions and an over-full store are pruned, the session in use 
 });
 
 /** pi-daemon's module `ui` (session UI slots, 1.15), recording what a module asks of it. */
-function fakeSlotsUi({ owner = "visual-thoughts" } = {}) {
+function fakeSlotsUi({ owner = "visual-thoughts", watchers } = {}) {
   const slots = new Map();
   const media = new Map();
   let n = 0;
@@ -763,6 +771,11 @@ function fakeSlotsUi({ owner = "visual-thoughts" } = {}) {
     async clear(name) { slots.delete(name); ui.calls.push(`clear ${name}`); },
     async get(name) { return slots.get(name); },
   };
+  // A host that counts the clients showing the session (the demand signal).
+  if (watchers !== undefined) {
+    ui.watcherCount = watchers;
+    ui.watchers = async () => ui.watcherCount;
+  }
   return { ui, slots, media };
 }
 
@@ -792,19 +805,26 @@ test("pi-daemon module: paints the session's backdrop slot once, for every clien
   const { createVisualThoughtsModule, OWNER } = await import("../extensions/lib/durable-visual-thoughts.js");
   assert.equal(OWNER, "visual-thoughts");
   const requests = [];
-  const { ui, slots } = fakeSlotsUi();
+  const { ui, slots } = fakeSlotsUi({ watchers: 0 });
   const module = createVisualThoughtsModule({
     env: { LITELLM_BASE_URL: "http://proxy:4000", LITELLM_MASTER_KEY: "k" },
-    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minIntervalMs: 0, slotImages: 2, opacity: 0.4 } } },
+    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minIntervalMs: 0, slotImages: 2, opacity: 0.4, budgetPerMinute: 60 } } },
     fetchImpl: paintingFetch(requests),
     log: () => {},
   });
   try {
     const { info, notices } = moduleInfo(ui);
+    const run = module.commands.thoughts.run;
+    // Nobody shows the session: it works, nothing paints; the slot is claimed (empty) at once.
     await module.observe({ type: "agent_start" }, info);
     await module.observe({ type: "message_end", message: { role: "user", content: [{ type: "text", text: "paint the harbour" }] } }, info);
-    // Claimed at once (empty), so clients stop painting locally; then the first painting.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(requests.length, 0, "no painting while unwatched");
     assert.deepEqual(slots.get("backdrop")?.images, []);
+    assert.match(await run("status", info), /off — paints while a client shows it; none does now/);
+    // A client opens the session: painting starts at once, from the output so far.
+    await module.observe({ type: "ui_watchers", count: 1 }, info);
+    await module.observe({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "the harbour at dusk" }] } }, info);
     for (let i = 0; i < 100 && !slots.get("backdrop").images.length; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     const slot = slots.get("backdrop");
     assert.ok(slot, "the slot is set");
@@ -815,6 +835,7 @@ test("pi-daemon module: paints the session's backdrop slot once, for every clien
     assert.deepEqual(slot.hints, { placement: "backdrop", opacity: 0.4, fit: "cover", feather: 0.12, cycleMs: 18_000, transition: "crossfade" });
     // No model registry here: the prompt went to the chat endpoint; the image to the images API.
     assert.equal(requests[0].url, "http://proxy:4000/v1/chat/completions");
+    // What the run said before anyone watched is painted at once.
     assert.match(requests[0].body.messages[1].content, /\[prompt\] paint the harbour/);
     assert.equal(requests[1].url, "http://proxy:4000/v1/images/generations");
 
@@ -829,19 +850,24 @@ test("pi-daemon module: paints the session's backdrop slot once, for every clien
     assert.equal(slots.get("backdrop").current, 1);
 
     // /thoughts next moves everyone on; settings change the hints; off clears the slot for all.
-    const run = module.commands.thoughts.run;
     await run("next", info);
     assert.equal(slots.get("backdrop").current, 0);
     await run("opacity 0.2", info);
     assert.equal(slots.get("backdrop").hints.opacity, 0.2);
-    assert.match(await run("status", info), /on[\s\S]*2 images in the backdrop slot/);
+    assert.match(await run("status", info), /: on — painting while watched \(1 client\)[\s\S]*2 images in the backdrop slot[\s\S]*budget: 1 at a time, 60 a minute/);
     await run("off", info);
     assert.deepEqual(slots.get("backdrop").images, [], "off empties the slot but keeps it: clients do not paint locally");
     assert.match(notices.at(-1), /off/);
     // Persisted per session: a fresh worker keeps it off.
     const again = createVisualThoughtsModule({ env: {}, settings: { agentUtils: { visualThoughts: { enabled: true } } }, log: () => {} });
-    assert.match(await again.commands.thoughts.run("status", info), /: off/);
+    assert.match(await again.commands.thoughts.run("status", info), /: off — off for this session/);
     again.dispose();
+    // A host that cannot count clients: only sessions turned on paint.
+    const blind = createVisualThoughtsModule({ env: {}, settings: { agentUtils: { visualThoughts: { enabled: true } } }, log: () => {} });
+    const other = moduleInfo(fakeSlotsUi().ui, "s2");
+    assert.match(await blind.commands.thoughts.run("status", other.info), /off — not painting: this pi-daemon cannot tell when a client shows the session; \/thoughts on paints it/);
+    assert.match(await blind.commands.thoughts.run("on", other.info), /: on — on for this session/);
+    blind.dispose();
   } finally {
     module.dispose();
   }
@@ -859,7 +885,7 @@ test("pi-daemon module: another module's slot is left alone; hosts without ui sa
   const { ui, slots } = fakeSlotsUi({ owner: "other" });
   slots.set("backdrop", { kind: "image-set", images: [], owner: "other", rev: 1 });
   const module = createVisualThoughtsModule({ env: {}, settings: { agentUtils: { visualThoughts: { enabled: true } } }, log: () => {} });
-  assert.match(await module.commands.thoughts.run("status", moduleInfo(ui).info), /blocked: the backdrop slot belongs to other/);
+  assert.match(await module.commands.thoughts.run("status", moduleInfo(ui).info), /off — the backdrop slot belongs to other/);
   module.dispose();
 
   // A painting over ui.image's 2 MiB limit is scaled down on the renderer thread first.
@@ -963,16 +989,58 @@ test("extension in pi-client: a session its host paints is shown from the slot; 
     assert.deepEqual(sent, ["/thoughts on"]);
     await commands.get("thoughts").handler("effect ripple", ctx);
     assert.deepEqual(sent, ["/thoughts on"], "a local display setting is not forwarded");
-    // No slot (a host without UI slots: the module never claims it): this pane paints itself.
+    // No slot yet (the module has not met the session since its worker started): still the
+    // host's to paint; the pane shows nothing and never paints the session itself.
     watcher(null);
     await emit("agent_start", {});
     await waitFor("the slot refollowed", () => watcher);
     watcher(null);
     await emit("message_end", { message: { role: "assistant", content: [{ type: "text", text: "a lighthouse in fog ".repeat(40) }] } });
-    await waitFor("painting locally", () => requests.some((request) => request.url.endsWith("/v1/images/generations")));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(requests.length, 0, "no painting in the client");
     await emit("session_shutdown", {});
     assert.equal(watcher, null, "stopped following");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("paint budget: one process-wide turn queue, a per-minute cap, and a shared pause when the provider struggles", async () => {
+  const { createPaintBudget, isTransientPaintError } = await import("../extensions/lib/visual-thoughts/budget.js");
+  const { ImageRateLimitError } = await import("../extensions/lib/visual-thoughts/image-provider.js");
+  const time = fakeTime();
+  const budget = createPaintBudget({ concurrent: 1, perMinute: 2, now: time.now, timers: time.timers });
+  const got = [];
+  const take = (name, signal) => budget.acquire(signal).then((release) => { got.push(name); return release; });
+  const a = take("a");
+  const b = take("b");
+  const aborted = new AbortController();
+  const c = take("c", aborted.signal).catch(() => got.push("c aborted"));
+  await time.advance(0);
+  assert.deepEqual(got, ["a"], "one at a time");
+  aborted.abort();
+  (await a)();
+  await time.advance(0);
+  assert.deepEqual(got, ["a", "c aborted", "b"]);
+  (await b)();
+  void c;
+  // Two started this minute: the third waits for the minute to pass.
+  const d = take("d");
+  await time.advance(30_000);
+  assert.deepEqual(got.at(-1), "b");
+  await time.advance(30_000);
+  assert.equal(got.at(-1), "d");
+  (await d)();
+  // A struggling provider pauses everyone: 15 s, doubling; a rate limit's own reset.
+  budget.failed();
+  budget.failed();
+  assert.equal(budget.status().pausedMs, 30_000);
+  budget.succeeded();
+  budget.failed(90_000);
+  assert.equal(budget.status().pausedMs, 90_000);
+  assert.ok(isTransientPaintError(new Error("gpt-image-2.5-flare: HTTP 500 Internal Server Error")));
+  assert.ok(isTransientPaintError(new TypeError("terminated")));
+  assert.ok(isTransientPaintError(new ImageRateLimitError("rate limited", 1_000)));
+  assert.ok(!isTransientPaintError(new Error("the prompt model returned no prompt")));
+  assert.ok(!isTransientPaintError(new Error("gpt-image-2.5-flare: HTTP 400 Bad Request")));
 });

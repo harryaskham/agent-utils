@@ -1,5 +1,6 @@
 // Visual thoughts: the prompt model over an OpenAI-compatible chat endpoint (LiteLLM), for hosts
 // without Pi's model registry (pi-client runs extensions without the agent's process).
+import { withTimeout } from "./image-provider.js";
 
 /** The reply text of one chat completion for a prompt request ({ systemPrompt, messages, maxTokens }). */
 export async function litellmChat({ model, request, signal, baseUrl, apiKey, fetchImpl = globalThis.fetch }) {
@@ -7,7 +8,7 @@ export async function litellmChat({ model, request, signal, baseUrl, apiKey, fet
   const text = (message) => (Array.isArray(message.content) ? message.content.filter((part) => part?.type === "text").map((part) => part.text).join("\n") : String(message.content ?? ""));
   const response = await fetchImpl(`${base}/v1/chat/completions`, {
     method: "POST",
-    signal,
+    signal: withTimeout(signal, 60_000),
     headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
     body: JSON.stringify({
       model,

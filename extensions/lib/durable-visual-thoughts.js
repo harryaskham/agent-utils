@@ -9,7 +9,13 @@
 // to show now, and how to show them (placement, opacity, fit, feather, cycle, transition). Clients
 // rotate and transition locally.
 //
-// `/thoughts` (on|off|toggle|status|now|next|clear|<setting> <value>) controls a session; its
+// Which sessions paint (`daemon`): `watched` (the default) paints a session while a client shows
+// it, on hosts that can count them (`ui.watchers()` and `ui_watchers` events); elsewhere only the
+// sessions turned on with `/thoughts on`. `manual`: only those; `all`: every session that works.
+// Every painting of the worker shares one budget (budget.js): one at a time, four a minute by
+// default, everyone paused while the provider struggles. Ten busy agents never mean ten painters.
+//
+// `/thoughts` (on|off|auto|toggle|status|now|next|clear|<setting> <value>) controls a session; its
 // choice persists in the module's session state. Hosts before 1.15 have no `ui`: the module
 // stays quiet there and `/thoughts` says so.
 import { readFileSync } from "node:fs";
@@ -18,6 +24,7 @@ import { join } from "node:path";
 
 import { runPiTextTurn } from "./pi-inference.js";
 import { parseSettingChange, resolveVisualThoughtsConfig } from "./visual-thoughts/config.js";
+import { createPaintBudget } from "./visual-thoughts/budget.js";
 import { createImageProvider } from "./visual-thoughts/image-provider.js";
 import { litellmChat } from "./visual-thoughts/litellm-chat.js";
 import { createPainter } from "./visual-thoughts/painter.js";
@@ -79,6 +86,7 @@ export function createVisualThoughtsModule({
   const base = resolveVisualThoughtsConfig(settings, env);
   if (!Number.isFinite(base.slotImages)) base.slotImages = 8;
   const sessions = new Map(); // sessionId → session
+  const budget = createPaintBudget({ concurrent: base.budgetConcurrent, perMinute: base.budgetPerMinute, now, timers });
   let renderer = null;
   let disposed = false;
 
@@ -137,6 +145,7 @@ export function createVisualThoughtsModule({
     session.current = session.images.length - 1;
     await publish(session);
     session.lastError = "";
+    log(`visual thoughts (${session.id}): painted in ${(record.ms / 1000).toFixed(1)}s, ${bytes.length} bytes; ${session.images.length} in the slot; budget ${JSON.stringify(budget.status())}`);
   }
 
   function report(session, error) {
@@ -153,13 +162,14 @@ export function createVisualThoughtsModule({
       if (info.ui) session.ui = info.ui;
       return session;
     }
-    session = { id, info, ui: info.ui || null, images: [], current: 0, enabled: false, lastError: "", blocked: "", overrides: {} };
+    session = { id, info, ui: info.ui || null, images: [], current: 0, choice: "auto", watchers: null, lastError: "", blocked: "", overrides: {} };
     sessions.set(id, session);
     let stored = {};
     try { stored = (await info.state?.get?.(SETTINGS_KEY)) || {}; } catch {}
     session.overrides = stored.overrides && typeof stored.overrides === "object" ? stored.overrides : {};
     session.config = { ...base, ...session.overrides };
-    session.enabled = typeof stored.enabled === "boolean" ? stored.enabled : base.enabled;
+    // on | off | auto (the `daemon` setting decides); sessions saved by 0.x kept `enabled`.
+    session.choice = ["on", "off", "auto"].includes(stored.choice) ? stored.choice : typeof stored.enabled === "boolean" ? (stored.enabled ? "on" : "off") : "auto";
     if (session.ui) {
       try {
         const slot = await session.ui.get(SLOT);
@@ -178,33 +188,76 @@ export function createVisualThoughtsModule({
       promptTurn: (request, signal) => promptTurn(session, request, signal),
       provider: createImageProvider(session.config, { env, ...(fetchImpl ? { fetchImpl } : {}) }),
       onImage: (record, png) => onImage(session, record, png).catch((error) => report(session, error)),
+      budget,
       now,
       timers,
       // The painter keeps its own last error (cleared by its next painting).
       warn: (message) => log(`${message} (${id})`),
     });
     for (const ref of session.images) session.painter.remember(ref.alt);
-    session.painter.setEnabled(session.enabled && Boolean(session.ui) && !base.incognito);
+    await countWatchers(session);
+    update(session);
     return session;
   }
 
   async function save(session) {
-    try { await session.info?.state?.set?.(SETTINGS_KEY, { enabled: session.enabled, overrides: session.overrides }); } catch {}
+    try { await session.info?.state?.set?.(SETTINGS_KEY, { choice: session.choice, overrides: session.overrides }); } catch {}
   }
 
-  function setEnabled(session, on) {
-    session.enabled = Boolean(on);
-    session.painter.setEnabled(session.enabled && Boolean(session.ui) && !base.incognito);
+  /** Clients showing the session, where the host can count them (null: it cannot). */
+  async function countWatchers(session) {
+    if (typeof session.ui?.watchers !== "function") { session.watchers = null; return; }
+    try { session.watchers = Number(await session.ui.watchers()) || 0; } catch { session.watchers = null; }
+  }
+
+  /** Whether the session paints now, and why (for /thoughts status). */
+  function decide(session) {
+    if (!session.ui) return { paint: false, why: "this pi-daemon has no session UI slots (needs 1.15)" };
+    if (session.blocked) return { paint: false, why: session.blocked };
+    if (base.incognito) return { paint: false, why: "incognito" };
+    if (session.choice === "on") return { paint: true, why: "on for this session" };
+    if (session.choice === "off") return { paint: false, why: "off for this session" };
+    if (!base.enabled) return { paint: false, why: "off (agentUtils.visualThoughts.enabled); /thoughts on paints this session" };
+    if (base.daemon === "all") return { paint: true, why: "every working session paints (daemon: all)" };
+    if (base.daemon === "watched" && session.watchers !== null) {
+      return session.watchers > 0
+        ? { paint: true, why: `painting while watched (${session.watchers} client${session.watchers === 1 ? "" : "s"})` }
+        : { paint: false, why: "paints while a client shows it; none does now" };
+    }
+    return {
+      paint: false,
+      why: base.daemon === "watched"
+        ? "not painting: this pi-daemon cannot tell when a client shows the session; /thoughts on paints it"
+        : "not painting (daemon: manual); /thoughts on paints this session",
+    };
+  }
+
+  function update(session) {
+    const decision = decide(session);
+    if (decision.paint !== session.painting) {
+      session.painting = decision.paint;
+      log(`visual thoughts (${session.id}): ${decision.paint ? "painting" : "not painting"} — ${decision.why}`);
+    }
+    session.painter.setEnabled(decision.paint);
   }
 
   async function observe(event, info) {
     if (disposed || !event || typeof event !== "object") return;
     const type = event.type;
-    if (!["agent_start", "agent_end", "message_end", "tool_execution_start"].includes(type)) return;
+    if (!["agent_start", "agent_end", "message_end", "tool_execution_start", "ui_watchers"].includes(type)) return;
     let session;
     try { session = await load(info); } catch (error) { log(`visual thoughts: session load failed: ${error?.message || error}`); return; }
-    if (!session || !session.painter.enabled) return;
-    if (type === "agent_start") return void session.painter.runStart();
+    if (!session) return;
+    if (type === "ui_watchers") {
+      session.watchers = Number(event.count) || 0;
+      return void update(session);
+    }
+    if (type === "agent_start") {
+      await countWatchers(session);
+      update(session);
+      // Runs are followed while not painting too, so a client arriving mid-run paints at once.
+      return void session.painter.runStart();
+    }
     if (type === "agent_end") return void session.painter.runEnd();
     if (type === "tool_execution_start") return void session.painter.output("tool", `${toolCallDigest(event.toolName, event.args)}\n`);
     // The coding agent's `message`, or Durable's committed entry (`entry.model`, its messages).
@@ -225,14 +278,16 @@ export function createVisualThoughtsModule({
 
   function describe(session) {
     const status = session.painter.status();
+    const decision = decide(session);
+    const budgetNow = budget.status();
     const lines = [
-      `visual thoughts (this session, for every client): ${session.enabled ? "on" : "off"}${session.ui ? "" : " — this pi-daemon has no session UI slots (needs 1.15)"}${base.incognito ? " — incognito" : ""}`,
-      `  ${session.images.length} image${session.images.length === 1 ? "" : "s"} in the backdrop slot; ${status.activity}${status.waitMs > 1_000 && status.activity === "idle" ? `, next in ${Math.round(status.waitMs / 1000)}s` : ""}`,
+      `visual thoughts here, painted once for every client: ${decision.paint ? "on" : "off"} — ${decision.why}`,
+      `  ${session.images.length} image${session.images.length === 1 ? "" : "s"} in the backdrop slot; ${status.activity}${status.waitMs > 1_000 && status.activity === "idle" && decision.paint ? `, next in ${Math.round(status.waitMs / 1000)}s` : ""}`,
       `  painting with ${status.provider || session.config.imageModel}; prompts from ${session.config.promptModel}`,
+      `  this worker's budget: ${budgetNow.concurrent} at a time, ${budgetNow.perMinute} a minute (${budgetNow.lastMinute} in the last minute${budgetNow.waiting ? `, ${budgetNow.waiting} waiting` : ""}${budgetNow.pausedMs > 1_000 ? `, paused ${Math.ceil(budgetNow.pausedMs / 1000)}s: the provider is struggling` : ""})`,
     ];
-    if (status.generated) lines.push(`  ${status.generated} painted since the worker started; the last took ${(status.lastMs / 1000).toFixed(1)}s`);
+    if (status.generated) lines.push(`  ${status.generated} painted here since the worker started; the last took ${(status.lastMs / 1000).toFixed(1)}s`);
     if (status.prompt) lines.push(`  last prompt: ${status.prompt.slice(0, 200)}`);
-    if (session.blocked) lines.push(`  blocked: ${session.blocked}`);
     if (session.lastError || status.lastError) lines.push(`  last error: ${session.lastError || status.lastError}`);
     return lines.join("\n");
   }
@@ -245,15 +300,15 @@ export function createVisualThoughtsModule({
     const verb = (words[0] || "status").toLowerCase();
     try {
       if (verb === "status") return reply(describe(session));
-      if (verb === "on" || verb === "off" || verb === "toggle") {
-        const on = verb === "toggle" ? !session.enabled : verb === "on";
-        setEnabled(session, on);
-        if (!on) { session.images = []; session.current = 0; await publish(session).catch((error) => report(session, error)); }
+      if (verb === "on" || verb === "off" || verb === "auto" || verb === "toggle") {
+        session.choice = verb === "toggle" ? (decide(session).paint ? "off" : "on") : verb;
+        update(session);
+        if (session.choice === "off") { session.images = []; session.current = 0; await publish(session).catch((error) => report(session, error)); }
         await save(session);
         return reply(describe(session));
       }
       if (verb === "now") {
-        if (!session.enabled) setEnabled(session, true);
+        if (!decide(session).paint) { session.choice = "on"; update(session); }
         await save(session);
         return reply(session.painter.paintNow() ? "visual thoughts: painting from the conversation now" : `visual thoughts: not now (${session.painter.status().waitMs > 0 ? `next in ${Math.ceil(session.painter.status().waitMs / 1000)}s` : "already painting"})`);
       }
@@ -278,7 +333,7 @@ export function createVisualThoughtsModule({
         await save(session);
         return reply(`visual thoughts: ${change.key} = ${change.value} (this session)`);
       }
-      return reply("Usage: /thoughts [on|off|toggle|status|now|next|clear|<setting> <value>]");
+      return reply("Usage: /thoughts [on|off|auto|toggle|status|now|next|clear|<setting> <value>]");
     } catch (error) {
       report(session, error);
       return reply(`visual thoughts: ${session.lastError}`);
@@ -288,13 +343,14 @@ export function createVisualThoughtsModule({
   return {
     commands: {
       thoughts: {
-        description: "Visual thoughts: paint the agent's work into this session's backdrop, for every client (on|off|now|next|clear|status|<setting> <value>)",
+        description: "Visual thoughts: paint the agent's work into this session's backdrop, for every client (on|off|auto|now|next|clear|status|<setting> <value>)",
         run,
       },
     },
     observe,
     /** Sessions in memory (tests, status). */
     sessions,
+    budget,
     dispose() {
       disposed = true;
       for (const session of sessions.values()) session.painter?.dispose();

@@ -24,6 +24,7 @@ export function slotImageId(ref) {
  * paints; `surface` keeps named images in the terminal and shows one (tui-surface.js has the
  * shape: size, transport, has, upload, show, shown, drop, clear); `createRenderer` makes the
  * renderer (renderer.js). `fetchImage(uri)` resolves a slot image's PNG bytes (slot mode).
+ * `budget` (budget.js) is the process's painting budget, shared with other engines.
  */
 export function createVisualThoughtsEngine({
   config,
@@ -39,6 +40,7 @@ export function createVisualThoughtsEngine({
   trace = null,
   look = () => ({ fit: config.fit, feather: config.feather, opacity: config.opacity }),
   fetchImage = null,
+  budget = null,
 }) {
   const log = typeof trace === "function" ? (line) => { try { trace(`${now()} ${line}`); } catch {} } : () => {};
   if (typeof trace === "function") {
@@ -86,6 +88,7 @@ export function createVisualThoughtsEngine({
     config,
     promptTurn,
     provider,
+    budget,
     now,
     timers,
     warn,

@@ -41,6 +41,14 @@ export function maiDimensions(size) {
   return { width: round16(width * scale), height: round16(height * scale) };
 }
 
+/** The caller's signal, and a deadline: a stuck request must not hold the painting budget. */
+export function withTimeout(signal, ms = 120_000) {
+  const limit = Number.isFinite(ms) && ms > 0 ? ms : 120_000;
+  if (typeof AbortSignal?.timeout !== "function") return signal;
+  const deadline = AbortSignal.timeout(limit);
+  return signal && typeof AbortSignal.any === "function" ? AbortSignal.any([signal, deadline]) : signal || deadline;
+}
+
 async function readImage(response, fetchImpl, signal) {
   const body = await response.json();
   const item = body?.data?.[0];
@@ -90,7 +98,7 @@ export function createImageProvider(config, { fetchImpl = globalThis.fetch, env 
           headers.Authorization = `Bearer ${await broker.getToken({ az: config.az || "az", resource: AZURE_SPEECH_TOKEN_RESOURCE, env, signal })}`;
         }
         const response = await fetchImpl(`${endpoint}/mai/images/generations`, {
-          method: "POST", headers, signal,
+          method: "POST", headers, signal: withTimeout(signal, config.timeoutMs),
           body: JSON.stringify({ model: deployment, prompt, n: 1, ...maiDimensions(config.size) }),
         });
         if (!response.ok) throw await failure(response, `MAI ${deployment}`);
@@ -107,7 +115,7 @@ export function createImageProvider(config, { fetchImpl = globalThis.fetch, env 
       const started = now();
       const response = await fetchImpl(`${baseUrl}/v1/images/generations`, {
         method: "POST",
-        signal,
+        signal: withTimeout(signal, config.timeoutMs),
         headers: { "Content-Type": "application/json", ...(key ? { Authorization: `Bearer ${key}` } : {}) },
         body: JSON.stringify({
           model, prompt, n: 1, size: config.size || "1536x1024",

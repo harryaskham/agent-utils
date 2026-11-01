@@ -3,19 +3,22 @@
 // image model paints it. Each painting goes to `onImage`: the local display (TUI Pi, pi-client),
 // or the session's backdrop slot (the pi-daemon module). It never blocks the agent; every failure
 // is a warning at most, rate limits wait for the provider's reset, other failures back off.
+import { isTransientPaintError } from "./budget.js";
 import { ImageRateLimitError } from "./image-provider.js";
 import { buildImagePromptRequest, createDigest, normalizeImagePrompt } from "./prompter.js";
 
 /**
  * `config` is live (runtime changes mutate it). `promptTurn(request, signal)` resolves the prompt
  * model's reply; `provider.generate(prompt, { signal })` paints; `onImage(record, png)` takes each
- * painting (`record`: id, prompt, model, batch, at, ms) and may be async.
+ * painting (`record`: id, prompt, model, batch, at, ms) and may be async. `budget` (budget.js), when
+ * given, is shared with other painters: each painting waits its turn there.
  */
 export function createPainter({
   config,
   promptTurn,
   provider,
   onImage,
+  budget = null,
   now = () => Date.now(),
   timers = { setTimeout, clearTimeout },
   warn = () => {},
@@ -34,7 +37,7 @@ export function createPainter({
   let failures = 0;
   let wakeTimer = null;
   let seq = 0;
-  let activity = "idle"; // idle | prompting | painting
+  let activity = "idle"; // idle | queued | prompting | painting
   let lastError = "";
   let generated = 0;
   let lastMs = 0;
@@ -68,14 +71,21 @@ export function createPainter({
   }
 
   async function paint() {
-    const snapshot = digest.snapshot();
-    digest.mark();
     runCount += 1;
     nextAllowedAt = now() + config.minIntervalMs;
     const ofBatch = batch;
     const controller = new AbortController();
     inflight.add(controller);
+    let release = null;
     try {
+      if (budget) {
+        setActivity("queued");
+        release = await budget.acquire(controller.signal);
+        if (controller.signal.aborted || disposed) return;
+      }
+      // Taken once it is this painting's turn: the newest output.
+      const snapshot = digest.snapshot();
+      digest.mark();
       setActivity("prompting");
       const request = buildImagePromptRequest({ digest: snapshot, recentPrompts, style: config.style });
       const reply = await promptTurn(request, controller.signal);
@@ -92,9 +102,13 @@ export function createPainter({
       lastMs = result.ms;
       failures = 0;
       lastError = "";
+      budget?.succeeded();
+      release?.();
+      release = null;
       if (enabled) await onImage(record, result.png);
     } catch (error) {
       if (controller.signal.aborted || disposed) return;
+      if (budget && isTransientPaintError(error)) budget.failed(error?.retryAfterMs);
       if (error instanceof ImageRateLimitError) {
         nextAllowedAt = Math.max(nextAllowedAt, now() + error.retryAfterMs);
         lastError = error.message;
@@ -105,6 +119,7 @@ export function createPainter({
         warn(`visual thoughts: ${lastError}`);
       }
     } finally {
+      release?.();
       inflight.delete(controller);
       if (!inflight.size) setActivity("idle");
       else try { onChange(status()); } catch {}
@@ -138,9 +153,10 @@ export function createPainter({
     get batch() { return batch; },
     /** Output while the agent works: `kind` thinking | text | tool | result | user. */
     output(kind, text) {
-      if (!enabled || disposed) return;
+      if (disposed) return;
+      // Kept while off too (a bounded tail): turned on mid-run, it paints what led here.
       digest.add(kind, text);
-      maybePaint();
+      if (enabled) maybePaint();
     },
     /** An agent run begins (a prompt): its paintings form a new batch. */
     runStart() {
@@ -160,8 +176,14 @@ export function createPainter({
     },
     setEnabled(next) {
       if (disposed) return;
+      const was = enabled;
       enabled = Boolean(next);
-      if (enabled) { maybePaint(); return; }
+      if (enabled) {
+        // Turned on with output waiting (a client opened a session that worked): paint it once.
+        if (!was && !inRun && runCount < config.maxPerRun && digest.pending >= Math.max(1, config.firstChars)) flushAfterRun = true;
+        maybePaint();
+        return;
+      }
       for (const controller of inflight) controller.abort();
       if (wakeTimer) timers.clearTimeout(wakeTimer);
       wakeTimer = null;
