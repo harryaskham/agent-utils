@@ -526,6 +526,10 @@ impl Service {
             .runtime
             .block_on(crate::doctor::report(&self.config, targets)))
     }
+    pub fn loops(&self, input: crate::loops::LoopsInput) -> Result<crate::loops::FleetLoops> {
+        let targets = self.node_targets(&input.selection)?;
+        Ok(self.runtime.block_on(crate::loops::fleet_loops(targets)))
+    }
 }
 
 pub fn router() -> ToolRouter<Service> {
@@ -543,6 +547,7 @@ pub fn router() -> ToolRouter<Service> {
     router.add_typed_tool_with_output_schema("ag_sync", "Run every media sync pathway at once (images and shared audio by default; kinds narrows) for selected/all enabled nodes, regenerating both local viewers. Requires confirmed=true. Per-pathway failures are reported without hiding the other pathway.", Service::sync);
     router.add_typed_tool_with_output_schema("ag_choices_list", "List pending agent elicitations (interactive_choice, async_choice and RPC dialogs) across the fleet from each node's AHP hosts' SessionState.inputNeeded: its pi-daemon (Durable sessions, ask_user), its pi-daemon bridge (TUI Pis) and Paratenic when it runs; each is independent. Read-only. all=true includes stale and non-chat entries (tool confirmations/auth) with reasons.", Service::choices);
     router.add_typed_tool_with_output_schema("ag_choices_answer", "Answer one pending elicitation through its AHP host (host = node, <node>-pi-daemon or <node>-pi-bridge) with chat/inputCompleted. Requires confirmed=true after operator approval. Pass revision from ag_choices_list to refuse a changed request. state=indeterminate means no authoritative echo arrived; re-list instead of retrying.", Service::answer);
+    router.add_typed_tool_with_output_schema("ag_loops_list", "List the loops, schedules and goals (/loop, /after, /cron, /goal) live in each node's pi-daemon sessions, read from their agent-utils.loops documents over /chord. Read-only; sessions active in the last 8 days, at most 128 per node; unreachable nodes are reported quietly.", Service::loops);
     router.add_typed_tool_with_output_schema("ag_doctor", "Read-only fleet health: SSH/ag reachability, pi-daemon and bridge catalogues and /readyz, optional Paratenic catalogue and /status, speech feed recency and mute policy, gallery cache freshness. Bounded per node; failures are per check.", Service::doctor);
     router.add_typed_tool(
         "ag_hosts_list",

@@ -1,5 +1,5 @@
-//! `ag dash`: one live local web view of speech, choices, health, images and
-//! shared audio.
+//! `ag dash`: one live local web view of speech, choices, health, loops, images
+//! and shared audio.
 //!
 //! A real server, not a static generator: choices are re-read from Paratenic
 //! while the page is open (stale-while-revalidate), doctor and the merged media
@@ -53,6 +53,8 @@ const PAGE: &str = include_str!("../dash.html");
 const MAX_FILE: u64 = 64 * 1024 * 1024;
 /// While someone is looking, choices older than this are refreshed in the background.
 const CHOICES_STALE_MS: u64 = 20_000;
+/// Loops are a rough overview: read at most this often unless asked.
+const LOOPS_EVERY_MS: u64 = 120_000;
 
 #[derive(Clone, Debug)]
 pub struct DashOptions {
@@ -102,6 +104,9 @@ pub struct Snapshot {
     pub doctor: Option<DoctorReport>,
     pub doctor_ms: Option<u64>,
     pub doctor_refreshing: bool,
+    pub loops: Option<crate::loops::FleetLoops>,
+    pub loops_ms: Option<u64>,
+    pub loops_refreshing: bool,
     pub images: ImageStatus,
     pub audio: AudioStatus,
     pub receipts: VecDeque<AnswerReceipt>,
@@ -126,6 +131,7 @@ struct Dash {
     snapshot: Mutex<Snapshot>,
     choices_busy: AtomicBool,
     doctor_busy: AtomicBool,
+    loops_busy: AtomicBool,
     images_busy: Arc<AtomicBool>,
     audio_busy: Arc<AtomicBool>,
     inflight: Mutex<HashSet<String>>,
@@ -364,6 +370,29 @@ fn refresh_doctor(dash: &Shared) {
             snapshot.doctor_refreshing = false;
         }
         dash.doctor_busy.store(false, Ordering::Release);
+    });
+}
+
+/// The fleet's pi-daemon loops (the same read as `ag loops`), at most every
+/// [`LOOPS_EVERY_MS`] unless `force`d.
+fn refresh_loops(dash: &Shared, force: bool) {
+    let fresh = lock(dash)
+        .loops_ms
+        .is_some_and(|ms| now_ms().saturating_sub(ms) < LOOPS_EVERY_MS);
+    if (fresh && !force) || dash.loops_busy.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    lock(dash).loops_refreshing = true;
+    let dash = dash.clone();
+    tokio::spawn(async move {
+        let fleet = crate::loops::fleet_loops(dash.targets.clone()).await;
+        {
+            let mut snapshot = lock(&dash);
+            snapshot.loops = Some(fleet);
+            snapshot.loops_ms = Some(now_ms());
+            snapshot.loops_refreshing = false;
+        }
+        dash.loops_busy.store(false, Ordering::Release);
     });
 }
 
@@ -661,6 +690,9 @@ async fn refresh(
     }
     if all || request.what.iter().any(|w| w == "doctor") {
         refresh_doctor(&dash);
+    }
+    if all || request.what.iter().any(|w| w == "loops") {
+        refresh_loops(&dash, true);
     }
     let media = request.what.iter().any(|w| w == "media" || w == "sync");
     refresh_media(
@@ -1130,6 +1162,7 @@ pub async fn run(
         snapshot: Mutex::new(snapshot),
         choices_busy: AtomicBool::new(false),
         doctor_busy: AtomicBool::new(false),
+        loops_busy: AtomicBool::new(false),
         images_busy: Arc::new(AtomicBool::new(false)),
         audio_busy: Arc::new(AtomicBool::new(false)),
         inflight: Mutex::new(HashSet::new()),
@@ -1167,7 +1200,7 @@ pub async fn run(
             let mut images = tokio::time::interval(options.image_refresh);
             loop {
                 tokio::select! {
-                    _ = status.tick() => { refresh_choices(&dash); refresh_doctor(&dash); }
+                    _ = status.tick() => { refresh_choices(&dash); refresh_doctor(&dash); refresh_loops(&dash, false); }
                     _ = images.tick() => refresh_media(&dash, true, true),
                 }
             }

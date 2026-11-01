@@ -440,7 +440,7 @@ pub fn choice_endpoints(config: &Config, hosts: &[Host]) -> Result<Vec<(Host, Op
     Ok(targets)
 }
 
-fn read_token(path: &PathBuf) -> Result<String> {
+pub(crate) fn read_token(path: &PathBuf) -> Result<String> {
     // Managed (sops/Collective) symlinks resolve normally; content is bounded.
     let meta = std::fs::metadata(path)
         .map_err(|e| Error::Config(format!("token file {}: {e}", path.display())))?;
@@ -731,7 +731,7 @@ pub fn offline_reason(message: &str) -> Option<&'static str> {
         None
     }
 }
-fn redact(message: &str) -> String {
+pub(crate) fn redact(message: &str) -> String {
     // Never echo Authorization material from transport diagnostics.
     message
         .split_whitespace()

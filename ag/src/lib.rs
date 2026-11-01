@@ -8,6 +8,7 @@ pub mod dash_tts;
 pub mod doctor;
 pub mod error;
 pub mod gallery;
+pub mod loops;
 pub mod model;
 pub mod paratenic;
 pub mod service;

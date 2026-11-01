@@ -114,6 +114,8 @@ enum Commands {
     },
     /// Check each node: SSH/ag, pi-daemon, its bridge, Paratenic, speech feed and media caches.
     Doctor,
+    /// List the loops, schedules and goals (/loop, /after, /cron, /goal) live in pi-daemon sessions.
+    Loops,
     /// Serve a live local web dashboard of choices, health, speech, images and audio.
     Dash {
         /// Listener (default dash.bind, 127.0.0.1:7795). Loopback and Tailscale
@@ -952,6 +954,158 @@ fn print_doctor(report: &ag::doctor::DoctorReport, color: bool) -> Result<u8> {
     })
 }
 
+/// `5m`, `2h30m`, `3d`: a short duration.
+fn short_duration(ms: u64) -> String {
+    let secs = ms / 1000;
+    if secs < 60 {
+        return format!("{secs}s");
+    }
+    let mins = (secs + 30) / 60;
+    if mins < 60 {
+        return format!("{mins}m");
+    }
+    let (h, m) = (mins / 60, mins % 60);
+    if h < 24 {
+        return if m == 0 {
+            format!("{h}h")
+        } else {
+            format!("{h}h{m}m")
+        };
+    }
+    let (d, h) = (h / 24, h % 24);
+    if h == 0 {
+        format!("{d}d")
+    } else {
+        format!("{d}d{h}h")
+    }
+}
+
+/// How a loop reads: `every 5m · next 3m`, `cron 0 9 * * 1-5 (Europe/London) · next 14h`, `goal · 3/50 nudges`.
+fn loop_schedule(item: &ag::loops::LoopItem, now: u64) -> String {
+    let next = item
+        .next_at_ms
+        .map(|at| format!(" · next {}", short_duration(at.saturating_sub(now))))
+        .unwrap_or_default();
+    let steer = if item.steer { " (steer)" } else { "" };
+    match item.kind.as_str() {
+        "goal" => format!(
+            "goal · {}/{} nudges",
+            item.nudges.unwrap_or(0),
+            item.max_nudges
+                .map(|m| m.to_string())
+                .unwrap_or_else(|| "?".into())
+        ),
+        "after" => format!("once{next}{steer}"),
+        "cron" => format!(
+            "cron {}{}{next}{steer}",
+            item.cron.as_deref().unwrap_or("?"),
+            item.time_zone
+                .as_deref()
+                .map(|z| format!(" ({z})"))
+                .unwrap_or_default()
+        ),
+        _ => format!(
+            "every {}{next}{steer}",
+            item.interval_secs
+                .map(|s| short_duration(s * 1000))
+                .unwrap_or_else(|| "?".into())
+        ),
+    }
+}
+
+fn print_loops(fleet: &ag::loops::FleetLoops, color: bool) -> Result<u8> {
+    let now = ag::doctor::now_ms();
+    let mut out = String::new();
+    for node in &fleet.nodes {
+        match node.state.as_str() {
+            "none" => continue,
+            "offline" => {
+                out.push_str(&paint(
+                    color,
+                    "2",
+                    &format!(
+                        "○ {}  offline · {}",
+                        node.host,
+                        node.error.as_deref().unwrap_or("")
+                    ),
+                ));
+                out.push('\n');
+                continue;
+            }
+            "error" => {
+                out.push_str(&format!(
+                    "{} {}  {}\n",
+                    paint(color, "31", "✗"),
+                    paint(color, "1", &node.host),
+                    terminal_text(node.error.as_deref().unwrap_or("error"))
+                ));
+                continue;
+            }
+            _ => {}
+        }
+        let count: usize = node.sessions.iter().map(|s| s.loops.len()).sum();
+        out.push_str(&format!(
+            "{} {}  {}\n",
+            paint(color, if count > 0 { "36" } else { "2" }, "⟳"),
+            paint(color, "1", &node.host),
+            paint(
+                color,
+                "2",
+                &format!(
+                    "{count} live · {} sessions read{}",
+                    node.read,
+                    if node.unreadable > 0 {
+                        format!(" · {} unreadable", node.unreadable)
+                    } else {
+                        String::new()
+                    }
+                )
+            )
+        ));
+        for session in &node.sessions {
+            let title = if session.title.is_empty() {
+                &session.session_id
+            } else {
+                &session.title
+            };
+            out.push_str(&format!(
+                "  {}{}  {}\n",
+                paint(color, "1", title),
+                if session.working {
+                    paint(color, "33", " ●")
+                } else {
+                    String::new()
+                },
+                paint(color, "2", &session.cwd)
+            ));
+            for item in &session.loops {
+                out.push_str(&format!(
+                    "    #{:<3} {}  {}\n",
+                    item.number,
+                    paint(
+                        color,
+                        if item.kind == "goal" { "35" } else { "36" },
+                        &loop_schedule(item, now)
+                    ),
+                    terminal_text(&item.prompt)
+                ));
+            }
+        }
+    }
+    out.push_str(&paint(
+        color,
+        "2",
+        &format!(
+            "{} loops · {} goals · sessions active in the last {}",
+            fleet.loops,
+            fleet.goals,
+            short_duration(fleet.window_ms)
+        ),
+    ));
+    text(&out)?;
+    Ok(0)
+}
+
 fn clock(ms: u64) -> String {
     let total = ms / 1000;
     let (h, m, s) = (total / 3600, total % 3600 / 60, total % 60);
@@ -1617,6 +1771,15 @@ fn execute(cli: Cli) -> Result<u8> {
                     }
                     Ok(if accepted { 0 } else { 3 })
                 }
+            };
+        }
+        Commands::Loops => {
+            let fleet = service.loops(ag::loops::LoopsInput { selection })?;
+            return if cli.json {
+                json(&fleet)?;
+                Ok(0)
+            } else {
+                print_loops(&fleet, color_enabled(cli.color))
             };
         }
         Commands::Doctor => {

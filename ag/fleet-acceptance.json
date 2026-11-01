@@ -146,6 +146,22 @@
         "ag/tests/fleet.rs::private_reach_covers_loopback_and_tailscale_only",
         "ag/nix/module-test.nix"
       ]
+    },
+    {
+      "id": "LOOPS-1",
+      "contract": "ag loops / ag_loops_list / the dash Loops tab list every live /loop, /after, /cron and /goal in each node's pi-daemon sessions, read over /chord (pi-daemon.chord.v1 subprotocol, the daemon's bearer) from sessions active in the last 8 days (at most 128 per node); stopped entries and sessions without loops are left out; unreachable nodes are offline, not errors. The dash reads them at most every two minutes unless refreshed.",
+      "tests": [
+        "ag/tests/fleet.rs::loops_list_every_live_loop_schedule_and_goal_from_each_pi_daemon_over_chord",
+        "ag/src/loops.rs::tests",
+        "live: ag loops across the fleet (16 loops on 7 nodes, 2026-11-01) and a throwaway pi-daemon with loop.mjs"
+      ]
+    },
+    {
+      "id": "DASH-DEEPLINK-1",
+      "contract": "#choices, #health, #loops, #tts, #images, #audio open that view; tab switches push history; #choices/<host>/<request id> selects that question once listed and picking a question writes it.",
+      "tests": [
+        "manual Playwright QA against a live local dash (2026-11-01)"
+      ]
     }
   ],
   "visual_review": {

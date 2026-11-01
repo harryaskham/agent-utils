@@ -1406,3 +1406,121 @@ fn choices_tui_answers_over_a_real_pty_and_restores_the_terminal() {
     let _ = master.as_raw_fd();
     let _ = Path::new(&slave_path);
 }
+
+#[test]
+fn loops_list_every_live_loop_schedule_and_goal_from_each_pi_daemon_over_chord() {
+    // agent-utils' loop.mjs keeps a session's /loop, /after, /cron and /goal in its
+    // `agent-utils.loops` document; `ag loops` and the dash read it over /chord.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let day = 24 * 3600 * 1000;
+    let (daemon, fake) = fake_ahp::fake_host_with(fake_ahp::Fake {
+        pi_daemon: true,
+        bridge: Some(false),
+        chord_sessions: vec![
+            json!({"id": "chord-busy", "title": "release", "cwd": "/work/r", "profile": "personal", "activeAt": now - 1000, "liveWork": true, "isArchived": false}),
+            json!({"id": "chord-quiet", "title": "no loops", "cwd": "/work/q", "profile": "personal", "activeAt": now - 2000}),
+            json!({"id": "chord-old", "title": "long idle", "cwd": "/work/o", "profile": "personal", "activeAt": now - 30 * day}),
+        ],
+        loops_docs: vec![
+            (
+                "chord-busy".into(),
+                json!({"last": 3, "loops": {
+                    "1": {"taskId": "1", "prompt": "check CI", "intervalSecs": 600, "startedAt": now - 60_000, "deliverAs": "followUp"},
+                    "2": {"taskId": "2", "kind": "cron", "prompt": "standup", "cron": {"expression": "0 9 * * 1-5", "timeZone": "Europe/London"}, "nextAt": now + day},
+                    "3": {"taskId": "3", "kind": "goal", "prompt": "all tests pass", "nudges": 2, "maxNudges": 50, "startedAt": now - 5000},
+                    "4": {"taskId": "4", "prompt": "stopped", "intervalSecs": 60, "startedAt": now, "stopped": true},
+                }}),
+            ),
+            ("chord-quiet".into(), json!({"last": 0, "loops": {}})),
+            (
+                "chord-old".into(),
+                json!({"loops": {"1": {"taskId": "9", "prompt": "never read", "intervalSecs": 60, "startedAt": 0}}}),
+            ),
+        ],
+        ..Default::default()
+    });
+    let fixture = Fixture::new(&[("alpha", None)]);
+    let token = fixture.temp.path().join("token");
+    let pi_settings = fixture.temp.path().join("pi-settings.json");
+    std::fs::write(
+        &pi_settings,
+        json!({"client": {"tokenFile": token.display().to_string(), "hosts": [
+            {"name": "alpha", "url": format!("ws://{daemon}")},
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+    let manager = ag::config::manager();
+    let mut config = ag::config::load(Some(&fixture.config)).unwrap();
+    config.paratenic.enabled = false;
+    config.pi_daemon.settings = Some(pi_settings.display().to_string());
+    manager.save(&fixture.config, &config).unwrap();
+
+    let (code, listed) = fixture.json(&["--json", "loops"]);
+    assert_eq!(code, 0, "{listed}");
+    let data = &listed["data"];
+    assert_eq!(
+        (data["loops"].as_u64(), data["goals"].as_u64()),
+        (Some(2), Some(1)),
+        "{data}"
+    );
+    let node = &data["nodes"][0];
+    assert_eq!(node["host"], "alpha");
+    assert_eq!(node["state"], "ok");
+    assert_eq!(
+        node["read"], 2,
+        "only sessions active in the window are read"
+    );
+    assert_eq!(node["skipped"], 1);
+    let sessions = node["sessions"].as_array().unwrap();
+    assert_eq!(
+        sessions.len(),
+        1,
+        "sessions without live loops are left out"
+    );
+    assert_eq!(sessions[0]["title"], "release");
+    assert_eq!(sessions[0]["working"], true);
+    let loops = sessions[0]["loops"].as_array().unwrap();
+    let kinds: Vec<&str> = loops.iter().map(|l| l["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["loop", "cron", "goal"]);
+    assert_eq!(loops[0]["interval_secs"], 600);
+    assert!(loops[0]["next_at_ms"].as_u64().unwrap() > now);
+    assert_eq!(loops[1]["cron"], "0 9 * * 1-5");
+    assert_eq!(loops[2]["nudges"], 2);
+    {
+        let fake = fake.lock().unwrap();
+        assert!(
+            fake.auth
+                .iter()
+                .all(|a| a.as_deref() == Some(&format!("Bearer {}", fake_ahp::TOKEN))),
+            "the daemon's bearer"
+        );
+        assert!(
+            fake.protocols
+                .iter()
+                .any(|p| p.as_deref() == Some("pi-daemon.chord.v1")),
+            "/chord's subprotocol"
+        );
+    }
+
+    let out = fixture
+        .command()
+        .args(["--color", "never", "loops"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let out = String::from_utf8_lossy(&out.stdout);
+    assert!(out.contains("⟳ alpha  3 live · 2 sessions read"), "{out}");
+    assert!(
+        out.contains("#2   cron 0 9 * * 1-5 (Europe/London) · next"),
+        "{out}"
+    );
+    assert!(
+        out.contains("#3   goal · 2/50 nudges  all tests pass"),
+        "{out}"
+    );
+    assert!(out.contains("2 loops · 1 goals"), "{out}");
+}

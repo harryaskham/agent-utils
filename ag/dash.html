@@ -57,7 +57,7 @@ h2{font-size:21px;line-height:1.3;margin:22px 0 6px;max-width:72ch;white-space:p
 .danger.armed{border-color:var(--bad);color:var(--bad)}
 .receipt{font-size:13px}.receipt.ok{color:var(--ok)}.receipt.bad{color:var(--bad)}.receipt.warn{color:var(--warn)}
 #health{overflow:auto;padding:20px clamp(16px,3vw,40px) 40px}
-.summary{display:flex;gap:18px;align-items:baseline;margin-bottom:14px;font:13px ui-monospace,monospace;color:var(--muted)}
+.summary{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline;margin-bottom:14px;font:13px ui-monospace,monospace;color:var(--muted)}
 .summary strong{font-size:15px;color:var(--text)}
 .nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:10px}
 .nh{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--ok);border-radius:4px;padding:10px 12px}
@@ -66,6 +66,19 @@ h2{font-size:21px;line-height:1.3;margin:22px 0 6px;max-width:72ch;white-space:p
 .chk{display:grid;grid-template-columns:14px 74px minmax(0,1fr);gap:6px;font-size:12.5px;padding:2px 0;align-items:baseline}
 .chk .s{font-size:12px;line-height:1}.chk .s.ok{color:var(--ok)}.chk .s.warn{color:var(--warn)}.chk .s.error{color:var(--bad)}.chk .s.skip,.chk .s.offline{color:var(--faint)}
 .chk .name{color:var(--muted);font-family:ui-monospace,monospace}.chk .sum{overflow-wrap:anywhere}
+#loops{overflow:auto;padding:20px clamp(16px,3vw,40px) 40px}
+.lnode{margin:18px 0 6px;font:600 13px ui-monospace,monospace;color:var(--accent);display:flex;gap:10px;align-items:baseline}.lnode .n{color:var(--faint);font-weight:400}
+.lnode.error{color:var(--bad)}
+.lsess{background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:8px 12px;margin:6px 0;max-width:1180px}
+.lsess h4{margin:0;font-size:14px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}.lsess h4 .cwd{margin:0;font-weight:400}.lsess h4 .busy{color:var(--warn);font-size:12px}
+.lrow{display:grid;grid-template-columns:38px minmax(150px,auto) 84px minmax(0,1fr);gap:4px 12px;align-items:baseline;padding:5px 0 3px;border-top:1px solid var(--line);margin-top:6px;font-size:13px}
+.lrow:first-of-type{border-top:0}
+.lrow .num{font:12px ui-monospace,monospace;color:var(--faint)}
+.lrow .sched{font:12px ui-monospace,monospace;color:var(--ok);white-space:nowrap}.lrow .sched[data-kind=goal]{color:#c9a0dc}.lrow .sched[data-kind=cron]{color:var(--accent)}.lrow .sched[data-kind=after]{color:var(--warn)}
+.lrow .next{font:12px ui-monospace,monospace;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.lrow .prompt{overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere;color:var(--text)}
+.loff{margin-top:18px;font:12px ui-monospace,monospace;color:var(--faint)}
+@media(max-width:640px){.lrow{grid-template-columns:30px minmax(0,1fr) auto}.lrow .prompt{grid-column:1/-1}}
 #images,#audio{display:grid;grid-template-rows:auto minmax(0,1fr);grid-template-columns:minmax(0,1fr);min-height:0}
 .imgbar{display:flex;gap:14px;align-items:center;padding:8px 16px;border-bottom:1px solid var(--line);font:12px ui-monospace,monospace;color:var(--muted)}.imgbar span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.imgbar span.paused{color:var(--warn,#efc384)}
 .imgbar button{flex:none}@media(max-width:560px){.imgbar{flex-wrap:wrap;gap:6px 8px}.imgbar span{flex-basis:100%}}.imgbar button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
@@ -95,12 +108,13 @@ iframe{border:0;width:100%;height:100%;background:var(--bg)}
   <nav role="tablist" aria-label="Views">
     <button class="tab" role="tab" id="tab-choices" aria-controls="choices" aria-selected="true">Choices<span class="badge" id="b-choices">0</span></button>
     <button class="tab" role="tab" id="tab-health" aria-controls="health" aria-selected="false">Health<span class="badge" id="b-health">·</span></button>
+    <button class="tab" role="tab" id="tab-loops" aria-controls="loops" aria-selected="false">Loops<span class="badge" id="b-loops">·</span></button>
     <button class="tab" role="tab" id="tab-tts" aria-controls="tts" aria-selected="false">TTS<span class="badge" id="b-tts">live</span></button>
     <button class="tab" role="tab" id="tab-images" aria-controls="images" aria-selected="false">Images<span class="badge" id="b-images">·</span></button>
     <button class="tab" role="tab" id="tab-audio" aria-controls="audio" aria-selected="false">Audio<span class="badge" id="b-audio">·</span></button>
   </nav>
   <span id="live" role="status"></span>
-  <button id="refresh" title="Refresh choices and health (r)">Refresh</button>
+  <button id="refresh" title="Refresh choices and health, and loops on the Loops tab (r)">Refresh</button>
   <button id="theme" aria-label="Switch color theme">Light</button>
 </header>
 <section id="choices" role="tabpanel" aria-labelledby="tab-choices">
@@ -108,6 +122,7 @@ iframe{border:0;width:100%;height:100%;background:var(--bg)}
   <main id="detail"></main>
 </section>
 <section id="health" role="tabpanel" aria-labelledby="tab-health" hidden></section>
+<section id="loops" role="tabpanel" aria-labelledby="tab-loops" hidden></section>
 <section id="images" role="tabpanel" aria-labelledby="tab-images" hidden>
   <div class="imgbar"><span id="imgstatus" role="status"></span><button id="imgreload" hidden title="Show the newest synced images now">Load new images</button><button id="imgpause" aria-pressed="false" title="Keep this view still while you browse; newer syncs wait until you resume">Pause auto-refresh</button><button id="pull">Pull now</button></div>
   <div id="imgframe"></div>
@@ -163,7 +178,7 @@ function live(){
   if(data.choices_refreshing)bits.push('querying fleet…');else bits.push('choices '+ago(data.choices_ms));
   bits.push(data.doctor_refreshing?'checking health…':'health '+ago(data.doctor_ms));
   $('live').textContent=bits.join(' · ');$('live').classList.toggle('offline',offline);
-  renderImagesStatus();renderAudioStatus();applyPendingAudio();
+  renderImagesStatus();renderAudioStatus();applyPendingAudio();tickLoops();
 }
 function flat(){
   const out=[];if(!data?.choices)return out;
@@ -176,13 +191,14 @@ function render(){
   $('b-choices').textContent=waiting;$('b-choices').className='badge'+(waiting?' hot':'');
   const doc=data?.doctor;
   if(doc){const{error:bad,warn,offline}=doc.counts;$('b-health').textContent=bad||warn||(offline?offline+' off':'ok');$('b-health').className='badge'+(bad?' bad':warn?' hot':'')}
+  const lp=data?.loops;$('b-loops').textContent=lp?(lp.loops+lp.goals||'·'):'·';
   $('b-images').textContent=data?.images?.images||'·';
   $('b-audio').textContent=data?.audio?.clips||'·';
   window.agTts?.status(data.tts);
   document.title=(waiting?`(${waiting}) `:'')+'ag · fleet';
   if(wanted){const hit=items.find(i=>i.choice.host===wanted.host&&i.choice.request_id===wanted.request);if(hit){selected=keyOf(hit.choice);wanted=null}}
   if(!items.some(i=>keyOf(i.choice)===selected))selected=items.find(i=>i.choice.actionable)?.choice?keyOf(items.find(i=>i.choice.actionable).choice):items[0]?keyOf(items[0].choice):null;
-  renderRail(items);renderDetail(items);renderHealth();renderImages();renderAudio();live();
+  renderRail(items);renderDetail(items);renderHealth();renderLoops();renderImages();renderAudio();live();
 }
 function renderRail(items){
   const rail=$('rail');rail.replaceChildren();
@@ -288,6 +304,37 @@ function renderHealth(){
   }
   h.append(grid);
 }
+// Loops, schedules and goals in pi-daemon sessions (/loop, /after, /cron, /goal), read every
+// couple of minutes: a rough overview. Countdowns tick here between reads.
+const span=ms=>{const s=Math.max(0,Math.round(ms/1000));if(s<60)return s+'s';const m=Math.round(s/60);if(m<60)return m+'m';const h=Math.floor(m/60),r=m%60;if(h<24)return r?`${h}h${r}m`:h+'h';const d=Math.floor(h/24);return h%24?`${d}d${h%24}h`:d+'d'};
+function nextAt(l,now){if(l.kind==='loop'&&l.interval_secs&&l.started_at_ms){const iv=l.interval_secs*1000;return l.started_at_ms+(Math.floor(Math.max(0,now-l.started_at_ms)/iv)+1)*iv}return l.next_at_ms}
+function schedule(l){
+  if(l.kind==='goal')return`goal · ${l.nudges||0}/${l.max_nudges||'?'} nudges`;
+  if(l.kind==='after')return'once';
+  if(l.kind==='cron')return`cron ${l.cron||'?'}${l.time_zone?' '+l.time_zone:''}`;
+  return`every ${span((l.interval_secs||0)*1000)}`+(l.steer?' · steer':'');
+}
+function tickLoops(){const now=Date.now();for(const e of document.querySelectorAll('#loops .next[data-at]')){const at=Number(e.dataset.at);e.textContent=at>now?'in '+span(at-now):'due'}}
+function renderLoops(){
+  const h=$('loops');h.replaceChildren();const lp=data?.loops;
+  if(!lp){h.append(el('div',{class:'empty'},el('strong',{text:'Reading loops…'}),'pi-daemon sessions are read every couple of minutes.'));return}
+  const refresh=el('button',{text:data.loops_refreshing?'Reading…':'Refresh',onclick:()=>api('/api/refresh',{what:['loops']}).then(()=>setTimeout(poll,800)).catch(()=>{})});refresh.disabled=!!data.loops_refreshing;
+  h.append(el('div',{class:'summary'},el('strong',{text:`${lp.loops} loop${lp.loops===1?'':'s'} · ${lp.goals} goal${lp.goals===1?'':'s'}`}),el('span',{text:`read ${ago(data.loops_ms)} · sessions active in the last ${span(lp.window_ms)}`}),refresh));
+  const shown=lp.nodes.filter(n=>n.state==='error'||n.sessions.length).sort((a,b)=>a.host.localeCompare(b.host));
+  for(const n of shown){
+    const count=n.sessions.reduce((s,x)=>s+x.loops.length,0);
+    h.append(el('div',{class:'lnode'+(n.state==='error'?' error':'')},n.host,el('span',{class:'n',text:n.state==='error'?n.error||'failing':`${count} live`})));
+    for(const x of n.sessions){
+      const card=el('div',{class:'lsess'},el('h4',{},x.title||x.session_id,x.working?el('span',{class:'busy',text:'● working'}):null,el('span',{class:'cwd',text:x.cwd})));
+      for(const l of x.loops){const at=nextAt(l,Date.now());card.append(el('div',{class:'lrow'},el('span',{class:'num',text:'#'+l.number}),el('span',{class:'sched','data-kind':l.kind,text:schedule(l)}),el('span',{class:'next','data-at':at||null,text:l.kind==='goal'?'when idle':''}),el('span',{class:'prompt',title:l.prompt,text:l.prompt})))}
+      h.append(card);
+    }
+  }
+  if(!shown.length)h.append(el('div',{class:'empty'},el('strong',{text:'No loops running'}),'Start one in a pi-daemon session: /loop 10m <prompt>, /after, /cron or /goal <what done looks like>.'));
+  const off=lp.nodes.filter(n=>n.state==='offline').map(n=>n.host);
+  if(off.length)h.append(el('div',{class:'loff',text:'offline: '+off.join(', ')}));
+  tickLoops();
+}
 // Pausing auto-refresh (until resumed or the page reloads) keeps the framed
 // gallery or player still; newer syncs wait as "pending" until loaded.
 let framed=null,imagesPaused=false,imagesPending=null;
@@ -329,9 +376,9 @@ function renderAudio(){
   if(audioFramed&&want&&(audioPaused||audioPlaying())){audioPending=want;renderAudioStatus();return}
   frameAudio(want);
 }
-const views=['choices','health','tts','images','audio'];
+const views=['choices','health','loops','tts','images','audio'];
 function show(name){tab=name;for(const t of views){$('tab-'+t).setAttribute('aria-selected',String(t===name));$(t).hidden=t!==name}window.agTts?.visibility(name==='tts')}
-// Deep links: #choices, #health, #tts, #images, #audio, and
+// Deep links: #choices, #health, #loops, #tts, #images, #audio, and
 // #choices/<host>/<request id> for one question (selected once it is listed).
 function parseHash(){const parts=location.hash.slice(1).split('/').map(p=>{try{return decodeURIComponent(p)}catch{return p}});return{view:views.includes(parts[0])?parts[0]:'choices',host:parts[1],request:parts.slice(2).join('/')}}
 function go(name){if(location.hash.split('/')[0]!=='#'+name)history.pushState(null,'','#'+name);show(name)}
@@ -339,7 +386,7 @@ function pick(c){selected=keyOf(c);armed=null;history.replaceState(null,'',`#cho
 function fromHash(){const h=parseHash();if(h.view==='choices'&&h.host&&h.request)wanted={host:h.host,request:h.request};show(h.view);if(wanted&&data)render()}
 window.addEventListener('popstate',fromHash);window.addEventListener('hashchange',fromHash);
 for(const t of views){$('tab-'+t).onclick=()=>go(t);$('tab-'+t).onkeydown=e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();e.stopPropagation();const i=views.indexOf(t),next=e.key==='Home'?0:e.key==='End'?views.length-1:(i+(e.key==='ArrowRight'?1:-1)+views.length)%views.length;go(views[next]);$('tab-'+views[next]).focus()}}}
-$('refresh').onclick=()=>api('/api/refresh',{what:['choices','doctor']}).then(()=>setTimeout(poll,300)).catch(()=>{});
+$('refresh').onclick=()=>api('/api/refresh',{what:tab==='loops'?['choices','doctor','loops']:['choices','doctor']}).then(()=>setTimeout(poll,300)).catch(()=>{});
 $('pull').onclick=()=>api('/api/refresh',{what:['images']}).then(()=>setTimeout(poll,300)).catch(()=>{});
 $('audpull').onclick=()=>api('/api/refresh',{what:['audio']}).then(()=>setTimeout(poll,300)).catch(()=>{});
 $('audreload').onclick=()=>{if(audioPending)frameAudio(audioPending)};

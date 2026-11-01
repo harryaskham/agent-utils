@@ -38,6 +38,12 @@ pub struct Fake {
     pub offered: Vec<Vec<String>>,
     /// Speak AHP 1.0 (a pi-daemon after bd-0e06d8) instead of 0.8.0 (Paratenic).
     pub current: bool,
+    /// pi-daemon's `/chord` catalogue rows (`sessions.list`) and each session's
+    /// `agent-utils.loops` document (`session.document`), by session id.
+    pub chord_sessions: Vec<Value>,
+    pub loops_docs: Vec<(String, Value)>,
+    /// The `/chord` subprotocol each connection asked for.
+    pub protocols: Vec<Option<String>>,
 }
 
 pub fn select_request(id: &str, message: &str, freeform: bool) -> Value {
@@ -197,8 +203,14 @@ pub async fn serve_connection(stream: tokio::net::TcpStream, state: Arc<Mutex<Fa
     use futures_util::{SinkExt, StreamExt};
     let auth_state = state.clone();
     let callback = move |request: &Request,
-                         response: Response|
+                         mut response: Response|
           -> Result<Response, ErrorResponse> {
+        // /chord's subprotocol, echoed as pi-daemon does.
+        if let Some(protocol) = request.headers().get("sec-websocket-protocol") {
+            response
+                .headers_mut()
+                .insert("sec-websocket-protocol", protocol.clone());
+        }
         let header = request
             .headers()
             .get("authorization")
@@ -207,6 +219,13 @@ pub async fn serve_connection(stream: tokio::net::TcpStream, state: Arc<Mutex<Fa
         let refuse = {
             let mut s = auth_state.lock().unwrap();
             s.auth.push(header.clone());
+            s.protocols.push(
+                request
+                    .headers()
+                    .get("sec-websocket-protocol")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned),
+            );
             s.refuse
         };
         if let Some(status) = refuse {
@@ -286,6 +305,19 @@ pub async fn serve_connection(stream: tokio::net::TcpStream, state: Arc<Mutex<Fa
                 })
             }
             "unsubscribe" => None,
+            // pi-daemon's /chord (`ag loops`): the catalogue, then each session's loops.
+            "sessions.list" => Some(json!({"items": state.lock().unwrap().chord_sessions.clone()})),
+            "session.document" => {
+                let s = state.lock().unwrap();
+                let value = s
+                    .loops_docs
+                    .iter()
+                    .find(|(id, _)| params["sessionId"] == id.as_str())
+                    .filter(|_| params["kind"] == "agent-utils.loops")
+                    .map(|(_, doc)| doc.clone())
+                    .unwrap_or(Value::Null);
+                Some(json!({"value": value}))
+            }
             "dispatchAction" => {
                 seq += 1;
                 let reject = {

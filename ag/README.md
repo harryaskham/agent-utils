@@ -151,16 +151,33 @@ One concurrent, bounded, read-only pass per node:
 
 A node that answers neither SSH nor any AHP host collapses to one `offline` line. A node reachable over AHP but not SSH is a warning, as is a configured pi-daemon or bridge that is not answering on a reachable node. Paratenic is optional: when it is not running but pi-daemon serves the node it is shown as `○ … optional`, not a warning. "Sessions waiting" counts the daemon's waiting sessions plus the larger of the bridge's and Paratenic's live ones (a TUI Pi's question can show through both); stale Paratenic sessions whose backend is gone are counted apart. A node that never archived audio or images is synced and empty, not "not pulled yet". Exit 3 only for real errors; offline and warnings exit 0. `--json` and the `ag_doctor` MCP tool return the full report.
 
+## Fleet loops (`ag loops`)
+
+`ag loops` lists the automation running inside each node's pi-daemon sessions: every live `/loop`, `/after`, `/cron` and `/goal` (agent-utils' `loop.mjs` keeps them in each session's `agent-utils.loops` Durable document). It reads each daemon over `/chord` (the same address and token as its `/ahp`): `sessions.list`, then `session.document` for sessions active in the last 8 days (a loop's own ticks keep its session active), at most 128 per node, most recent first. A schedule rarer than that is missed until it next fires. Read-only, concurrent per node; unreachable nodes are listed quietly as offline.
+
+```text
+⟳ ms-mac  4 live · 41 sessions read
+  cltv-switcher  /Users/harryaskham/collective
+    #1   every 3h · next 1h9m  Check prebuild/autobuild health and disk capacity …
+⟳ ms-dev-8  3 live · 22 sessions read
+  culture-android  /home/harryaskham/.herdr/worktrees/paratenic/culture-improvements
+    #9   every 30m · next 7s  Continue and get this working …
+    #4   goal · 3/50 nudges  all Culture Android tests pass
+```
+
+`--json` and the `ag_loops_list` MCP tool return each node's sessions with their loops (`kind`, `prompt`, `interval_secs`, `cron`/`time_zone`, `next_at_ms`, a goal's `nudges`/`max_nudges`).
+
 ## Live dashboard (`ag dash`)
 
-`ag dash` serves one page with **Choices**, **Health**, **TTS**, **Images** and **Audio** tabs and opens it in the browser (`--no-open` prints the URL; `--json` prints `{url, address}`). It is a live server, not a generated file:
+`ag dash` serves one page with **Choices**, **Health**, **Loops**, **TTS**, **Images** and **Audio** tabs and opens it in the browser (`--no-open` prints the URL; `--json` prints `{url, address}`). It is a live server, not a generated file:
 
 - choices are re-read from each node's pi-daemon, bridge and Paratenic whenever the page is open and the cached view is older than 20 s, after every answer (that node only), and every `dash.refresh_seconds` (default 300);
 - health runs every `dash.refresh_seconds` and after each image pull;
+- loops (as `ag loops`) are read on the same tick but at most every two minutes, a rough overview; the Loops tab's **Refresh** (or `r` there) reads them now, and its countdowns tick between reads;
 - TTS starts **one shared collector per dashboard process**, reusing `ag tts`'s local file readers and remote SSH cursor/reconnect path. It starts with 20 recent lines per selected host and follows continuously, even with no browser open. Each browser reads the shared stream over authenticated SSE—not another set of SSH tails. This is the **speech-request text feed**, not an audio player or proof that a request played;
 - the merged media sync (`ag sync`: images and shared audio) runs in the background every `dash.image_refresh_seconds` (default 300) while the dash is running; `--no-images` / `--no-audio` (`dash.audio`) serve that pathway's existing cache only. The Images and Audio tabs embed the same viewers as `ag image` / `ag audio`; `/audio/*` streams with HTTP ranges so clips can seek, and a sync never reloads the player while a clip is playing. See [fleet audio](../docs/ag-audio.md).
 
-Each view has a bookmarkable link: `#choices`, `#health`, `#tts`, `#images`, `#audio`, and `#choices/<host>/<request id>` for one question (selected once it is listed; clicking or `j`/`k` updates it). Tab switches add browser history, so Back returns to the previous view.
+Each view has a bookmarkable link: `#choices`, `#health`, `#loops`, `#tts`, `#images`, `#audio`, and `#choices/<host>/<request id>` for one question (selected once it is listed; clicking or `j`/`k` updates it). Tab switches add browser history, so Back returns to the previous view.
 
 The page answers questions through the same path as the TUI and CLI. Keys: `j`/`k` move, `1`–`9` answer, `i` reply, `d` decline (twice), `r` refresh. Every answer's outcome (including endpoint or connection failures) is kept in `/api/state`'s `receipts` and logged to the service journal as `ag dash: answer <host> <session> <request>: <state>` — never the answer itself.
 
@@ -364,7 +381,7 @@ ag completions zsh
 
 `ag_audio_pull` and `ag_sync` (all pathways, `kinds` narrows) work the same way and also require `confirmed=true`; neither plays or returns audio bytes.
 
-`ag mcp stdio` exposes `ag_hosts_list`, `ag_tts_list`, `ag_tts_status`, `ag_image_list`, `ag_image_info`, `ag_audio_list`, `ag_audio_info`, `ag_choices_list`, `ag_doctor`, plus `ag_tts_mute` / `ag_tts_unmute` / `ag_choices_answer` (require `confirmed=true` after operator approval) and house `config_status`, `config_validate`, `config_schema`, and confirmation-gated `config_init` tools. `ag tools` lists schemas; `ag call TOOL '{...}'` invokes the exact same typed handler. Unending tails and binary downloads are CLI-only. Read operations never mutate archives. Remote peers use a private typed `ag node ...` protocol that ignores fleet config, preventing recursion. Speech-control writes use the same policy implementation as the local CLI and MCP.
+`ag mcp stdio` exposes `ag_hosts_list`, `ag_tts_list`, `ag_tts_status`, `ag_image_list`, `ag_image_info`, `ag_audio_list`, `ag_audio_info`, `ag_choices_list`, `ag_loops_list`, `ag_doctor`, plus `ag_tts_mute` / `ag_tts_unmute` / `ag_choices_answer` (require `confirmed=true` after operator approval) and house `config_status`, `config_validate`, `config_schema`, and confirmation-gated `config_init` tools. `ag tools` lists schemas; `ag call TOOL '{...}'` invokes the exact same typed handler. Unending tails and binary downloads are CLI-only. Read operations never mutate archives. Remote peers use a private typed `ag node ...` protocol that ignores fleet config, preventing recursion. Speech-control writes use the same policy implementation as the local CLI and MCP.
 
 Exit codes: `0` success/normal Ctrl-C or closed pipe; `1` command/config/I/O failure; `2` clap usage error; `3` finite fleet result with one or more failed nodes (healthy data is still returned), or an answer that was not accepted. Offline nodes in `choices`/`doctor` are reported but do not set 3. Configured paths/errors are local private diagnostic data. Human output escapes terminal control characters. Limits: 128 nodes, 1000 records per node/request, 8 MiB per speech line, 64 MiB image/response, 256 MiB audio clip, 64 KiB sidecar and a 200000-file archive scan. Incomplete appended lines are held until newline; malformed/oversized records are reported, not interpreted as commands. Images are checksum-verified before download; downloads refuse traversal, symlink escapes and overwrite of existing destinations.
 
