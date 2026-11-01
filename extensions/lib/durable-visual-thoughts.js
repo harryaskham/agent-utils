@@ -113,8 +113,8 @@ export function createVisualThoughtsModule({
     return litellmChat({
       model: reference.startsWith("litellm/") ? reference.slice("litellm/".length) : session.config.clientPromptModel,
       request, signal,
-      baseUrl: session.config.baseUrl || env.LITELLM_BASE_URL || env.LITELLM_PROXY_URL,
-      apiKey: env[session.config.apiKeyEnv || "LITELLM_MASTER_KEY"],
+      baseUrl: session.config.baseUrl || session.env.LITELLM_BASE_URL || session.env.LITELLM_PROXY_URL,
+      apiKey: session.env[session.config.apiKeyEnv || "LITELLM_MASTER_KEY"],
       ...(fetchImpl ? { fetchImpl } : {}),
     });
   }
@@ -162,8 +162,9 @@ export function createVisualThoughtsModule({
       if (info.ui) session.ui = info.ui;
       return session;
     }
-    session = { id, info, ui: info.ui || null, images: [], current: 0, choice: "auto", watchers: null, lastError: "", blocked: "", overrides: {} };
+    session = { id, info, ui: info.ui || null, images: [], current: 0, choice: "auto", watchers: null, lastError: "", blocked: "", overrides: {}, env: { ...env } };
     sessions.set(id, session);
+    await sessionVariables(session);
     let stored = {};
     try { stored = (await info.state?.get?.(SETTINGS_KEY)) || {}; } catch {}
     session.overrides = stored.overrides && typeof stored.overrides === "object" ? stored.overrides : {};
@@ -186,7 +187,7 @@ export function createVisualThoughtsModule({
     session.painter = createPainter({
       config: session.config,
       promptTurn: (request, signal) => promptTurn(session, request, signal),
-      provider: createImageProvider(session.config, { env, ...(fetchImpl ? { fetchImpl } : {}) }),
+      provider: createImageProvider(session.config, { env: session.env, ...(fetchImpl ? { fetchImpl } : {}) }),
       onImage: (record, png) => onImage(session, record, png).catch((error) => report(session, error)),
       budget,
       now,
@@ -202,6 +203,17 @@ export function createVisualThoughtsModule({
 
   async function save(session) {
     try { await session.info?.state?.set?.(SETTINGS_KEY, { choice: session.choice, overrides: session.overrides }); } catch {}
+  }
+
+  /**
+   * The session's variables over the worker's: pi-daemon loads a profile's envFiles (where the
+   * LiteLLM key lives) for its sessions, not into the worker's own environment. Refreshed in
+   * place (providers read it when they paint).
+   */
+  async function sessionVariables(session) {
+    let vars = {};
+    try { vars = (await session.info?.env?.all?.()) || {}; } catch {}
+    for (const [key, value] of Object.entries(vars)) if (typeof value === "string") session.env[key] = value;
   }
 
   /** Clients showing the session, where the host can count them (null: it cannot). */
@@ -253,6 +265,7 @@ export function createVisualThoughtsModule({
       return void update(session);
     }
     if (type === "agent_start") {
+      await sessionVariables(session);
       await countWatchers(session);
       update(session);
       // Runs are followed while not painting too, so a client arriving mid-run paints at once.
@@ -328,7 +341,7 @@ export function createVisualThoughtsModule({
         if (!SESSION_KEYS.has(change.key)) return reply(`/thoughts: ${change.key} is set in settings.json here`);
         session.overrides = { ...session.overrides, [change.key]: change.value };
         Object.assign(session.config, { [change.key]: change.value });
-        session.painter.setProvider(createImageProvider(session.config, { env, ...(fetchImpl ? { fetchImpl } : {}) }));
+        session.painter.setProvider(createImageProvider(session.config, { env: session.env, ...(fetchImpl ? { fetchImpl } : {}) }));
         if (HINT_KEYS.has(change.key) && session.images.length) await publish(session);
         await save(session);
         return reply(`visual thoughts: ${change.key} = ${change.value} (this session)`);

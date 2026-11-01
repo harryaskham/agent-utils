@@ -799,6 +799,8 @@ function moduleInfo(ui, sessionId = "s1") {
     info: {
       sessionId, ui,
       state: { get: async (key) => values.get(key), set: async (key, value) => void values.set(key, value) },
+      // The session's variables (pi-daemon: the profile's envFiles, then the session's own).
+      env: { all: async () => ({ LITELLM_MASTER_KEY: "session-key" }) },
       notify: (text) => notices.push(text),
     },
   };
@@ -807,7 +809,7 @@ function moduleInfo(ui, sessionId = "s1") {
 function paintingFetch(requests, { pngBytes = solidPng(32, 18, [10, 60, 90]) } = {}) {
   return async (url, init) => {
     const body = JSON.parse(init.body);
-    requests.push({ url, body });
+    requests.push({ url, body, headers: init.headers });
     if (url.endsWith("/v1/chat/completions")) return new Response(JSON.stringify({ choices: [{ message: { content: `a calm harbour ${requests.length}` } }] }));
     return new Response(JSON.stringify({ data: [{ b64_json: pngBytes.toString("base64") }] }));
   };
@@ -819,7 +821,7 @@ test("pi-daemon module: paints the session's backdrop slot once, for every clien
   const requests = [];
   const { ui, slots } = fakeSlotsUi({ watchers: 0 });
   const module = createVisualThoughtsModule({
-    env: { LITELLM_BASE_URL: "http://proxy:4000", LITELLM_MASTER_KEY: "k" },
+    env: { LITELLM_BASE_URL: "http://proxy:4000" },
     settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minIntervalMs: 0, slotImages: 2, opacity: 0.4, budgetPerMinute: 60 } } },
     fetchImpl: paintingFetch(requests),
     log: () => {},
@@ -847,6 +849,9 @@ test("pi-daemon module: paints the session's backdrop slot once, for every clien
     assert.deepEqual(slot.hints, { placement: "backdrop", opacity: 0.4, fit: "cover", feather: 0.12, cycleMs: 18_000, transition: "crossfade" });
     // No model registry here: the prompt went to the chat endpoint; the image to the images API.
     assert.equal(requests[0].url, "http://proxy:4000/v1/chat/completions");
+    // The key comes from the session's variables, not the worker's environment.
+    assert.equal(requests[0].headers?.Authorization, "Bearer session-key");
+    assert.equal(requests[1].headers?.Authorization, "Bearer session-key");
     // What the run said before anyone watched is painted at once.
     assert.match(requests[0].body.messages[1].content, /\[prompt\] paint the harbour/);
     assert.equal(requests[1].url, "http://proxy:4000/v1/images/generations");
