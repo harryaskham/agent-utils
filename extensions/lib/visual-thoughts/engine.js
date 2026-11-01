@@ -272,9 +272,10 @@ export function createVisualThoughtsEngine({
     const at = now();
     // The size first: a new one moves holds to a new generation.
     if (images.size && surface.size()) ensureConfigured();
-    // Paused (an unfocused pane): a transition under way finishes; then the image holds, made
-    // again for a new size, but the cycle does not move on.
-    if (paused && !job) {
+    // Paused (an unfocused pane): a transition under way finishes, and a new image still comes in
+    // (crossfaded, as when focused); otherwise the image holds, made again for a new size, and
+    // the cycle does not move on.
+    if (paused && !job && !rotation.hasNews()) {
       const id = rotation.status().current;
       if (!id) return;
       const key = holdKey(id);

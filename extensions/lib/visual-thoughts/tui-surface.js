@@ -47,7 +47,8 @@ export function fileTransportUsable(env = process.env) {
  */
 export function backdropLayer(layer, env = process.env) {
   if (layer === "over" || layer === "under") return layer;
-  return env.HERDR_ENV ? "over" : "under";
+  // Above cell backgrounds (tool boxes, panels), below text: the backdrop shows everywhere.
+  return "over";
 }
 
 /** The kitty command that transmits a renderer payload as image `imageId` (no placement). */

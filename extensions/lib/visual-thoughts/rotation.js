@@ -63,6 +63,11 @@ export function createRotation({ holdMs = 15_000, fadeMs = 3_000, minShowMs = 4_
       prune();
       return this.tick(now);
     },
+    /** Whether a new image waits to be shown (or nothing is shown yet and something could be). */
+    hasNews() {
+      if (pending && has(pending) && pending !== current) return true;
+      return !current && !transition && images.length > 0;
+    },
     /** Show `id` next (after the current image's minimum), as a newly added image would be. */
     focus(id, now) {
       if (!has(id) || id === current) return this.tick(now);

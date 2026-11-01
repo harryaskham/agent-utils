@@ -76,7 +76,7 @@ tmux is not supported yet (`PI_VISUAL_THOUGHTS_TMUX=1` to try). `PI_VISUAL_THOUG
 | `canvasOpacity` | `0.45` | backdrop alpha blended into `/gfx full`'s background (`canvas-opacity` at runtime) |
 | `fit` | `cover` | `cover`, `contain`, `stretch` |
 | `feather` | `0.12` | edge fade, fraction of the shorter side |
-| `layer` | `auto` | `under` cell backgrounds (panels, tool boxes and dialogs stay solid; the image shows around the text) or `over` them (tints everything); `auto`: `under`, but `over` inside herdr |
+| `layer` | `auto` | `over` cell backgrounds and under the text (kitty z between −2³⁰ and 0: tool boxes, panels and dialogs are tinted by the image, text stays on top), or `under` them (backgrounds stay solid; the image shows only around the text); `auto` is `over` |
 | `holdMs`, `fadeMs` | `18000`, `2800` | |
 | `effect` | `random` | `ripple`, `wave`, `dissolve`, `bloom`, `drift`, `fade` |
 | `fps` | `60` | transition frame rate |

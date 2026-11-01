@@ -570,7 +570,7 @@ test("TUI surface: keyed images placed over the screen in one update, put back a
   assert.equal(writes.at(-1), "after", "unhooked");
 });
 
-test("TUI surface: file transport when local; under in tmux; nothing outside fullscreen", async () => {
+test("TUI surface: file transport when local; over cell backgrounds by default; nothing outside fullscreen", async () => {
   const { terminal, writes } = fakeTerminal();
   assert.equal(createTuiBackdropSurface({ tui: { mode: "fullscreen", terminal }, env: {}, options: () => ({ transport: "auto" }), ids: [1] }).transport(), "file");
   assert.equal(createTuiBackdropSurface({ tui: { mode: "fullscreen", terminal }, env: { SSH_CONNECTION: "x" }, options: () => ({ transport: "auto" }), ids: [1] }).transport(), "stream");
@@ -580,8 +580,14 @@ test("TUI surface: file transport when local; under in tmux; nothing outside ful
   tmux.show("k");
   await flushed();
   assert.match(writes.at(-1), /\x1bPtmux;/, "passthrough");
-  assert.equal(parseKittyGraphicsCommands(writes.at(-1)).find((c) => c.control.a === "p").control.z, String(BACKDROP_Z.under));
+  assert.equal(parseKittyGraphicsCommands(writes.at(-1)).find((c) => c.control.a === "p").control.z, String(BACKDROP_Z.over), "above cell backgrounds, below text, by default");
   tmux.dispose();
+  const under = createTuiBackdropSurface({ tui: { mode: "fullscreen", terminal }, env: {}, options: () => ({ layer: "under" }), ids: [1, 2] });
+  under.upload("k", { medium: "d", data: "", width: 1, height: 1 });
+  under.show("k");
+  await flushed();
+  assert.equal(parseKittyGraphicsCommands(writes.at(-1)).find((c) => c.control.a === "p").control.z, String(BACKDROP_Z.under), "layer under: below cell backgrounds");
+  under.dispose();
   const herdr = createTuiBackdropSurface({ tui: { mode: "fullscreen", terminal }, env: { HERDR_ENV: "1" }, options: () => ({}), ids: [1, 2] });
   herdr.upload("k", { medium: "d", data: "", width: 1, height: 1 });
   herdr.show("k");
@@ -664,7 +670,7 @@ test("extension in pi-client: each pane paints its own session; prompts over the
     assert.equal(chat.url, "http://proxy:4000/v1/chat/completions");
     assert.equal(chat.body.model, "deepseek-v4-flash");
     assert.match(chat.body.messages[1].content, /\[prompt\] draw the harbour/);
-    assert.ok(left.log.some((line) => line.endsWith(" under")), "shown under cell backgrounds by default");
+    assert.ok(left.log.some((line) => line.endsWith(" over")), "shown above cell backgrounds, below text, by default");
 
     // Focus moves to the right pane, another session: it gets its own engine; the left holds still.
     const rightCtx = ctxFor(right, "s-right");
@@ -933,12 +939,17 @@ test("engine slot mode: shows the session's slot (fetched images, its current, i
   engine.output("text", "z".repeat(5_000));
   await h.time.advance(100);
   assert.equal(engine.status().generated, 0);
-  // The slot moves on: u1 dropped, u3 added and current; an older revision is ignored.
+  // The slot moves on while the pane is unfocused (paused): u1 dropped, u3 added and current,
+  // shown all the same; an older revision is ignored.
+  engine.pause(true);
   await engine.syncSlot({ kind: "image-set", rev: 2, images: [{ uri: "u2", digest: "sha256:bb" }, { uri: "u3", digest: "sha256:cc" }], current: 1 });
   await engine.syncSlot({ kind: "image-set", rev: 1, images: [], current: 0 });
   await h.time.advance(400);
-  assert.match(h.surface.shown, /^hold:slot-sha256-cc:/);
+  assert.match(h.surface.shown, /^hold:slot-sha256-cc:/, "a new image comes in on an unfocused pane");
   assert.equal(engine.status().images, 2);
+  await h.time.advance(20_000);
+  assert.match(h.surface.shown, /^hold:slot-sha256-cc:/, "but it does not cycle");
+  engine.pause(false);
   assert.ok(!h.surface.has("hold:slot-sha256-aa:1"));
   // Cleared (an empty slot): nothing shown.
   await engine.syncSlot({ kind: "image-set", images: [], current: 0 });
