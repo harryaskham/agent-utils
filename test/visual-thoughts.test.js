@@ -654,10 +654,18 @@ test("extension in pi-client: each pane paints its own session; prompts over the
   const left = fakeBackdrop("left");
   const right = fakeBackdrop("right");
   const notices = [];
-  const ctxFor = (backdrop, sessionId) => ({
-    ui: { backdrop: () => backdrop, notify: (message) => notices.push(message), setStatus() {} },
-    sessionManager: { getSessionId: () => sessionId, getEntries: () => [], getBranch: () => [] },
-  });
+  // pi-client's pinned ctx: its statuses are the pane's (statusScope "pane").
+  const statuses = new Map(); // backdrop name → status text
+  const ctxFor = (backdrop, sessionId) => {
+    const ctx = {
+      ui: { backdrop: () => backdrop, notify: (message) => notices.push(message), setStatus() {} },
+      sessionManager: { getSessionId: () => sessionId, getEntries: () => [], getBranch: () => [] },
+    };
+    const pinned = { ...ctx, ui: { ...ctx.ui, statusScope: "pane", setStatus: (key, text) => { if (text === undefined) statuses.delete(backdrop.name); else statuses.set(backdrop.name, text); } } };
+    ctx.pinned = () => pinned;
+    pinned.pinned = () => pinned;
+    return ctx;
+  };
   const emit = async (name, event, ctx) => { for (const fn of handlers.get(name) || []) await fn(event, ctx); };
   const waitFor = async (what, check) => { for (let i = 0; i < 400; i += 1) { if (check()) return; await new Promise((resolve) => setTimeout(resolve, 10)); } throw new Error(`timed out: ${what}`); };
   try {
@@ -666,6 +674,8 @@ test("extension in pi-client: each pane paints its own session; prompts over the
     await emit("session_start", {}, leftCtx);
     await emit("agent_start", {}, leftCtx);
     await emit("message_end", { message: { role: "user", content: [{ type: "text", text: "draw the harbour" }] } }, leftCtx);
+    await waitFor("the left pane painting, said in its own footer", () => statuses.get("left") === "✧ painting" || statuses.get("left") === "✧ prompting");
+    assert.equal(statuses.has("right"), false, "not in the other pane's");
     await waitFor("the left pane's image shown", () => left.log.some((line) => /^show hold:/.test(line)));
     const chat = requests.find((r) => r.url.endsWith("/chat/completions"));
     assert.equal(chat.url, "http://proxy:4000/v1/chat/completions");

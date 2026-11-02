@@ -156,6 +156,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
       try { pane.stopWatch?.(); } catch {}
       try { pane.engine.dispose(); } catch {}
       try { pane.surface.dispose?.(); } catch {}
+      if (paneStatuses(pane)) try { pane.statusCtx.ui.setStatus(STATUS_KEY, undefined); } catch {}
     }
 
     /** The pane `ctx` refers to: its pi-client backdrop, or TUI Pi's screen ("tui"). */
@@ -189,6 +190,27 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         onResize: () => holder.current?.engine.resized(),
         onLost: () => holder.current?.engine.lost(),
       });
+    }
+
+    /** Whether a pane's statuses are its own (pi-client's pinned ctx): its footer only. */
+    function paneStatuses(pane) {
+      return pane?.statusCtx?.ui?.statusScope === "pane";
+    }
+
+    /**
+     * A pane's "painting"/"prompting" status: in its own footer where pi-client keeps pane statuses,
+     * else (one status for the whole client) only for the focused pane.
+     */
+    function showStatus(pane) {
+      if (!pane) return;
+      const status = pane.engine?.status?.();
+      const text = status?.enabled && status.activity !== "idle" ? `✧ ${status.activity}` : undefined;
+      if (paneStatuses(pane)) {
+        try { pane.statusCtx.ui.setStatus(STATUS_KEY, text); } catch {}
+        return;
+      }
+      if (focused !== pane) return;
+      try { lastCtx?.ui?.setStatus?.(STATUS_KEY, text); } catch {}
     }
 
     /** The pane `ctx` refers to (made, or made afresh for a new session), focused: the others hold still. */
@@ -227,11 +249,9 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
             const item = await paneCtx?.sessionMedia?.(uri);
             return item?.data ? Buffer.from(item.data, "base64") : null;
           },
-          onChange: (status) => {
-            if (focused !== made) return;
-            try { lastCtx?.ui?.setStatus?.(STATUS_KEY, status.enabled && status.activity !== "idle" ? `✧ ${status.activity}` : undefined); } catch {}
-          },
+          onChange: () => showStatus(made),
         });
+        pane.statusCtx = paneCtx;
         panes.set(key, pane);
         pane.engine.setEnabled(enabled);
         if (paneCtx?.chord) void followHost(made, paneCtx);
@@ -241,8 +261,11 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         }
       }
       if (focused !== pane) {
+        const before = focused;
         focused = pane;
         for (const other of panes.values()) other.engine.pause(other !== pane);
+        // Client-wide statuses (TUI Pi, older pi-client) say what the focused pane does.
+        if (!paneStatuses(pane) && before) showStatus(pane);
       }
       return pane;
     }
@@ -349,7 +372,10 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
     function setEnabled(ctx, on) {
       if (!on) {
         enabled = false;
-        for (const pane of panes.values()) pane.engine.setEnabled(false);
+        for (const pane of panes.values()) {
+          pane.engine.setEnabled(false);
+          if (paneStatuses(pane)) try { pane.statusCtx.ui.setStatus(STATUS_KEY, undefined); } catch {}
+        }
         try { ctx?.ui?.setStatus?.(STATUS_KEY, undefined); } catch {}
         return true;
       }
