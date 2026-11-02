@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { CONTEXT_LIMIT_ENTRY, RETRIGGER_MS, formatTokens, parseContextLimit, responseContext } from "../extensions/lib/context-limit.js";
+import { CONTEXT_LIMIT_ENTRY, RETRIGGER_MS, formatTokens, parseContextLimit, responseContext, transcriptContext } from "../extensions/lib/context-limit.js";
 import contextLimitExtension, { branchLimit } from "../extensions/context-limit.js";
 
 test("limits parse from 500k, 1.2m, 300000 and off; too small or malformed ones are refused", () => {
@@ -153,4 +153,84 @@ test("pi-daemon: /context sets the limit in module state; a response past it ask
   await commands.context.run("300k", ctx);
   await observe(response(900_000), { sessionId: "s2", conversationId: 1, state });
   await assert.doesNotReject(observe({ type: "message_end", message: { role: "user" } }, info));
+});
+
+/** A transcript entry: a response with this usage (and stop reason). */
+function answer(usage, stopReason = "stop") {
+  return { kind: "pi.assistant", model: [{ role: "assistant", stopReason, usage }] };
+}
+
+test("a transcript measures like pi-daemon's footer: the newest good response, back to a compaction", () => {
+  assert.equal(transcriptContext([answer({ input: 2, cacheRead: 500_000, output: 98 })]), 500_100);
+  assert.equal(transcriptContext([answer({ totalTokens: 584_000, input: 1 })]), 584_000, "totalTokens when present");
+  assert.equal(
+    transcriptContext([answer({ input: 1, cacheRead: 300_000 }), { kind: "pi.user" }, answer({ input: 9, cacheRead: 900_000 }, "aborted"), answer({ input: 1 }, "error")]),
+    300_001,
+    "aborted and failed responses measure nothing",
+  );
+  assert.equal(transcriptContext([answer({ input: 1, cacheRead: 900_000 }), { kind: "pi.compaction" }]), undefined, "a compaction starts over");
+  assert.equal(transcriptContext([answer({ input: 1, cacheRead: 900_000 }), { kind: "pi.reset" }, { kind: "pi.user" }]), undefined);
+  assert.equal(transcriptContext([]), undefined);
+  assert.equal(transcriptContext(undefined), undefined);
+});
+
+test("pi-daemon (bd-da24a9): /context measures an idle session from its transcript, and a limit below it compacts at once", async () => {
+  const { commands, observe } = await import("../extensions/durable/context-limit.mjs");
+  const state = moduleState();
+  const notices = [];
+  const compactions = [];
+  let entries = [answer({ input: 4, cacheRead: 584_000, output: 0 })];
+  const conversation = {
+    async context() { return { entries }; },
+    async compact(instructions, context) { compactions.push({ instructions, context }); return 77; },
+  };
+  const opened = [];
+  const ctx = {
+    sessionId: "idle-session",
+    conversationId: 3,
+    context: { marker: true },
+    state,
+    notify: (text) => notices.push(text),
+    harness: { async conversation(id, context) { opened.push([id, context]); return conversation; } },
+  };
+
+  // No response since the worker started: the size comes from the transcript.
+  await commands.context.run("", ctx);
+  assert.match(notices.at(-1), /^No context limit for this session \(now 584k\)/);
+  assert.deepEqual(opened[0], [3, { marker: true }]);
+
+  // A limit below the current size compacts now, once.
+  await commands.context.run("512k", ctx);
+  assert.equal(await state.get("limit"), 512_000);
+  assert.deepEqual(compactions, [{ instructions: undefined, context: { marker: true } }]);
+  assert.match(notices.at(-1), /passes 512k tokens \(now 584k\)\. It is over that now, so it is compacting in the background\./);
+  // Setting it again (or a response over it) within RETRIGGER_MS does not ask twice.
+  await commands.context.run("512k", ctx);
+  await observe({ type: "message_end", message: { role: "assistant", usage: { input: 1, cacheRead: 590_000 } } }, { ...ctx, compact: async () => compactions.push("observer") });
+  assert.equal(compactions.length, 1);
+
+  // A limit above the current size: nothing to do.
+  const other = { ...ctx, sessionId: "under", notify: (text) => notices.push(text) };
+  entries = [answer({ input: 1, cacheRead: 200_000 })];
+  await commands.context.run("500k", other);
+  assert.equal(compactions.length, 1);
+  assert.match(notices.at(-1), /passes 500k tokens \(now 200k\)\. \/context off/);
+
+  // The transcript wins over the last response seen: after the compaction, nothing measures it.
+  entries = [answer({ input: 4, cacheRead: 584_000 }), { kind: "pi.compaction" }];
+  await commands.context.run("", ctx);
+  assert.match(notices.at(-1), /passes 500k tokens\. \/context off/, "no stale (now 584k) after the compaction");
+
+  // Just compacted (or a host without the harness): no size, no compaction, no error.
+  entries = [answer({ input: 1, cacheRead: 900_000 }), { kind: "pi.compaction" }];
+  await commands.context.run("100k", { ...ctx, sessionId: "compacted" });
+  assert.equal(compactions.length, 1);
+  assert.match(notices.at(-1), /passes 100k tokens\. \/context off/);
+  await commands.context.run("100k", { sessionId: "old-host", conversationId: 1, state, notify: (text) => notices.push(text) });
+  assert.match(notices.at(-1), /passes 100k tokens\. \/context off/);
+  // A failing compaction leaves the limit set and says nothing false.
+  entries = [answer({ input: 1, cacheRead: 900_000 })];
+  conversation.compact = async () => { throw new Error("busy"); };
+  await commands.context.run("100k", { ...ctx, sessionId: "failing" });
+  assert.match(notices.at(-1), /passes 100k tokens \(now 900k\)\. \/context off/);
 });

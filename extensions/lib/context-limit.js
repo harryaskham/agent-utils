@@ -56,15 +56,37 @@ export function responseContext(usage) {
   return n(usage.input) + n(usage.cacheRead) + n(usage.cacheWrite) + n(usage.output);
 }
 
+/**
+ * A conversation's context from its transcript, as pi-daemon's footer measures it
+ * (session-calls.ts contextUsage): the newest response's usage, skipping aborted and failed
+ * responses, back to the last compaction or reset. Undefined when nothing measures it.
+ */
+export function transcriptContext(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const entry = list[index];
+    if (entry?.kind === "pi.compaction" || entry?.kind === "pi.reset") return undefined;
+    if (entry?.kind !== "pi.assistant") continue;
+    const message = (Array.isArray(entry.model) ? entry.model : []).find((candidate) => candidate?.role === "assistant");
+    if (message?.usage === undefined || message.stopReason === "aborted" || message.stopReason === "error") continue;
+    const total = Number(message.usage.totalTokens);
+    const tokens = Number.isFinite(total) && total > 0 ? total : responseContext(message.usage);
+    return tokens > 0 ? tokens : undefined;
+  }
+  return undefined;
+}
+
 /** A valid stored limit, or null. */
 export function storedLimit(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= MIN_CONTEXT_LIMIT ? value : null;
 }
 
-/** What `/context` says about a session. */
-export function describeLimit(limit, tokens) {
+/** What `/context` says about a session; `compacting`: it is over the limit and compacts now. */
+export function describeLimit(limit, tokens, { compacting = false } = {}) {
   const now = Number.isFinite(tokens) && tokens > 0 ? ` (now ${formatTokens(tokens)})` : "";
-  return limit === null
-    ? `No context limit for this session${now}: it compacts at the model's own threshold. Set one with /context 500k.`
-    : `This session compacts when its context passes ${formatTokens(limit)} tokens${now}. /context off removes the limit.`;
+  if (limit === null) {
+    return `No context limit for this session${now}: it compacts at the model's own threshold. Set one with /context 500k.`;
+  }
+  const action = compacting ? " It is over that now, so it is compacting in the background." : "";
+  return `This session compacts when its context passes ${formatTokens(limit)} tokens${now}.${action} /context off removes the limit.`;
 }
