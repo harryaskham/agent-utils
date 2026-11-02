@@ -114,13 +114,25 @@ export function createVisualThoughtsModule({
       const response = await runPiTextTurn(info, { model, ...request, signal, abortedMessage: "visual thoughts prompt superseded" });
       return response.text;
     }
+    return chatPrompt(session, reference.startsWith("litellm/") ? reference.slice("litellm/".length) : session.config.clientPromptModel, request, signal);
+  }
+
+  /** The prompt over the OpenAI-compatible chat endpoint (LiteLLM). */
+  function chatPrompt(session, model, request, signal) {
     return litellmChat({
-      model: reference.startsWith("litellm/") ? reference.slice("litellm/".length) : session.config.clientPromptModel,
-      request, signal,
+      model, request, signal,
       baseUrl: session.config.baseUrl || session.env.LITELLM_BASE_URL || session.env.LITELLM_PROXY_URL,
       apiKey: session.env[session.config.apiKeyEnv || "LITELLM_MASTER_KEY"],
       ...(fetchImpl ? { fetchImpl } : {}),
     });
+  }
+
+  /** The fallback when the prompt model answers nothing: clientPromptModel, unless that was the one asked. */
+  function fallbackPrompt(session, request, signal) {
+    const reference = String(session.config.promptModel || "");
+    const model = session.config.clientPromptModel;
+    if (!model || reference === `litellm/${model}`) return "";
+    return chatPrompt(session, model, request, signal);
   }
 
   /** Write the slot, waiting out the host's per-slot rate limit. */
@@ -191,6 +203,7 @@ export function createVisualThoughtsModule({
     session.painter = createPainter({
       config: session.config,
       promptTurn: (request, signal) => promptTurn(session, request, signal),
+      fallbackPromptTurn: (request, signal) => fallbackPrompt(session, request, signal),
       provider: createImageProvider(session.config, { env: session.env, ...(fetchImpl ? { fetchImpl } : {}) }),
       onImage: (record, png) => onImage(session, record, png).catch((error) => report(session, error)),
       budget,
@@ -304,6 +317,7 @@ export function createVisualThoughtsModule({
       `  this worker's budget: ${budgetNow.concurrent} at a time, ${budgetNow.perMinute} a minute (${budgetNow.lastMinute} in the last minute${budgetNow.waiting ? `, ${budgetNow.waiting} waiting` : ""}${budgetNow.pausedMs > 1_000 ? `, paused ${Math.ceil(budgetNow.pausedMs / 1000)}s: the provider is struggling` : ""})`,
     ];
     if (status.generated) lines.push(`  ${status.generated} painted here since the worker started; the last took ${(status.lastMs / 1000).toFixed(1)}s`);
+    if (status.fallbacks) lines.push(`  ${status.fallbacks} prompt${status.fallbacks === 1 ? "" : "s"} from ${session.config.clientPromptModel}: ${session.config.promptModel} answered nothing`);
     if (status.prompt) lines.push(`  last prompt: ${status.prompt.slice(0, 200)}`);
     if (session.lastError || status.lastError) lines.push(`  last error: ${session.lastError || status.lastError}`);
     return lines.join("\n");

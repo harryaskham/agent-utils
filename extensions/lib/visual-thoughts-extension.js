@@ -133,13 +133,25 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         const response = await runPiTextTurn(ctx, { model, ...request, signal, completeImpl, abortedMessage: "visual thoughts prompt superseded" });
         return response.text;
       }
-      const model = reference.startsWith("litellm/") ? reference.slice("litellm/".length) : config.clientPromptModel;
+      return chatPrompt(reference.startsWith("litellm/") ? reference.slice("litellm/".length) : config.clientPromptModel, request, signal);
+    }
+
+    function chatPrompt(model, request, signal) {
       return litellmChat({
         model, request, signal,
         baseUrl: config.baseUrl || env.LITELLM_BASE_URL || env.LITELLM_PROXY_URL,
         apiKey: env[config.apiKeyEnv || "LITELLM_MASTER_KEY"],
         ...(fetchImpl ? { fetchImpl } : {}),
       });
+    }
+
+    /** When the prompt model answers nothing: clientPromptModel, unless that was the one asked. */
+    function fallbackPromptTurn(request, signal) {
+      const model = config.clientPromptModel;
+      const reference = String(config.promptModel || "");
+      const usedChat = reference.startsWith("litellm/") ? reference === `litellm/${model}` : typeof lastCtx?.modelRegistry?.find !== "function";
+      if (!model || usedChat) return "";
+      return chatPrompt(model, request, signal);
     }
 
     function sessionOf(ctx) {
@@ -240,6 +252,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
           ...(now ? { now } : {}),
           provider: providerFor(paneConfig),
           promptTurn,
+          fallbackPromptTurn,
           budget,
           warn: warnOnce,
           // Blended into pi-graphics' canvas (TUI Pi's /gfx full), stronger.

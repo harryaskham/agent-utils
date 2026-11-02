@@ -1234,3 +1234,32 @@ test("pi-daemon module: each painting is stored at most slotImageBytes", async (
     module.dispose();
   }
 });
+
+test("painter: a prompt model that answers nothing (or fails) is followed by the fallback, once", async () => {
+  const { createPainter } = await import("../extensions/lib/visual-thoughts/painter.js");
+  const config = { ...DEFAULTS, firstChars: 1, minChars: 1, minIntervalMs: 0, maxPerRun: 10, maxConcurrent: 1 };
+  const painted = [];
+  let main = async () => "";
+  const fallback = async () => "a quiet harbour at dusk with a single lamp";
+  const painter = createPainter({
+    config,
+    promptTurn: (...args) => main(...args),
+    fallbackPromptTurn: fallback,
+    provider: { generate: async () => ({ png: solidPng(4, 4, [1, 1, 1]), model: "m", ms: 1 }) },
+    onImage: (record) => { painted.push(record.prompt); },
+  });
+  painter.setEnabled(true);
+  painter.runStart();
+  painter.output("text", "the agent works on the harbour");
+  for (let i = 0; i < 50 && !painted.length; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.match(painted[0], /quiet harbour/);
+  assert.equal(painter.status().fallbacks, 1);
+  assert.equal(painter.status().lastError, "");
+  // A failing prompt model too.
+  main = async () => { throw new Error("prompt model not available"); };
+  painter.output("text", "more work on the harbour");
+  for (let i = 0; i < 50 && painted.length < 2; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(painted.length, 2);
+  assert.equal(painter.status().fallbacks, 2);
+  painter.dispose();
+});

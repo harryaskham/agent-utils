@@ -10,12 +10,15 @@ import { buildImagePromptRequest, createDigest, normalizeImagePrompt } from "./p
 /**
  * `config` is live (runtime changes mutate it). `promptTurn(request, signal)` resolves the prompt
  * model's reply; `provider.generate(prompt, { signal })` paints; `onImage(record, png)` takes each
- * painting (`record`: id, prompt, model, batch, at, ms) and may be async. `budget` (budget.js), when
+ * painting (`record`: id, prompt, model, batch, at, ms) and may be async. `fallbackPromptTurn`, when
+ * given, is asked once when the prompt model answers nothing or fails (a reasoning model that
+ * spends its tokens thinking). `budget` (budget.js), when
  * given, is shared with other painters: each painting waits its turn there.
  */
 export function createPainter({
   config,
   promptTurn,
+  fallbackPromptTurn = null,
   provider,
   onImage,
   budget = null,
@@ -41,6 +44,7 @@ export function createPainter({
   let lastError = "";
   let generated = 0;
   let lastMs = 0;
+  let fallbacks = 0;
   let currentProvider = provider;
 
   function setActivity(next) {
@@ -88,10 +92,26 @@ export function createPainter({
       digest.mark();
       setActivity("prompting");
       const request = buildImagePromptRequest({ digest: snapshot, task: digest.task, recentPrompts, style: config.style });
-      const reply = await promptTurn(request, controller.signal);
+      let prompt = "";
+      let firstError = null;
+      try {
+        prompt = normalizeImagePrompt(await promptTurn(request, controller.signal), { style: config.style });
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        firstError = error;
+      }
       if (controller.signal.aborted) return;
-      const prompt = normalizeImagePrompt(reply, { style: config.style });
-      if (!prompt) throw new Error("the prompt model returned no prompt");
+      // Nothing (or a failure) from the prompt model: the fallback model, once.
+      if (!prompt && typeof fallbackPromptTurn === "function") {
+        try {
+          prompt = normalizeImagePrompt(await fallbackPromptTurn(request, controller.signal), { style: config.style });
+          if (prompt) fallbacks += 1;
+        } catch (error) {
+          if (controller.signal.aborted) throw error;
+        }
+        if (controller.signal.aborted) return;
+      }
+      if (!prompt) throw firstError || new Error("the prompt model returned no prompt");
       remember(prompt);
       setActivity("painting");
       const result = await currentProvider.generate(prompt, { signal: controller.signal });
@@ -144,6 +164,7 @@ export function createPainter({
       lastError,
       provider: currentProvider?.describe?.() || "",
       waitMs: Math.max(0, nextAllowedAt - now()),
+      fallbacks,
       prompt: recentPrompts.at(-1) || "",
     };
   }

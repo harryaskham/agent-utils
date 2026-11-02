@@ -41,6 +41,7 @@ export function createVisualThoughtsEngine({
   look = () => ({ fit: config.fit, feather: config.feather, opacity: config.opacity }),
   fetchImage = null,
   budget = null,
+  fallbackPromptTurn = null,
 }) {
   const log = typeof trace === "function" ? (line) => { try { trace(`${now()} ${line}`); } catch {} } : () => {};
   if (typeof trace === "function") {
@@ -87,6 +88,7 @@ export function createVisualThoughtsEngine({
   const painter = createPainter({
     config,
     promptTurn,
+    fallbackPromptTurn,
     provider,
     budget,
     now,
