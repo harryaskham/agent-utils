@@ -92,10 +92,14 @@ export function createVisualThoughtsModule({
 
   const fitter = () => (renderer ||= createRenderer({ transport: "stream", onError: (error) => log(`visual thoughts: renderer thread failed: ${error?.message || error}`) }));
 
-  /** A PNG that fits ui.image's limit: scaled down on the renderer thread when too large. */
-  async function fitted(png) {
-    if (png.length <= MAX_IMAGE_BYTES) return png;
-    const reply = await fitter().fitPng(png, MAX_IMAGE_BYTES);
+  /**
+   * A PNG within `slotImageBytes` (and ui.image's limit): scaled down on the renderer thread. Every
+   * painting stays in the session's media, so this is also what each one costs on disk.
+   */
+  async function fitted(png, limit = MAX_IMAGE_BYTES) {
+    const max = Math.min(MAX_IMAGE_BYTES, Number.isFinite(limit) && limit > 0 ? limit : MAX_IMAGE_BYTES);
+    if (png.length <= max) return png;
+    const reply = await fitter().fitPng(png, max);
     return Buffer.from(reply.png);
   }
 
@@ -139,7 +143,7 @@ export function createVisualThoughtsModule({
   async function onImage(session, record, png) {
     const ui = session.ui;
     if (!ui || session.blocked) return;
-    const bytes = await fitted(png);
+    const bytes = await fitted(png, session.config.slotImageBytes);
     const ref = await ui.image(bytes, "image/png", { alt: String(record.prompt || "").slice(0, 280) });
     session.images = [...session.images, ref].slice(-Math.max(1, Math.min(32, session.config.slotImages)));
     session.current = session.images.length - 1;

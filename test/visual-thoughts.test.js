@@ -1204,3 +1204,33 @@ test("frame files: never left to the terminal alone; one that keeps them gets in
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("pi-daemon module: each painting is stored at most slotImageBytes", async () => {
+  const { createVisualThoughtsModule } = await import("../extensions/lib/durable-visual-thoughts.js");
+  const noisy = new Uint8Array(600 * 400 * 4);
+  let seed = 0x2545f491;
+  for (let i = 0; i < noisy.length; i += 1) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; noisy[i] = (i & 3) === 3 ? 255 : seed & 255; }
+  const big = encodeBackdropPng({ width: 600, height: 400, rgba: noisy }, { level: 1 });
+  assert.ok(big.length > 300_000);
+  const requests = [];
+  const { ui, slots } = fakeSlotsUi({ watchers: 1 });
+  const stored = [];
+  const image = ui.image;
+  ui.image = async (bytes, mimeType, options) => { stored.push(bytes.length); return image(bytes, mimeType, options); };
+  const module = createVisualThoughtsModule({
+    env: { LITELLM_BASE_URL: "http://proxy:4000" },
+    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minIntervalMs: 0, slotImageBytes: 200_000, budgetPerMinute: 60 } } },
+    fetchImpl: paintingFetch(requests, { pngBytes: big }),
+    log: () => {},
+  });
+  try {
+    const { info } = moduleInfo(ui);
+    await module.observe({ type: "agent_start" }, info);
+    await module.observe({ type: "message_end", message: { role: "user", content: [{ type: "text", text: "paint something busy" }] } }, info);
+    for (let i = 0; i < 300 && !slots.get("backdrop")?.images.length; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(stored.length, 1);
+    assert.ok(stored[0] <= 200_000, `stored ${stored[0]} bytes`);
+  } finally {
+    module.dispose();
+  }
+});

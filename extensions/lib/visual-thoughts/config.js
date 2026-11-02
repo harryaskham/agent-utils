@@ -38,6 +38,9 @@ export const DEFAULTS = Object.freeze({
   maxImages: 8,
   // Paintings a pi-daemon session's backdrop slot keeps (its clients rotate through them).
   slotImages: 8,
+  // Each painting stored in the session's media at most this size (a scaled-down PNG): a soft
+  // backdrop needs no more, and the media stays (pi-daemon has no way to release it yet).
+  slotImageBytes: 900_000,
   // Generation.
   minIntervalMs: 12_000,
   firstChars: 160,
@@ -61,7 +64,7 @@ export const DEFAULTS = Object.freeze({
 const NUMERIC = Object.freeze({
   opacity: [0, 1], canvasOpacity: [0, 1], feather: [0, 0.5], fps: [1, 120], transitionPixels: [20_000, 2_000_000],
   holdMs: [1_000, 600_000], fadeMs: [0, 60_000], minShowMs: [0, 600_000],
-  minSet: [1, 32], maxImages: [1, 64], slotImages: [1, 32], minIntervalMs: [0, 3_600_000], firstChars: [0, 100_000],
+  minSet: [1, 32], maxImages: [1, 64], slotImages: [1, 32], slotImageBytes: [200_000, 2_080_000], minIntervalMs: [0, 3_600_000], firstChars: [0, 100_000],
   minChars: [0, 100_000], maxPerRun: [0, 1_000], maxConcurrent: [1, 4], keep: [0, 10_000],
   budgetConcurrent: [1, 8], budgetPerMinute: [1, 60], timeoutMs: [10_000, 600_000],
 });
