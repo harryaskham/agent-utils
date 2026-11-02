@@ -339,6 +339,69 @@ test("a replayed event is not re-spoken after a worker restart", async () => {
   assert.deepEqual(second.spoken.map(({ text }) => text), ["New after restart."]);
 });
 
+/**
+ * Durable state as pi-daemon serves it: each call's handle is bound to the session's open
+ * store (its Harness), which closes once idle and reopens as a new one over the same data.
+ * A closed handle throws as pi-durable's Session does.
+ */
+function reopeningStore() {
+  const durable = durableStore();
+  const open = new Map();
+  return {
+    data: durable.data,
+    forSession(sessionId) {
+      let harness = open.get(sessionId);
+      if (!harness) open.set(sessionId, (harness = { closed: false }));
+      const inner = durable.forSession(sessionId);
+      const usable = () => { if (harness.closed) throw new Error("Session is closed"); };
+      return {
+        async get(key) { usable(); return inner.get(key); },
+        async set(key, value) { usable(); return inner.set(key, value); },
+      };
+    },
+    /** The session's store idles out (or is replaced); the next call opens a new one. */
+    close(sessionId) {
+      const harness = open.get(sessionId);
+      if (harness) harness.closed = true;
+      open.delete(sessionId);
+    },
+  };
+}
+
+test("/tts and /narrate write through the current store after the session's store closes and reopens (bd-963c23)", async () => {
+  const store = reopeningStore();
+  const host = fakeHost({ store });
+  await host.command("s1", "/tts status");
+  assert.match(host.notifications.at(-1).text, /^tts:off/);
+
+  store.close("s1");
+  await host.command("s1", "/tts on");
+  assert.match(host.notifications.at(-1).text, /^tts:on · /);
+  assert.equal((await store.forSession("s1").get(DURABLE_AUDIO_SETTINGS_KEY)).tts.enabled, true);
+
+  // An observed event after another reopen claims its line through that call's store.
+  store.close("s1");
+  const answer = assistantEnd([text("Spoken after a reopen.")]);
+  await host.emit("s1", answer);
+  assert.deepEqual(host.spoken.map(({ text }) => text), ["Spoken after a reopen."]);
+
+  store.close("s1");
+  await host.command("s1", "/narrate on");
+  assert.match(host.notifications.at(-1).text, /^narrate:on · /);
+  store.close("s1");
+  await host.command("s1", "/tts off");
+  assert.match(host.notifications.at(-1).text, /^tts:off · scope:session$/);
+  const saved = await store.forSession("s1").get(DURABLE_AUDIO_SETTINGS_KEY);
+  assert.deepEqual({ tts: saved.tts.enabled, narrate: saved.narrate.enabled }, { tts: false, narrate: true });
+
+  // The claim reached durable state: a restarted worker does not speak the line again.
+  await host.audio.dispose();
+  const restarted = fakeHost({ store });
+  await restarted.command("s1", "/tts on");
+  await restarted.emit("s1", answer);
+  assert.equal(restarted.spoken.length, 0);
+});
+
 test("events older than module load are skipped when the host has no durable state", async () => {
   const loadedAt = Date.now();
   const host = fakeHost({ withState: false, loadedAt, replayGraceMs: 1000 });

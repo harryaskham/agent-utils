@@ -10,6 +10,7 @@
 //   commands.<name>.run(args, ctx)  ctx: { sessionId, conversationId?, notify(text), state? }
 //   observe(event, ctx)             ctx: { sessionId, conversationId, state? }
 //   state: { get(key) -> Promise<json|undefined>, set(key, json) -> Promise }
+// A state handle may close with the session's store; each write uses its own call's handle.
 // When a host does not provide `state` yet, an in-process map stands in so the
 // commands still work; such settings last until the worker restarts.
 //
@@ -324,6 +325,18 @@ export function createDurableAgentAudio({
     return { store: memoryStateStore(memoryState, String(ctx?.sessionId ?? "default")), durable: false };
   };
 
+  /**
+   * The store a call writes through: its own ctx's durable state, else the session's latest.
+   * A host's state handle is bound to the session's current store (pi-daemon: its Harness),
+   * which closes when the session idles out and reopens as a new one. A handle kept from an
+   * earlier call then fails with "Session is closed" (bd-963c23), so a write never reuses it
+   * when the call at hand brings its own.
+   */
+  const storeFor = (session, ctx) => {
+    const current = stateFor(ctx);
+    return current.durable ? current.store : session.store;
+  };
+
   const disposeEntry = (record) => {
     void Promise.resolve(record.loading).then((loaded) => {
       try { loaded?.speech?.dispose?.(); loaded?.choices?.dispose?.(); } catch {}
@@ -353,7 +366,10 @@ export function createDurableAgentAudio({
       sessions.set(sessionId, entry);
       const session = await entry.loading;
       // A host may begin passing durable state after the first event; prefer it.
-      if (!session.durable && stateFor(ctx).durable) { sessions.delete(sessionId); return loadSession(ctx, environment); }
+      const current = stateFor(ctx);
+      if (!session.durable && current.durable) { sessions.delete(sessionId); return loadSession(ctx, environment); }
+      // The newest handle for writes without a ctx of their own; the one kept may be closed.
+      if (current.durable) session.store = current.store;
       if (typeof ctx?.cwd === "string" && ctx.cwd) session.cwd = ctx.cwd;
       return session;
     }
@@ -434,8 +450,8 @@ export function createDurableAgentAudio({
     identity: { session: session.sessionId },
   });
 
-  const saveSettings = async (session) => {
-    await session.store.set(DURABLE_AUDIO_SETTINGS_KEY, {
+  const saveSettings = async (session, ctx) => {
+    await storeFor(session, ctx).set(DURABLE_AUDIO_SETTINGS_KEY, {
       version: 1,
       tts: { ...session.tts, speech: durableSpeechValues(session.tts.speech) },
       narrate: Object.fromEntries(Object.entries(session.narrate).filter(([, value]) => value !== undefined)),
@@ -443,11 +459,11 @@ export function createDurableAgentAudio({
   };
 
   /** Claim a once-only speech key. Persisted before speaking: at most once across restarts. */
-  const claim = async (session, key) => {
+  const claim = async (session, key, ctx) => {
     if (session.ledger.has(key)) return false;
     session.ledger.add(key);
     while (session.ledger.size > DURABLE_AUDIO_LEDGER_LIMIT) session.ledger.delete(session.ledger.values().next().value);
-    try { await session.store.set(DURABLE_AUDIO_LEDGER_KEY, [...session.ledger]); }
+    try { await storeFor(session, ctx).set(DURABLE_AUDIO_LEDGER_KEY, [...session.ledger]); }
     catch (error) { log(`agent-utils durable audio: ledger write failed: ${error?.message || error}`); }
     return true;
   };
@@ -576,8 +592,8 @@ export function createDurableAgentAudio({
     if (!speakTts && !narrateBefore) return;
     // Tool starts covered by this message's line are marked with the same write.
     if (narrateBefore) for (const call of narratedCalls) session.ledger.add(`start:${call.id}`);
-    if (stale(message)) { await claim(session, `message:${key}`); return; }
-    if (!await claim(session, `message:${key}`)) return;
+    if (stale(message)) { await claim(session, `message:${key}`, ctx); return; }
+    if (!await claim(session, `message:${key}`, ctx)) return;
     if (speakTts) speak(session, "tts", affix(session.tts.prefix, text, session.tts.suffix));
     if (narrateBefore) {
       // The main model's own words first (reasoning summary, preamble); else a side completion
@@ -599,20 +615,20 @@ export function createDurableAgentAudio({
     }
   };
 
-  const onToolStart = async (session, event) => {
+  const onToolStart = async (session, event, ctx) => {
     const id = String(event?.toolCallId ?? "");
     const name = String(event?.toolName ?? "");
     if (name === ASK_USER_TOOL) {
       if (!session.tts.choices) return;
       const intro = askUserIntroduction(event?.args);
-      if (!intro || !await claim(session, `ask:${id}`)) return;
+      if (!intro || !await claim(session, `ask:${id}`, ctx)) return;
       speakChoice(session, intro);
       return;
     }
     // A tool whose assistant message was coalesced away still gets a before line.
     if (!session.narrate.enabled || !phaseEnabled(session.narrate.phases, "before") || !id) return;
     if (session.batches.has(id) || session.ledger.has(`start:${id}`)) return;
-    if (!await claim(session, `start:${id}`)) return;
+    if (!await claim(session, `start:${id}`, ctx)) return;
     speak(session, "narrate", affix(session.narrate.prefix, describeToolBatch([name], "before"), session.narrate.suffix), narrateOverrides(session));
   };
 
@@ -630,7 +646,7 @@ export function createDurableAgentAudio({
     if (batch.results.size < batch.calls.length) return;
     for (const call of batch.calls) session.batches.delete(call.id);
     if (!session.narrate.enabled || !phaseEnabled(session.narrate.phases, "after")) return;
-    if (!await claim(session, `after:${batch.key}`)) return;
+    if (!await claim(session, `after:${batch.key}`, ctx)) return;
     const results = [...batch.results.values()];
     const fallback = describeToolBatch(results.map((result) => result.name), "after", { failed: results.filter((result) => result.failed).map((result) => result.name) });
     const generation = batch.generation ?? session.generation;
@@ -651,7 +667,7 @@ export function createDurableAgentAudio({
     try { session = await loadSession(ctx); } catch (error) { log(`agent-utils durable audio: session load failed: ${error?.message || error}`); return; }
     if (!session.tts.enabled && !session.narrate.enabled && !(type === "tool_execution_start" && event.toolName === ASK_USER_TOOL && session.tts.choices)) return;
     if (type === "message_end") return onMessageEnd(session, event, ctx);
-    if (type === "tool_execution_start") return onToolStart(session, event);
+    if (type === "tool_execution_start") return onToolStart(session, event, ctx);
     return onToolEnd(session, event, ctx);
   }
 
@@ -731,13 +747,13 @@ export function createDurableAgentAudio({
         if (action === "status") return reply(ctx, speechRoutingStatus(session.routing.snapshot()));
         const state = await session.routing.setMode(mode, action === "on" ? true : action === "off" ? false : undefined, routingOptions(session));
         session.tts.routing = { focus: !!state.focus, solo: !!state.solo };
-        await saveSettings(session);
+        await saveSettings(session, ctx);
         return reply(ctx, speechRoutingStatus(state));
       }
       if (simple === "status") return reply(ctx, ttsStatus(session, { check: true }));
       if (simple === "off") {
         session.tts.enabled = false;
-        await saveSettings(session);
+        await saveSettings(session, ctx);
         await session.speech.interrupt({ kind: "tts" });
         return reply(ctx, `tts:off · ${scopeNote(session)}`);
       }
@@ -755,7 +771,7 @@ export function createDurableAgentAudio({
       session.tts.enabled = true;
       session.reported.clear();
       session.lastError = null;
-      await saveSettings(session);
+      await saveSettings(session, ctx);
       return reply(ctx, ttsStatus(session, { check: true }));
     } catch (error) {
       return reply(ctx, `/tts: ${String(error?.message || error).replace(/^\/tts:\s*/, "")}`);
@@ -772,7 +788,7 @@ export function createDurableAgentAudio({
         session.narrate.enabled = false;
         session.batches.clear();
         supersedeNarration(session);
-        await saveSettings(session);
+        await saveSettings(session, ctx);
         await session.speech.interrupt({ kind: "narrate" });
         return reply(ctx, narrateStatus(session));
       }
@@ -820,7 +836,7 @@ export function createDurableAgentAudio({
       if (!session.narrate.enabled) { session.batches.clear(); await session.speech.interrupt({ kind: "narrate" }); }
       session.reported.clear();
       session.lastError = null;
-      await saveSettings(session);
+      await saveSettings(session, ctx);
       return reply(ctx, narrateStatus(session, { check: session.narrate.enabled }));
     } catch (error) {
       return reply(ctx, `/narrate: ${String(error?.message || error).replace(/^\/narrate:\s*/, "")}`);
