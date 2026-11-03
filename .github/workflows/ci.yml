@@ -157,14 +157,27 @@ jobs:
     name: Nix flake check
     # Cheap eval-only baseline gate (operator suggestion 2026-06-29): catches
     # flake.nix breakage (malformed outputs, eval errors, broken references)
-    # that the JS/Rust/audit jobs do not. --no-build keeps it fast: it
-    # instantiates the current system's flake outputs without building them.
-    # Drop --no-build if a future operator wants full build validation.
+    # that the JS/Rust/audit jobs do not, by instantiating every check,
+    # package and dev shell without building anything.
+    #
+    # Not `nix flake check --no-build`: that evaluates without writing
+    # builtins.toFile results, so checks.ag-dash-module (which reads its
+    # launcher scripts through toFile) failed on every clean runner and passed
+    # only where a store already held those files. `nix eval` writes them, and
+    # import-from-derivation stays off, so this still builds nothing.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
       - uses: DeterminateSystems/determinate-nix-action@v3
-      - name: Nix flake check (eval-only)
-        run: nix --extra-experimental-features 'nix-command flakes' flake check --no-build
+      - name: Evaluate checks, packages and dev shells (no builds)
+        run: |
+          for out in checks packages devShells; do
+            echo "::group::$out"
+            nix --extra-experimental-features 'nix-command flakes' eval \
+              --option allow-import-from-derivation false --json \
+              ".#$out.x86_64-linux" --apply 'builtins.mapAttrs (_: d: d.drvPath)'
+            echo
+            echo "::endgroup::"
+          done
