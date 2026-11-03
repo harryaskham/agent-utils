@@ -6,6 +6,7 @@ import { decodeSnapshot, materialize } from './snapshot.js';
 import { decodeGitBundle, destinationPlan, makeGitBundle, prepareGit } from './git.js';
 import { openHerdr } from './herdr.js';
 import { captureSource, sourcePeer } from './source.js';
+import { WORKTREE_ACTIONS, worktreePeer } from './worktree.js';
 
 export { canonical } from './io.js';
 export function validateOptions(o) {
@@ -129,6 +130,8 @@ export async function receive(request, snapshot, bundle) {
 }
 export async function peer(payload) {
   if (!payload || payload.version !== VERSION) fail('protocol', 'Unsupported peer protocol');
+  // pi-git's worktrees on another node (bd-9fcd6a): git only, no session file.
+  if (WORKTREE_ACTIONS.has(payload.action)) return worktreePeer(payload);
   if (['inspect', 'snapshot', 'objects'].includes(payload.action)) return sourcePeer(payload);
   if (payload.action === 'status') {
     const dir = requestDir('incoming', payload.id);

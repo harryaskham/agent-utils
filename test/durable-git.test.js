@@ -296,7 +296,7 @@ test("the client part shows the focused session's repository in pi-client's side
 
 test("/git completes its subcommands as Pi's commands do", () => {
   const { git } = createGitCommands(createGitRefresher());
-  assert.deepEqual(git.getArgumentCompletions("").map((item) => item.value), ["status", "wt list", "wt fork "]);
+  assert.deepEqual(git.getArgumentCompletions("").map((item) => item.value), ["status", "wt list", "wt fork ", "@"]);
   assert.deepEqual(git.getArgumentCompletions("wt f").map((item) => item.value), ["wt fork "]);
   assert.deepEqual(git.getArgumentCompletions("nope"), []);
 });
@@ -354,4 +354,76 @@ test("git_track follows another repository: recorded in the session's document, 
   assert.deepEqual(docs.get(TRACKED_DOC.definition.kind).paths, []);
   assert.deepEqual(await refreshTracked(info), []);
   assert.deepEqual(state.values.get("tracked"), []);
+});
+
+test("/git wt fork NAME @node and /git @node (bd-9fcd6a): the worktree on that node, recorded for the client part", async (t) => {
+  const { peer } = await import("../extensions/lib/session-fork/core.js");
+  const { mkdir } = await import("node:fs/promises");
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "pi-git-node-")));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const homeA = join(dir, "a");
+  const homeB = join(dir, "b");
+  await mkdir(join(homeA, "src"), { recursive: true });
+  await mkdir(homeB, { recursive: true });
+  const origin = join(dir, "origin.git");
+  execFileSync("git", ["init", "--bare", "-q", "-b", "main", origin]);
+  const root = join(homeA, "src", "project");
+  execFileSync("git", ["clone", "-q", origin, root], { stdio: "ignore" });
+  await writeFile(join(root, "a.txt"), "one\n");
+  git(root, "add", "a.txt");
+  git(root, "commit", "-q", "-m", "init");
+  git(root, "push", "-q", "origin", "HEAD:main");
+  const asNode = async (home, fn) => {
+    const saved = { HOME: process.env.HOME, XDG_STATE_HOME: process.env.XDG_STATE_HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR };
+    process.env.HOME = home;
+    delete process.env.XDG_STATE_HOME;
+    process.env.PI_CODING_AGENT_DIR = join(home, ".pi", "agent");
+    try { return await fn(); } finally {
+      for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  };
+  const nodes = [];
+  const peerFor = (node) => (payload) => { nodes.push(node); return asNode(homeB, () => peer(payload)); };
+  const state = memoryState();
+  const notices = [];
+  const ctx = { sessionId: "s", cwd: root, state, notify: (text) => notices.push(text), env: { get: async () => ({}) } };
+  const { git: command } = createGitCommands(createGitRefresher(), { peerFor });
+
+  await asNode(homeA, () => command.run("@aurora", ctx));
+  assert.match(notices.at(-1), /^aurora: no .*\/b\/src\/project \(\/git wt fork NAME @aurora clones it there\)$/);
+  await asNode(homeA, () => command.run("wt fork try-x @aurora", ctx));
+  assert.match(notices.at(-1), /^Worktree .*worktrees\/project\/try-x on aurora, on new branch try-x \(cloned there\)\.$/);
+  const forked = state.values.get("forked");
+  assert.deepEqual([forked.host, forked.branch, forked.path], ["aurora", "try-x", join(homeB, ".local", "state", "pi-daemon", "worktrees", "project", "try-x")]);
+  assert.deepEqual([...new Set(nodes)], ["aurora"]);
+  await asNode(homeA, () => command.run("@aurora", ctx));
+  assert.match(notices.at(-1), /^aurora: .*project ⎇ /);
+  assert.match(notices.at(-1), /try-x/);
+  // A dirty tree: refused, with the omit hint; an unreachable node, said plainly.
+  await writeFile(join(root, "a.txt"), "changed\n");
+  await asNode(homeA, () => command.run("wt fork try-y @aurora", ctx));
+  assert.match(notices.at(-1), /uncommitted changes: commit them, or \/git wt fork try-y @aurora --dirty omit/);
+  const { ForkError } = await import("../extensions/lib/session-fork/io.js");
+  const down = createGitCommands(createGitRefresher(), { peerFor: () => async () => { throw new ForkError("peer-output", "Remote pi-session did not return JSON"); } }).git;
+  await asNode(homeA, () => down.run("wt fork try-z @aurora --dirty omit", ctx));
+  assert.match(notices.at(-1), /cannot reach pi-session on aurora over SSH/);
+});
+
+test("the client part opens a fork made on another node there (ctx.sessions.create with its host)", async () => {
+  const handlers = new Map();
+  const watches = [];
+  const created = [];
+  const ctx = {
+    sessionManager: { getSessionId: () => "a" },
+    chord: { async watchDocument(address, onValue) { watches.push(onValue); return () => {}; } },
+    sessions: { create: async (options) => created.push(options) },
+    ui: { notify() {} },
+  };
+  gitClient({ on: (type, handler) => handlers.set(type, handler), events: { on() {}, emit() {} } });
+  await handlers.get("session_start")({}, ctx);
+  await Promise.resolve();
+  watches[0]({ values: { forked: { at: 0 } } });
+  watches[0]({ values: { forked: { path: "/home/b/wt/x", branch: "x", host: "aurora", at: 5 } } });
+  await Promise.resolve();
+  assert.deepEqual(created, [{ host: "aurora", cwd: "/home/b/wt/x", title: "x", carry: true }]);
 });

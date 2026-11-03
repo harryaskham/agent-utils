@@ -10,6 +10,9 @@
 // with --no-optional-locks (GIT_OPTIONAL_LOCKS=0), so it never takes the index lock the agent's
 // own git may want. The result is written in one state.set (one Durable commit).
 import { execFile } from "node:child_process";
+
+import { peerCall } from "./session-fork/core.js";
+import { forkWorktreeOnNode, repoStatusOnNode } from "./session-fork/worktree.js";
 import { mkdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -383,24 +386,57 @@ export function parseWorktrees(text) {
   return worktrees;
 }
 
-/** The module's commands: /git (status), /git wt list, /git wt fork NAME. */
-export function createGitCommands(refresher, { run = runGit, root } = {}) {
+/** What a failure on another node means for the user: an SSH or pi-session problem, said plainly. */
+function nodeError(node, error) {
+  const message = error?.message ?? String(error);
+  if (error?.code === "protocol" || /Unknown peer action|protocol mismatch/.test(message)) return `${node}'s pi-session is older than this: update agent-utils there (${message})`;
+  if (error?.code === "peer-output" || (error?.code === "process" && /ssh/.test(message))) return `cannot reach pi-session on ${node} over SSH (ssh ${node} must work without a prompt, with agent-utils installed): ${message}`;
+  return message;
+}
+
+/** `/git @node`'s state of this repository on that node, in a few lines. */
+export function nodeStatusText(node, status) {
+  if (!status.exists) return `${node}: no ${status.repo} (/git wt fork NAME @${node} clones it there)`;
+  const head = status.branch || `detached ${String(status.head ?? "").slice(0, 8)}`;
+  const lines = [`${node}: ${status.repo} ⎇ ${head}${status.ahead !== undefined ? ` ↑${status.ahead} ↓${status.behind}` : ""}${status.hasCommit === false ? " · lacks this HEAD" : ""}`];
+  for (const tree of status.worktrees ?? []) lines.push(`  ${tree.path}  ${tree.branch || `detached ${String(tree.head).slice(0, 8)}`}`);
+  return lines.join("\n");
+}
+
+/** The module's commands: /git (status), /git wt list, /git wt fork NAME [@node], /git @node. */
+export function createGitCommands(refresher, { run = runGit, root, peerFor = (node) => (payload) => peerCall({ remote: node }, payload) } = {}) {
   const envOf = async (ctx) => gitEnv(typeof ctx.env?.get === "function" ? await ctx.env.get().catch(() => ({})) : {});
   return {
     git: {
-      description: "Git for this session's directory: /git (status, refreshed now), /git wt list, /git wt fork NAME (a worktree and branch NAME, under ~/.local/state/pi-daemon/worktrees)",
+      description: "Git for this session's directory: /git (status, refreshed now), /git wt list, /git wt fork NAME (a worktree and branch NAME, under ~/.local/state/pi-daemon/worktrees), /git wt fork NAME @node (there, with this conversation), /git @node",
       // Pi's argument completions (pi-daemon reads them; older hosts ignore them).
       getArgumentCompletions(prefix) {
         const text = String(prefix ?? "").trimStart().toLowerCase();
         return [
           { value: "status", label: "status", description: "Refresh now and show the state" },
           { value: "wt list", label: "wt list", description: "The repository's worktrees" },
-          { value: "wt fork ", label: "wt fork NAME", description: "A worktree on a new branch, and a session there" },
+          { value: "wt fork ", label: "wt fork NAME [@node]", description: "A worktree on a new branch, and a session there (on another node with @node)" },
+          { value: "@", label: "@node", description: "This repository on another node" },
         ].filter((item) => item.value.startsWith(text));
       },
       async run(args, ctx) {
-        const [sub = "status", ...rest] = String(args ?? "").trim().split(/\s+/).filter(Boolean);
+        // `@node` (bd-9fcd6a): another pi-daemon node, reached over SSH by its name; `--dirty omit`.
+        let words = String(args ?? "").trim().split(/\s+/).filter(Boolean);
+        const node = words.find((word) => word.startsWith("@"))?.slice(1);
+        words = words.filter((word) => !word.startsWith("@"));
+        const dirtyAt = words.indexOf("--dirty");
+        const dirty = dirtyAt >= 0 ? words[dirtyAt + 1] : undefined;
+        if (dirtyAt >= 0) words.splice(dirtyAt, 2);
+        const [sub = "status", ...rest] = words;
         if (!ctx.cwd) return ctx.notify("/git: this session's directory is not known.");
+        if (node !== undefined && !/^[a-zA-Z0-9_][a-zA-Z0-9_.@:%-]*$/.test(node)) return ctx.notify(`/git: not a node name: @${node}`);
+        if (node !== undefined && (sub === "status" || sub === "st")) {
+          try {
+            return ctx.notify(nodeStatusText(node, await repoStatusOnNode(ctx.cwd, node, { call: peerFor(node) })));
+          } catch (error) {
+            return ctx.notify(`/git @${node}: ${nodeError(node, error)}`);
+          }
+        }
         if (sub === "status" || sub === "st") {
           const workspace = await refresher.refresh(ctx.sessionId, ctx, { force: true });
           return ctx.notify(workspace ? workspaceSummary(workspace) : "/git: git did not answer in time; the last state stays.");
@@ -414,6 +450,19 @@ export function createGitCommands(refresher, { run = runGit, root } = {}) {
             const lines = parseWorktrees(listed.stdout).map((tree) => `${tree.path}  ${tree.branch || (tree.detached ? `detached ${tree.head.slice(0, 8)}` : "")}`);
             return ctx.notify(lines.join("\n") || "No worktrees.");
           }
+          if (action === "fork" && node !== undefined) {
+            if (!name) return ctx.notify(`/git wt fork NAME @${node}: a name for the worktree and its branch.`);
+            let forked;
+            try {
+              forked = await forkWorktreeOnNode(ctx.cwd, name, node, { dirty, call: peerFor(node) });
+            } catch (error) {
+              return ctx.notify(`/git wt fork @${node}: ${nodeError(node, error)}`);
+            }
+            // The client part opens a session there with this conversation (pi-daemon's cross-host clone).
+            await ctx.state.set("forked", { path: forked.path, branch: forked.branch, created: forked.created, host: node, from: ctx.cwd, at: Date.now() });
+            const how = [forked.cloned ? "cloned there" : "", forked.sent ? "with this repository's unpushed commits" : ""].filter(Boolean).join(", ");
+            return ctx.notify(`Worktree ${forked.path} on ${node}, on ${forked.created ? "new " : ""}branch ${forked.branch}${how ? ` (${how})` : ""}.`);
+          }
           if (action === "fork") {
             if (!name) return ctx.notify("/git wt fork NAME: a name for the worktree and its branch.");
             const forked = await forkWorktree(ctx.cwd, name, { env, run, ...(root ? { root } : {}) });
@@ -422,7 +471,7 @@ export function createGitCommands(refresher, { run = runGit, root } = {}) {
             return ctx.notify(`Worktree ${forked.path} on ${forked.created ? "new " : ""}branch ${forked.branch}.`);
           }
         }
-        return ctx.notify("/git: status, wt list, wt fork NAME");
+        return ctx.notify("/git: status, wt list, wt fork NAME [@node], @node");
       },
     },
   };

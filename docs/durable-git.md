@@ -38,9 +38,22 @@ No tool is wrapped to guess which repository the agent touched: the agent says s
 | `/git` (or `/git status`) | Refresh now and show the state in one line |
 | `/git wt list` | The repository's worktrees |
 | `/git wt fork NAME` | A worktree on a new branch `NAME` from HEAD (or on `NAME` if it exists), under `$XDG_STATE_HOME/pi-daemon/worktrees/<project>/<NAME>` (default `~/.local/state/...`) |
+| `/git wt fork NAME @node [--dirty omit]` | The same on another pi-daemon node, and this conversation continued there (below) |
+| `/git @node` | This repository on that node: its branch, HEAD, ahead/behind its upstream, worktrees, and whether it has this HEAD |
 | `/repo` | pi-client: pick another session in this repository or its worktrees, and open it |
 
 After `/git wt fork`, the client part opens a session in the new worktree, carrying the conversation, where pi-client lets plugins open sessions. Elsewhere it tells you to `/cd` there.
+
+### Another node: `/git wt fork NAME @node` (bd-9fcd6a)
+
+`@node` is a pi-daemon host of pi-client's fleet, reached over SSH by the same name (`ssh node` must work without a prompt, with agent-utils' `pi-session` installed there). It reuses session-fork's peer channel (`pi-session _peer`), git only:
+
+1. The repository at the same HOME-relative path on the node, cloned from this one's origin when it is missing there (fetched from origin when present). A repository outside HOME, or one missing there with no origin, is refused.
+2. The commits the node lacks, unpushed ones included, in a thin bundle (only what the node's origin heads do not reach). No refs are written here.
+3. A worktree on branch `NAME` at this HEAD under the node's `pi-daemon/worktrees/<project>/<NAME>`. A branch `NAME` there at another commit is refused, not moved. A dirty tree here is refused unless `--dirty omit` (the changes stay here).
+4. The session: the client part asks pi-client for one on that node in the worktree, carrying this conversation (`ctx.sessions.create({ host, cwd, title, carry })`, pi-daemon's cross-host clone, bd-cd7999), which adds a note that it moved. Without it, it says `/cd @node DIR`.
+
+Each fork has a request id from the repository, commit, branch and node: the same fork again reuses its worktree (a receipt on the node), and one that no longer matches fails rather than being redone.
 
 ## Environment
 

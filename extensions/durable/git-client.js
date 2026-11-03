@@ -95,17 +95,20 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
     },
   });
 
-  // A /git wt fork in this session: a session in the worktree, with this conversation.
+  // A /git wt fork in this session: a session in the worktree, with this conversation; on
+  // another node (`host`, bd-9fcd6a), there, through pi-daemon's cross-host clone (bd-cd7999).
   const openForked = async (forked) => {
     const sessionsApi = live?.sessions;
+    const host = typeof forked.host === "string" && forked.host !== "" ? forked.host : undefined;
+    const cd = host === undefined ? `/cd ${forked.path}` : `/cd @${host} ${forked.path}`;
     if (typeof sessionsApi?.create !== "function") {
-      live?.ui?.notify?.(`Worktree ready: /cd ${forked.path} continues this conversation there.`, "info");
+      live?.ui?.notify?.(`Worktree ready${host === undefined ? "" : ` on ${host}`}: ${cd} continues this conversation there.`, "info");
       return;
     }
     try {
-      await sessionsApi.create({ cwd: forked.path, title: forked.branch, carry: true });
+      await sessionsApi.create({ ...(host === undefined ? {} : { host }), cwd: forked.path, title: forked.branch, carry: true });
     } catch (error) {
-      live?.ui?.notify?.(`Cannot open a session in ${forked.path}: ${error?.message ?? error}`, "error");
+      live?.ui?.notify?.(`Cannot open a session in ${forked.path}${host === undefined ? "" : ` on ${host}`}: ${error?.message ?? error} (${cd} continues there)`, "error");
     }
   };
 
