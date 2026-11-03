@@ -79,9 +79,11 @@ test("without a session environment pi.exec runs locally in the session's direct
 test("the Durable tools module adapts agent-utils' TUI tools for pi-daemon sessions", async () => {
   const { extension } = await import("../extensions/durable/tools.mjs");
   const names = extension.tools.map((tool) => tool.name);
-  for (const name of ["search_web", "xvfb_status", "firecracker_vm_list", "app_automation_list", "android_cli_doctor", "slack_token_status"]) {
+  for (const name of ["search_web", "xvfb_status", "firecracker_vm_list", "app_automation_list", "android_cli_doctor"]) {
     assert.ok(names.includes(name), `${name} adapted`);
   }
+  // Slack's tools ship with Slick (its own pi-daemon module), so none here.
+  assert.equal(names.filter((name) => name.startsWith("slack_")).length, 0);
   assert.equal(new Set(names).size, names.length, "no duplicate tool names");
   const search = extension.tools.find((tool) => tool.name === "search_web");
   assert.match(search.description, /Search the live web/);

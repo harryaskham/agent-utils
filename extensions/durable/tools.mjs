@@ -4,7 +4,8 @@
 // extensions against a capturing `pi` (../lib/durable-tui-tools.js) and exposes
 // the tools they register as one Durable extension, so pi-daemon sessions get the
 // same tools as TUI Pi: search_web, xvfb_*, firecracker_vm_*, app_automation_*,
-// android_* and slack_* (and the macOS-native tools on macOS). Their commands,
+// and android_* (and the macOS-native tools on macOS). Slack's slack_* tools ship
+// with Slick (share/slick/pi/pi-daemon/slick.mjs). Their commands,
 // hooks and widgets are TUI behaviour and are not carried over; tool calls run in
 // the session's directory, `pi.exec` through the session's own environment, and
 // UI prompts are answered headlessly (confirmations decline).
@@ -18,7 +19,6 @@ import xvfb from "../xvfb.js";
 import firecrackerVm from "../firecracker-vm.js";
 import appAutomation from "../app-automation.js";
 import android from "../android.js";
-import slack from "../slack-mcp.js";
 import macosNative from "../macos-native.js";
 
 /** The TUI extensions whose tools pi-daemon sessions get, by name. */
@@ -28,7 +28,6 @@ export const ADAPTED_EXTENSIONS = [
   ["firecracker-vm", firecrackerVm],
   ["app-automation", appAutomation],
   ["android", android],
-  ["slack-mcp", slack],
   ...(process.platform === "darwin" ? [["macos-native", macosNative]] : []),
 ];
 
