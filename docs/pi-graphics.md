@@ -431,6 +431,25 @@ reported in `/gfx full status` and the canvas falls back to `typescript`.
   system calls gfx-core makes itself, fonts passed as bytes); settings:
   `canvas/gfx-settings.js`.
 
+### In pi-client
+
+List `extensions/pi-graphics.js` in pi-client's `client.extensions`; `/gfx full` (gfx-core
+renderer) then draws the whole client screen: every pane, the sidebar and the tabs.
+
+- pi-client composes its screen through one Pi TUI and draws messages with Pi's own
+  components, so the canvas, its markers and its input handling work as in TUI Pi. The
+  extension finds the TUI and theme through `ctx.ui.custom()` (its factory gets them; one
+  that finishes at once shows nothing), relearns the message classes from the live tree
+  while the canvas runs (pi-client sets its transcript's children directly), and asks the
+  terminal's background with OSC 11 itself where pi-tui cannot.
+- Its layout comes from pi-client's layout tree: each pane (`PaneFrame`, or the pane area
+  with one pane) and its editor, the sidebar and the dividers. The focused pane (the one
+  with the cursor) is drawn like the shell: its messages and tools as glass panes, its
+  editor as the input card with the caret. Every pane and the sidebar are glass panels,
+  the focused one lit; the dividers' lines give way to the gaps.
+- This needs a gfx-core build whose frames take `lane` (the focused pane's columns) and
+  `layout`; an older one ignores them and draws the client as one shell, as before.
+
 ## Commands
 
 `/gfx` with no arguments opens the settings UI. Useful direct forms include:

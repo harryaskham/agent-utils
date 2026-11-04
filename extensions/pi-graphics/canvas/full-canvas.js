@@ -157,6 +157,14 @@ const bool = (v, fallback) => (v === undefined || v === null || v === "" ? fallb
  * pixels for natural ones). pane: { left, top, width, height } in outer cells.
  */
 /** True inside gfxsh (unless nesting is explicitly allowed). */
+/** An OSC 11 reply (`ESC ] 11 ; rgb:RRRR/GGGG/BBBB` ended by BEL or ST): its colour, 0–255 each. */
+export function parseBackgroundReply(data) {
+  const match = /\x1b\]11;rgba?:([0-9a-f]{1,4})\/([0-9a-f]{1,4})\/([0-9a-f]{1,4})(?:\/[0-9a-f]{1,4})?(?:\x07|\x1b\\)/i.exec(String(data ?? ""));
+  if (!match) return null;
+  const channel = (hex) => Math.round((parseInt(hex, 16) / (16 ** hex.length - 1)) * 255);
+  return { r: channel(match[1]), g: channel(match[2]), b: channel(match[3]) };
+}
+
 export function insideGfxsh(env = process.env) {
   if (env.PI_GRAPHICS_FULL_IN_GFXSH === "1") return false;
   return env.GFXSH === "1" || String(env.TERM_PROGRAM || "").toLowerCase() === "gfxsh";
@@ -2130,6 +2138,8 @@ export function createFullCanvas({
     }
     // dialogs mark their rows (gfx-core draws them raised glass)
     ensureOverlayTap(renderer);
+    // messages and tools mark theirs (each a pane)
+    try { semanticTick(); } catch {}
     const { rows, cols } = state.virt;
     const screen = Array.isArray(renderer?.previousScreen) ? renderer.previousScreen : [];
     const parsed = [];
@@ -2145,7 +2155,9 @@ export function createFullCanvas({
     const cursor = frame.cursor && frame.cursor.row < rows && frame.cursor.col < cols ? frame.cursor : null;
     let out = "";
     try {
-      state.gfxLast = toGfxFrame(parsed, { cursor, editor: regions.editor || null, editorPadding: cfg().editorPadding });
+      state.gfxLast = toGfxFrame(parsed, { cursor, editor: regions.editor || null, editorPadding: cfg().editorPadding, client: regions.client || null, focused: state.gfxPane || 0 });
+      // pi-client: the pane focused last stays the shell's while no pane holds the cursor
+      if (Number.isInteger(state.gfxLast.paneIndex)) state.gfxPane = state.gfxLast.paneIndex;
       state.gfxLast.heat = Math.max(0, Math.min(1, Number(getHeat()) || 0));
       out = state.gfx.frame(state.gfxLast);
     } catch (error) {
@@ -2316,9 +2328,37 @@ export function createFullCanvas({
   async function learnTerminalBackground(tui, timeoutMs = 300) {
     if (state.termBg || state.edgeColorSet) return;
     try {
-      const bg = await tui.queryTerminalBackgroundColor?.({ timeoutMs });
+      const bg = typeof tui?.queryTerminalBackgroundColor === "function"
+        ? await tui.queryTerminalBackgroundColor({ timeoutMs })
+        : await queryBackgroundThroughTap(timeoutMs);
       if (bg && typeof bg === "object") state.termBg = [bg.r, bg.g, bg.b].map((v) => (v > 255 ? v >> 8 : v));
     } catch {}
+  }
+
+  // A pi-tui without queryTerminalBackgroundColor (pi-client's): ask OSC 11 ourselves and take
+  // the reply from the input tap (swallowed, never seen as input).
+  function queryBackgroundThroughTap(timeoutMs) {
+    const tap = state.startOptions?.tapInput;
+    if (typeof tap !== "function") return Promise.resolve(null);
+    return new Promise((resolve) => {
+      let untap = null;
+      let done = false;
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        try { untap?.(); } catch {}
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish(null), timeoutMs);
+      untap = tap((data) => {
+        const color = parseBackgroundReply(data);
+        if (!color) return undefined;
+        finish(color);
+        return null;
+      });
+      write("\x1b]11;?\x1b\\");
+    });
   }
 
   /** gfx-core for the terminal's current grid and the padding setting. */

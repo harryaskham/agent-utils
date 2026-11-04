@@ -151,5 +151,41 @@ export function captureTuiFromUi(ui, key = "pi-graphics-host-probe") {
     }, { piGraphics: false });
   } catch {}
   try { ui.setWidget(key, undefined, { piGraphics: false }); } catch {}
+  if (!captured) captured = captureTuiFromCustom(ui)?.tui ?? null;
+  return captured;
+}
+
+/** The live TUI and the theme it draws with: TUI Pi's `ctx.ui.theme`, or pi-client's (its custom() factories get it). */
+export function captureHostFromUi(ui, key = "pi-graphics-host-probe") {
+  const usable = (theme) => (typeof theme?.getFgAnsi === "function" ? theme : null);
+  let tui = null;
+  if (typeof ui?.setWidget === "function") {
+    try {
+      ui.setWidget(key, (captured) => {
+        tui = captured;
+        return { render: () => [], invalidate() {}, __piGraphicsNoWrap: true, piGraphics: false };
+      }, { piGraphics: false });
+    } catch {}
+    try { ui.setWidget(key, undefined, { piGraphics: false }); } catch {}
+  }
+  if (tui) return { tui, theme: usable(ui?.theme) };
+  const custom = captureTuiFromCustom(ui);
+  return custom ? { tui: custom.tui, theme: usable(ui?.theme) ?? usable(custom.theme) } : { tui: null, theme: usable(ui?.theme) };
+}
+
+// pi-client's widgets are text, but its `custom()` hands the factory the client's TUI (the
+// whole screen: panes, sidebar, tabs) before showing anything, and a factory that finishes at
+// once shows nothing. Only pi-client (`hasSidebar`), never a host where custom() is modal.
+export function captureTuiFromCustom(ui) {
+  if (ui?.hasSidebar !== true || typeof ui.custom !== "function") return null;
+  let captured = null;
+  try {
+    const pending = ui.custom((tui, theme, _keybindings, done) => {
+      captured = { tui, theme };
+      try { done?.(undefined); } catch {}
+      return { render: () => [], invalidate() {} };
+    });
+    void Promise.resolve(pending).catch(() => {});
+  } catch {}
   return captured;
 }

@@ -168,11 +168,25 @@ const LABELS = { user: "you", assistant: "", thinking: "thinking", tool: "", bas
  * a status), the editor as the live input card.
  * @param parsed rows of cells from parseAnsiLine (with .sem)
  */
-export function toGfxFrame(parsed, { cursor = null, editor = null, editorPadding = 0.5 } = {}) {
+export function toGfxFrame(parsed, { cursor = null, editor = null, editorPadding = 0.5, client = null, focused = 0 } = {}) {
+  // pi-client (its panes, sidebar and dividers): the focused pane, the one with the cursor (else
+  // the one focused before), is drawn like the shell (its blocks, caret and card); every pane and
+  // the sidebar are glass panels, the focused one lit; the dividers' lines give way to the gaps.
+  const inside = (rect, row, col) => row >= rect.y && row < rect.y + rect.height && col >= rect.x && col < rect.x + rect.width;
+  const panes = Array.isArray(client?.panes) ? client.panes : [];
+  let paneIndex = -1;
+  if (panes.length) {
+    paneIndex = cursor ? panes.findIndex((pane) => inside(pane, cursor.row, cursor.col)) : -1;
+    if (paneIndex < 0) paneIndex = Math.min(Math.max(0, Number(focused) || 0), panes.length - 1);
+    editor = panes[paneIndex].editor || null;
+  }
+  const lane = paneIndex >= 0 ? [panes[paneIndex].x, panes[paneIndex].width] : null;
+  const dividers = Array.isArray(client?.dividers) ? client.dividers : [];
   const rows = [];
   for (let r = 0; r < parsed.length; r += 1) {
     const cells = parsed[r].cells || [];
     const inEditor = editor && r >= editor.y && r < editor.y + editor.height;
+    const rowDividers = dividers.filter((rect) => r >= rect.y && r < rect.y + rect.height);
     const runs = [];
     let run = null;
     for (let i = 0; i < cells.length; i += 1) {
@@ -180,8 +194,10 @@ export function toGfxFrame(parsed, { cursor = null, editor = null, editorPadding
       if (c.cont) continue;
       // Pi's own cursor (an inverse cell): gfx-core draws the caret
       if (c.inverse && cursor && r === cursor.row && i === cursor.col) c = { ...c, inverse: false };
-      // Pi's rule lines around the editor: the input card replaces them
-      const ch = inEditor && /^[─━═]$/.test(c.ch) ? " " : (c.hidden ? " " : c.ch);
+      // Pi's rule lines around the editor: the input card replaces them; pi-client's dividers:
+      // the gaps between its panes' glass
+      const onDivider = rowDividers.some((rect) => i >= rect.x && i < rect.x + rect.width);
+      const ch = onDivider || (inEditor && /^[─━═]$/.test(c.ch)) ? " " : (c.hidden ? " " : c.ch);
       const fg = c.fg === DEFAULT ? null : unpackRgb(c.fg);
       const bg = c.bg === DEFAULT ? null : unpackRgb(c.bg);
       const flags = (c.bold ? 1 : 0) | (c.italic ? 2 : 0) | (c.underline ? 4 : 0) | (c.strike ? 8 : 0) | (c.dim ? 16 : 0);
@@ -196,7 +212,8 @@ export function toGfxFrame(parsed, { cursor = null, editor = null, editorPadding
   const blocks = [];
   let current = null;
   for (let r = 0; r < parsed.length; r += 1) {
-    const sem = (parsed[r].cells || []).find((c) => c.sem)?.sem || null;
+    const rowCells = parsed[r].cells || [];
+    const sem = (lane ? rowCells.slice(lane[0], lane[0] + lane[1]) : rowCells).find((c) => c.sem)?.sem || null;
     if (sem && current && current.id === sem.block) {
       current.last = r;
       if (sem.streaming) current.streaming = true;
@@ -243,5 +260,20 @@ export function toGfxFrame(parsed, { cursor = null, editor = null, editorPadding
     if (last && last[0] === ov.col && last[2] === ov.width && last[1] + last[3] === r) last[3] += 1;
     else floats.push([ov.col, r, ov.width, 1]);
   }
-  return { rows, blocks: out, cursor: cursor ? [cursor.col, cursor.row] : null, ...(card ? { card } : {}), ...(floats.length ? { floats } : {}) };
+  const layout = panes.length
+    ? {
+      panes: [
+        ...panes.map((pane, index) => ({ x: pane.x, y: pane.y, w: pane.width, h: pane.height, active: index === paneIndex })),
+        ...(client.sidebar ? [{ x: client.sidebar.x, y: client.sidebar.y, w: client.sidebar.width, h: client.sidebar.height, active: false }] : []),
+      ],
+    }
+    : null;
+  return {
+    rows,
+    blocks: out,
+    cursor: cursor ? [cursor.col, cursor.row] : null,
+    ...(card ? { card } : {}),
+    ...(floats.length ? { floats } : {}),
+    ...(lane ? { lane, layout, paneIndex } : {}),
+  };
 }

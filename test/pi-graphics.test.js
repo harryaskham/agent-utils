@@ -2026,7 +2026,7 @@ test("pi-graphics composes real placements through the frame compositor, never v
   // Host classes come from the live TUI (the compiled Pi binary cannot resolve
   // the pi-coding-agent import for this package, and a copy would differ).
   assert.match(source, /createHostComponentRegistry\(/);
-  assert.match(source, /captureTuiFromUi\(ctx\?\.ui\)/);
+  assert.match(source, /captureHostFromUi\(ctx\?\.ui\)/);
   assert.match(source, /host\.get\("CustomEditor"\)/);
   // Real placements: compositor-injected, cropped at edges; never P/Q parents.
   assert.match(source, /createFrameCompositor\(\{/);
@@ -2490,4 +2490,31 @@ test("kitty graphics theme has large measured deltas from the built-in dark pale
   const script = await readFile(scriptPath, "utf8");
   assert.match(script, /kitty-graphics\.json/);
   assert.match(script, /encodeRgbaPng/);
+});
+
+test("pi-graphics finds pi-client's TUI and theme through custom(), which shows nothing; TUI Pi's setWidget path is unchanged", async () => {
+  const { captureHostFromUi } = await import("../extensions/pi-graphics/host-components.js");
+  const tui = { terminal: {} };
+  const theme = { getFgAnsi: () => "\x1b[38;2;1;2;3m" };
+  // TUI Pi: setWidget calls the factory with the TUI; ctx.ui.theme is Pi's
+  const tuiPi = captureHostFromUi({ setWidget: (key, factory) => { if (factory) factory(tui); }, theme, custom: () => assert.fail("custom() is modal in TUI Pi") });
+  assert.equal(tuiPi.tui, tui);
+  assert.equal(tuiPi.theme, theme);
+  // pi-client: text-only widgets, no ctx.ui.theme; custom() gets the TUI and theme, and a factory that finishes at once shows nothing
+  let shown = false;
+  const ui = {
+    hasSidebar: true,
+    setWidget: () => {},
+    custom: async (factory) => {
+      let done = false;
+      const component = factory(tui, theme, {}, () => { done = true; });
+      if (!done) shown = component;
+    },
+  };
+  const client = captureHostFromUi(ui);
+  assert.equal(client.tui, tui);
+  assert.equal(client.theme, theme);
+  assert.equal(shown, false);
+  // a host whose custom() is not pi-client's: never called
+  assert.deepEqual(captureHostFromUi({ setWidget: () => {}, custom: () => assert.fail("not pi-client") }), { tui: null, theme: null });
 });

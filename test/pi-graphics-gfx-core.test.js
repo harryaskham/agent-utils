@@ -163,3 +163,49 @@ test("renderer=gfx: padding lays the text out as gfxsh does; the card and dialog
   assert.match(out, /\x1b_Ga=p,/, "draws");
   engine.drop();
 });
+
+test("renderer=gfx in pi-client: the focused pane is the shell's lane, every pane and the sidebar glass, dividers gaps", () => {
+  // two panes side by side (0..19 | 21..34), a divider at 20, the sidebar at 36..39
+  const pad = (text, width) => text + " ".repeat(Math.max(0, width - text.replace(/\x1b_[^\x07]*\x07|\x1b\[[0-9;]*m/g, "").length));
+  const row = (left, right, side = "") => `${pad(left, 20)}│${pad(right, 15)}${side}`;
+  const rows = screen([
+    row(`${mark("assistant", "", "11", 0)}left reply`, `${mark("user", "", "12", 0)}right ask`, "s1"),
+    row(`${mark("assistant", "", "11", 1)}more`, `${mark("assistant", "", "13", 0)}right reply`, "s2"),
+    row("", ""),
+    row("──────────", "──────────"),
+    row("› typing", "›"),
+  ]);
+  const client = {
+    panes: [
+      { x: 0, y: 0, width: 20, height: 5, editor: { x: 0, y: 3, width: 20, height: 2 } },
+      { x: 21, y: 0, width: 15, height: 5, editor: { x: 21, y: 3, width: 15, height: 2 } },
+    ],
+    sidebar: { x: 36, y: 0, width: 4, height: 5 },
+    dividers: [{ x: 20, y: 0, width: 1, height: 5 }],
+  };
+  // the cursor in the right pane: it is the lane, lit, with the card; its blocks only
+  const right = toGfxFrame(rows, { cursor: { row: 4, col: 22 }, client });
+  assert.deepEqual(right.lane, [21, 15]);
+  assert.equal(right.paneIndex, 1);
+  assert.deepEqual(right.layout.panes.map((pane) => [pane.x, pane.w, pane.active]), [[0, 20, false], [21, 15, true], [36, 4, false]]);
+  assert.deepEqual(right.blocks.filter((b) => b.status !== "prompt").map((b) => [b.prompt, b.command]), [[0, "user"], [1, "assistant"]]);
+  assert.deepEqual(right.card.map((v) => Math.round(v * 2) / 2), [20.5, 2.5, 36.5, 5.5], "the right pane's editor is the card");
+  assert.equal(right.rows[0].map((r) => r[0]).join("")[20], " ", "the divider's line gives way");
+  // no cursor in any pane (a dialog has it): the pane focused before stays the lane
+  const kept = toGfxFrame(rows, { cursor: null, client, focused: 1 });
+  assert.deepEqual([kept.lane, kept.paneIndex], [[21, 15], 1]);
+  // the left pane: its blocks
+  const left = toGfxFrame(rows, { cursor: { row: 4, col: 3 }, client });
+  assert.deepEqual(left.blocks.filter((b) => b.status !== "prompt").map((b) => [b.prompt, b.end, b.command]), [[0, 2, "assistant"]]);
+  // TUI Pi (no client layout): as before, no lane or layout
+  const tui = toGfxFrame(rows, { cursor: { row: 4, col: 3 } });
+  assert.equal(tui.lane, undefined);
+  assert.equal(tui.layout, undefined);
+});
+
+test("the canvas reads the terminal's background from an OSC 11 reply (pi-tui without queryTerminalBackgroundColor)", async () => {
+  const { parseBackgroundReply } = await import("../extensions/pi-graphics/canvas/full-canvas.js");
+  assert.deepEqual(parseBackgroundReply("\x1b]11;rgb:2e2e/3434/4040\x1b\\"), { r: 46, g: 52, b: 64 });
+  assert.deepEqual(parseBackgroundReply("\x1b]11;rgb:ff/80/00\x07"), { r: 255, g: 128, b: 0 });
+  assert.equal(parseBackgroundReply("\x1b[6;24;10t"), null);
+});

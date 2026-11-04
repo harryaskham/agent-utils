@@ -56,7 +56,7 @@ import {
   renderBoxStripPng,
 } from "./pi-graphics/box-chrome.js";
 import { installCompactChatSpacingPatch } from "./pi-graphics/compact-chat-spacing.js";
-import { captureTuiFromUi, createHostComponentRegistry } from "./pi-graphics/host-components.js";
+import { captureHostFromUi, createHostComponentRegistry } from "./pi-graphics/host-components.js";
 import { createFrameCompositor, createOverlayPlacementSet, gfxMarker } from "./pi-graphics/frame-compositor.js";
 import { createPixelGeometryTracker, tapTerminalInput } from "./pi-graphics/terminal-io.js";
 import { FULL_CANVAS_DEFAULTS, createFullCanvas } from "./pi-graphics/canvas/full-canvas.js";
@@ -447,6 +447,7 @@ export default async function piGraphicsExtension(pi) {
 
   let writeGraphicsCommand = null;
   let hostTui = null;
+  let lastSemanticDiscoverAt = 0;
   let lastUiContext = null;
   let hardwareCursorTui = null;
   let editorChromeRegistry = null;
@@ -566,7 +567,45 @@ export default async function piGraphicsExtension(pi) {
       const rect = regions[key];
       if (!rect || rect.height <= 0 || rect.width <= 0) delete regions[key];
     }
+    const client = clientLayout(root);
+    if (client) regions.client = client;
     return regions;
+  }
+  // pi-client's screen (its layout tree): its panes (a PaneFrame each, or the PaneArea itself
+  // with one pane), each with its editor's box, the sidebar and the dividers. Undefined in TUI Pi.
+  function clientLayout(root) {
+    const name = (box) => box?.component?.constructor?.name || "";
+    const usable = (rect) => rect && rect.width > 0 && rect.height > 0;
+    const editorIn = (box, depth = 0) => {
+      if (!box || depth > 8) return null;
+      const kids = box.component?.children;
+      if (Array.isArray(kids) && kids.some((kid) => kid === lastEditorWrapper || /^(CustomEditor|Editor)$/.test(kid?.constructor?.name || kid?.base?.constructor?.name || ""))) return box.rect;
+      for (const child of box.children || []) {
+        const found = editorIn(child, depth + 1);
+        if (found) return found;
+      }
+      return null;
+    };
+    const panes = [];
+    const dividers = [];
+    let sidebar = null;
+    let area = null;
+    const walk = (box, depth = 0) => {
+      if (!box || depth > 8) return;
+      const kind = name(box);
+      if (kind === "PaneArea" && !area) area = box;
+      if (kind === "PaneFrame" && usable(box.rect)) {
+        panes.push({ ...box.rect, editor: editorIn(box) });
+        return;
+      }
+      if (kind === "Divider" && usable(box.rect)) dividers.push(box.rect);
+      if (!sidebar && (box.children || []).some((child) => name(child) === "Sidebar") && usable(box.rect)) sidebar = box.rect;
+      for (const child of box.children || []) walk(child, depth + 1);
+    };
+    walk(root);
+    if (!area) return undefined;
+    if (!panes.length && usable(area.rect)) panes.push({ ...area.rect, editor: editorIn(area) });
+    return { panes, sidebar, dividers };
   }
   // The canvas, as other extensions see it (visual thoughts blend into its background): whether
   // it is on, its background layer's z, and when it starts, stops or clears the screen (which
@@ -611,6 +650,13 @@ export default async function piGraphicsExtension(pi) {
       try { return String(activeThemeRef?.name || (runtimeSettingsOverride || readGfxSettingsBase())?.theme || ""); } catch { return ""; }
     },
     semanticTick: () => {
+      // Hosts that mount components without Container.addChild (pi-client's transcript sets its
+      // children) are learned from the live tree again, at most every 2 s while the canvas runs.
+      const now = Date.now();
+      if (hostTui && now - lastSemanticDiscoverAt > 2000) {
+        lastSemanticDiscoverAt = now;
+        try { host.discover(hostTui); } catch {}
+      }
       const classes = new Map(host.names().map((name) => [name, host.get(name)]));
       ensureSemanticTaps(classes, () => fullCanvasActive());
     },
@@ -1603,7 +1649,7 @@ export default async function piGraphicsExtension(pi) {
     refreshFooterState(ctx, pi, event);
     const factory = (tui, theme, footerData) => {
       writeGraphicsCommand = writeGraphicsCommand || resolveGraphicsWriter(tui) || resolveGraphicsWriter({ ui: tui });
-      activeThemeRef = theme || ctx?.ui?.theme || activeThemeRef;
+      activeThemeRef = theme || themeOf(ctx) || activeThemeRef;
       const unsubscribe = (() => { try { return footerData?.onBranchChange?.(() => tui?.requestRender?.()); } catch { return null; } })();
       return (lastFooterComponent = {
         __piGraphicsNoWrap: true,
@@ -1612,7 +1658,7 @@ export default async function piGraphicsExtension(pi) {
         invalidate() {},
         render(width = 120) {
           refreshFooterState(ctx, pi);
-          activeThemeRef = theme || ctx?.ui?.theme || activeThemeRef;
+          activeThemeRef = theme || themeOf(ctx) || activeThemeRef;
           return [clampRenderedLineToWidth(buildSegmentedFooterLine(ctx, footerData, width, pi, activeThemeRef), width)];
         },
       });
@@ -1674,7 +1720,7 @@ export default async function piGraphicsExtension(pi) {
       decorate(base, { tui, theme }) {
         editorRenderTui = tui || editorRenderTui;
         if (!hostTui && tui) hostTui = tui;
-        activeThemeRef = theme || ctx?.ui?.theme || activeThemeRef;
+        activeThemeRef = theme || themeOf(ctx) || activeThemeRef;
         writeGraphicsCommand = writeGraphicsCommand || resolveGraphicsWriter(tui) || resolveGraphicsWriter({ ui: tui });
         applyHardwareCursorPolicy(tui);
         return (lastEditorWrapper = wrapEditorComponent(base, {
@@ -1719,7 +1765,7 @@ export default async function piGraphicsExtension(pi) {
       piGraphics: false,
       render(width) {
         writeGraphicsCommand = writeGraphicsCommand || resolveGraphicsWriter(tui) || resolveGraphicsWriter({ ui: tui });
-        activeThemeRef = theme || ctx?.ui?.theme || activeThemeRef;
+        activeThemeRef = theme || themeOf(ctx) || activeThemeRef;
         const lines = buildEditorBorderWidgetRows(width, edge);
         return clampRenderedRowsToWidth(lines && lines.length ? lines : [], width);
       },
@@ -1731,6 +1777,10 @@ export default async function piGraphicsExtension(pi) {
 
   let genericGraphicsInstanceCounter = 0;
   let activeThemeRef = null;
+  // The theme Pi draws with: TUI Pi's ctx.ui.theme; pi-client has none there, so the one its
+  // custom() factories get (captured with its TUI).
+  let hostTheme = null;
+  const themeOf = (ctx) => (typeof ctx?.ui?.theme?.getFgAnsi === "function" ? ctx.ui.theme : hostTheme);
 
   function nextGenericGraphicsInstanceId() {
     genericGraphicsInstanceCounter = (genericGraphicsInstanceCounter + 1) & 0xffff;
@@ -2105,18 +2155,20 @@ export default async function piGraphicsExtension(pi) {
     try {
       ownedWorkingIndicator = {
         intervalMs: 110,
-        frames: buildWorkingIndicatorFrames(ctx.ui.theme || activeThemeRef),
+        frames: buildWorkingIndicatorFrames(themeOf(ctx) || activeThemeRef),
       };
       ctx.ui?.setWorkingIndicator?.(ownedWorkingIndicator);
       ownsWorkingIndicator = true;
-      ownedWorkingMessage = buildWorkingMessage({ stage: "working" }, ctx.ui.theme || activeThemeRef);
+      ownedWorkingMessage = buildWorkingMessage({ stage: "working" }, themeOf(ctx) || activeThemeRef);
       ctx.ui?.setWorkingMessage?.(ownedWorkingMessage);
       ownsWorkingMessage = true;
     } catch {}
   }
 
   function discoverHostComponents(ctx) {
-    const tui = captureTuiFromUi(ctx?.ui);
+    const captured = captureHostFromUi(ctx?.ui);
+    if (captured.theme) hostTheme = captured.theme;
+    const tui = captured.tui;
     if (!tui) return false;
     hostTui = tui;
     try { host.discover(tui); } catch {}
@@ -2134,7 +2186,7 @@ export default async function piGraphicsExtension(pi) {
     writeGraphicsCommand = resolveGraphicsWriter(ctx);
     if (hostTui?.terminal && !pixelGeometry.known()) pixelGeometry.query(writeGraphicsCommand);
     ensureFrameCompositor();
-    activeThemeRef = ctx?.ui?.theme || null;
+    activeThemeRef = themeOf(ctx) || null;
     clearStaleStartupGraphics();
     warnLegacyEditorMode(ctx);
     applyTheme(ctx);
@@ -2360,7 +2412,7 @@ export default async function piGraphicsExtension(pi) {
     try {
       const themeName = settings.piGraphics?.theme || settings.theme;
       if (themeName) ctx?.ui?.setTheme?.(themeName);
-      activeThemeRef = ctx?.ui?.theme || activeThemeRef;
+      activeThemeRef = themeOf(ctx) || activeThemeRef;
     } catch {}
     const off = modeIsOff(gfxEnv().PI_GRAPHICS_MODE);
     warnLegacyEditorMode(ctx);
@@ -3377,7 +3429,7 @@ export default async function piGraphicsExtension(pi) {
     const sub = String(args[0] || "toggle").toLowerCase();
     const notify = (message, type = "info") => { try { ctx.ui.notify(message, type); } catch {} };
     if (!hostTui) discoverHostComponents(ctx);
-    if (!activeThemeRef) activeThemeRef = ctx?.ui?.theme || null;
+    if (!activeThemeRef) activeThemeRef = themeOf(ctx) || null;
     ensureFrameCompositor();
     const startCanvas = async () => fullCanvas.start({ ...fullCanvasConfig(gfx), tapInput: (fn) => (hostTui?.terminal ? tapTerminalInput(hostTui.terminal, fn) : null) });
     try {
