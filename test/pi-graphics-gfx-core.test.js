@@ -191,6 +191,8 @@ test("renderer=gfx in pi-client: the focused pane is the shell's lane, every pan
   assert.deepEqual(right.blocks.filter((b) => b.status !== "prompt").map((b) => [b.prompt, b.command]), [[0, "user"], [1, "assistant"]]);
   assert.deepEqual(right.card.map((v) => Math.round(v * 2) / 2), [20.5, 2.5, 36.5, 5.5], "the right pane's editor is the card");
   assert.equal(right.rows[0].map((r) => r[0]).join("")[20], " ", "the divider's line gives way");
+  // the other pane's messages: their own lane, drawn finished (the focused pane has the effects)
+  assert.deepEqual(right.lanes.map((lane) => [lane.x, lane.w, lane.blocks.map((b) => [b.prompt, b.end, b.command, b.status])]), [[0, 20, [[0, 2, "assistant", "done"]]]]);
   // no cursor in any pane (a dialog has it): the pane focused before stays the lane
   const kept = toGfxFrame(rows, { cursor: null, client, focused: 1 });
   assert.deepEqual([kept.lane, kept.paneIndex], [[21, 15], 1]);

@@ -160,6 +160,42 @@ export async function createGfxCoreEngine({ wasmPath, font, cols, rows, cell, gu
   };
 }
 
+/** gfx-core blocks from the semantic markers in columns `lane` (all columns: null): consecutive
+ * rows of one block are one block (each message/tool call a pane; tools a header and output). */
+function semanticBlocks(parsed, lane, editor) {
+  const blocks = [];
+  let current = null;
+  for (let r = 0; r < parsed.length; r += 1) {
+    const rowCells = parsed[r].cells || [];
+    const sem = (lane ? rowCells.slice(lane[0], lane[0] + lane[1]) : rowCells).find((c) => c.sem)?.sem || null;
+    if (sem && current && current.id === sem.block) {
+      current.last = r;
+      if (sem.streaming) current.streaming = true;
+      if (sem.error) current.failed = true;
+      continue;
+    }
+    if (current) blocks.push(current);
+    current = sem ? { id: sem.block, role: sem.role, kind: sem.kind, first: r, last: r, streaming: !!sem.streaming, failed: !!sem.error } : null;
+  }
+  if (current) blocks.push(current);
+  return blocks
+    .filter((b) => !(editor && b.first >= editor.y && b.first < editor.y + editor.height))
+    .map((b) => {
+      const tool = b.role === "tool" || b.role === "bash";
+      const status = b.streaming ? "running" : "done";
+      return {
+        prompt: b.first,
+        // tools: a header row, then output; messages: all body
+        output: tool && b.last > b.first ? b.first + 1 : b.first,
+        end: b.last + 1,
+        command: [b.role, b.kind].filter(Boolean).join(" "),
+        status,
+        exit: b.failed ? 1 : 0,
+        badge: tool ? (b.failed ? "✗" : b.streaming ? "" : "✓") : (LABELS[b.role] ?? ""),
+      };
+    });
+}
+
 const LABELS = { user: "you", assistant: "", thinking: "thinking", tool: "", bash: "", custom: "", skill: "skill", summary: "summary" };
 
 /**
@@ -208,38 +244,19 @@ export function toGfxFrame(parsed, { cursor = null, editor = null, editorPadding
     }
     rows.push(runs.map((x) => [x.text, x.f, x.b, x.flags]));
   }
-  // blocks: consecutive rows of the same semantic block
-  const blocks = [];
-  let current = null;
-  for (let r = 0; r < parsed.length; r += 1) {
-    const rowCells = parsed[r].cells || [];
-    const sem = (lane ? rowCells.slice(lane[0], lane[0] + lane[1]) : rowCells).find((c) => c.sem)?.sem || null;
-    if (sem && current && current.id === sem.block) {
-      current.last = r;
-      if (sem.streaming) current.streaming = true;
-      if (sem.error) current.failed = true;
-      continue;
-    }
-    if (current) blocks.push(current);
-    current = sem ? { id: sem.block, role: sem.role, kind: sem.kind, first: r, last: r, streaming: !!sem.streaming, failed: !!sem.error } : null;
-  }
-  if (current) blocks.push(current);
-  const out = blocks
-    .filter((b) => !(editor && b.first >= editor.y && b.first < editor.y + editor.height))
-    .map((b) => {
-      const tool = b.role === "tool" || b.role === "bash";
-      const status = b.streaming ? "running" : "done";
-      return {
-        prompt: b.first,
-        // tools: a header row, then output; messages: all body
-        output: tool && b.last > b.first ? b.first + 1 : b.first,
-        end: b.last + 1,
-        command: [b.role, b.kind].filter(Boolean).join(" "),
-        status,
-        exit: b.failed ? 1 : 0,
-        badge: tool ? (b.failed ? "✗" : b.streaming ? "" : "✓") : (LABELS[b.role] ?? ""),
-      };
-    });
+  const out = semanticBlocks(parsed, lane, editor);
+  // pi-client's other panes: their blocks as panes in their own columns (gfx-core lanes; the
+  // focused pane keeps the caret, the card and the effects, so theirs are drawn finished)
+  const lanes = paneIndex >= 0
+    ? panes
+      .map((pane, index) => ({ pane, index }))
+      .filter(({ index }) => index !== paneIndex)
+      .map(({ pane }) => ({
+        x: pane.x,
+        w: pane.width,
+        blocks: semanticBlocks(parsed, [pane.x, pane.width], pane.editor || null).map((b) => ({ ...b, status: "done" })),
+      }))
+    : [];
   // the editor's whole box (top rule … bottom rule) is the input card; its
   // border sits editorPadding cells out from the text (1: the outer edge of
   // the rule rows; 0.5: through their middle, where Pi's chips are)
@@ -274,6 +291,6 @@ export function toGfxFrame(parsed, { cursor = null, editor = null, editorPadding
     cursor: cursor ? [cursor.col, cursor.row] : null,
     ...(card ? { card } : {}),
     ...(floats.length ? { floats } : {}),
-    ...(lane ? { lane, layout, paneIndex } : {}),
+    ...(lane ? { lane, layout, paneIndex, ...(lanes.length ? { lanes } : {}) } : {}),
   };
 }

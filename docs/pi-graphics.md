@@ -443,12 +443,12 @@ renderer) then draws the whole client screen: every pane, the sidebar and the ta
   while the canvas runs (pi-client sets its transcript's children directly), and asks the
   terminal's background with OSC 11 itself where pi-tui cannot.
 - Its layout comes from pi-client's layout tree: each pane (`PaneFrame`, or the pane area
-  with one pane) and its editor, the sidebar and the dividers. The focused pane (the one
-  with the cursor) is drawn like the shell: its messages and tools as glass panes, its
-  editor as the input card with the caret. Every pane and the sidebar are glass panels,
-  the focused one lit; the dividers' lines give way to the gaps.
-- This needs a gfx-core build whose frames take `lane` (the focused pane's columns) and
-  `layout`; an older one ignores them and draws the client as one shell, as before.
+  with one pane) and its editor, the sidebar and the dividers. Every pane's messages and
+  tools are glass panes in its own columns (a gfx-core lane each); the focused pane (the
+  one with the cursor) also has the input card, the caret and the effects, and they move
+  with the focus. The sidebar stays clear; the dividers' lines give way to the gaps.
+- This needs a gfx-core build whose frames take `lane`, `lanes` and `layout` (tools #46);
+  an older one ignores them and draws the client as one shell, as before.
 
 ## Commands
 
