@@ -413,11 +413,12 @@ test("the client part opens a fork made on another node there (ctx.sessions.crea
   const handlers = new Map();
   const watches = [];
   const created = [];
+  const notices = [];
   const ctx = {
     sessionManager: { getSessionId: () => "a" },
     chord: { async watchDocument(address, onValue) { watches.push(onValue); return () => {}; } },
     sessions: { create: async (options) => created.push(options) },
-    ui: { notify() {} },
+    ui: { notify: (text) => notices.push(text) },
   };
   gitClient({ on: (type, handler) => handlers.set(type, handler), events: { on() {}, emit() {} } });
   await handlers.get("session_start")({}, ctx);
@@ -426,4 +427,6 @@ test("the client part opens a fork made on another node there (ctx.sessions.crea
   watches[0]({ values: { forked: { path: "/home/b/wt/x", branch: "x", host: "aurora", at: 5 } } });
   await Promise.resolve();
   assert.deepEqual(created, [{ host: "aurora", cwd: "/home/b/wt/x", title: "x", carry: true }]);
+  // Said at once: copying a long conversation takes a while.
+  assert.deepEqual(notices, ["Opening x on aurora: copying this conversation into a session there…"]);
 });

@@ -105,6 +105,8 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
       live?.ui?.notify?.(`Worktree ready${host === undefined ? "" : ` on ${host}`}: ${cd} continues this conversation there.`, "info");
       return;
     }
+    // Copying a long conversation takes a while: say so at once, rather than nothing until it opens.
+    live?.ui?.notify?.(`Opening ${forked.branch}${host === undefined ? "" : ` on ${host}`}: copying this conversation into a session there…`, "info");
     try {
       await sessionsApi.create({ ...(host === undefined ? {} : { host }), cwd: forked.path, title: forked.branch, carry: true });
     } catch (error) {
