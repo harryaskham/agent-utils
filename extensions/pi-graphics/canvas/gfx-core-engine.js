@@ -98,7 +98,7 @@ function systemImports(memory) {
  * Load gfx-core and make a renderer for a cols × rows grid of cell × pixels.
  * @returns {Promise<{frame(frame): string, clear(): string, stats(): object, drop(): void}>}
  */
-export async function createGfxCoreEngine({ wasmPath, font, cols, rows, cell, gutter = 1, padding = null, effects = {}, theme = null }) {
+export async function createGfxCoreEngine({ wasmPath, font, cols, rows, cell, gutter = 1, padding = null, effects = {}, theme = null, origin = null, tmux = null, zBase = null }) {
   if (!wasmPath) throw new Error("gfx-core (gfx_wasm.wasm) not found: install gfxsh or set gfxWasm / $PI_GFX_WASM");
   let instance = null;
   const system = systemImports(() => instance.exports.memory);
@@ -124,7 +124,12 @@ export async function createGfxCoreEngine({ wasmPath, font, cols, rows, cell, gu
     .map((p) => readFileSync(p));
   if (!files.length) throw new Error("gfx-core: no font file found");
   const joined = Buffer.concat(files);
-  const config = { cols, rows, cell, gutter, effects, fonts: files.map((f) => f.length), ...(theme ? { theme } : {}), ...(padding ? { padding } : {}) };
+  // origin/tmux/z_base: one pane of a larger screen, drawn over its text (pi-client's /gfx pane)
+  const config = {
+    cols, rows, cell, gutter, effects, fonts: files.map((f) => f.length),
+    ...(theme ? { theme } : {}), ...(padding ? { padding } : {}),
+    ...(origin ? { origin } : {}), ...(tmux ? { tmux } : {}), ...(Number.isFinite(zBase) ? { z_base: zBase } : {}),
+  };
   const [cfgPtr, cfgLen] = put(JSON.stringify(config));
   const [fontPtr, fontLen] = put(joined);
   const handle = guard(() => x.gfx_new(cfgPtr, cfgLen, fontPtr, fontLen));
@@ -156,6 +161,16 @@ export async function createGfxCoreEngine({ wasmPath, font, cols, rows, cell, gu
       if (!x.gfx_area) return { ox: cell[0] * gutter, oy: 0, cols: Math.max(1, cols - gutter * 2), rows, view: [cols * cell[0], rows * cell[1]] };
       return JSON.parse(out(x.gfx_area(handle)));
     },
+    /** Move it (origin, tmux, zBase): returns what deletes the old placements; drawn again next frame. */
+    target({ origin = null, tmux = null, zBase = null } = {}) {
+      if (!x.gfx_target) throw new Error("this gfx-core cannot draw a pane (update gfxsh)");
+      const [ptr, len] = put(JSON.stringify({ ...(origin ? { origin } : {}), tmux, ...(Number.isFinite(zBase) ? { z_base: zBase } : {}) }));
+      const text = guard(() => out(x.gfx_target(handle, ptr, len)));
+      x.gfx_free(ptr, len);
+      if (text.startsWith("ERR ")) throw new Error(`gfx-core: ${text.slice(4)}`);
+      return text;
+    },
+    canTarget: () => typeof x.gfx_target === "function",
     drop() { x.gfx_drop(handle); },
   };
 }

@@ -450,6 +450,15 @@ renderer) then draws the whole client screen: every pane, the sidebar and the ta
 - This needs a gfx-core build whose frames take `lane`, `lanes` and `layout` (tools #46);
   an older one ignores them and draws the client as one shell, as before.
 
+`/gfx pane` (`on`, `off`, `toggle`, `status`) draws just this pane with gfx-core; the rest of
+the screen stays text. Each such pane has its own gfx-core renderer: its grid is the pane's own
+cells (so the mouse works there as everywhere, untranslated), placed at the pane's origin (under
+tmux also at the tmux pane's outer origin, through gfx-core's passthrough), with its layers above
+the pane's text, fed pi-client's screen cropped to the pane (dialogs over it included). It
+follows the pane as the layout changes (found again by its component); a pane resized gets a
+renderer of its new size. Needs gfx-core with `gfx_target` (tools #47) and the gfx renderer
+settings; `/gfx full` and `/gfx pane` are exclusive.
+
 ## Commands
 
 `/gfx` with no arguments opens the settings UI. Useful direct forms include:

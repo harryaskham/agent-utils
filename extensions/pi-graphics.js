@@ -170,7 +170,7 @@ export default async function piGraphicsExtension(pi) {
       }
       if (boxChromeInstalled && BOX_CHROME_CLASS_NAMES.has(name)) patchDiscoveredBoxChromeClass(name, ctor);
       // Semantic provenance for the pixel canvas; inert unless it is active.
-      if (ROLE_BY_CLASS[name]) tapSemanticClass(name, ctor, () => fullCanvasActive());
+      if (ROLE_BY_CLASS[name]) tapSemanticClass(name, ctor, () => fullCanvasActive() || fullCanvas?.panesActive?.() === true);
     },
   });
   try {
@@ -506,6 +506,19 @@ export default async function piGraphicsExtension(pi) {
     onError: (error) => trace(`compositor error: ${error?.stack || error}`),
     onFrame(frame, context) {
       if (fullCanvas?.active) return fullCanvas.onFrame(frame, context);
+      lastFrameCursor = frame.cursor || lastFrameCursor;
+      const decision = overlayFrame(frame, context) || {};
+      // /gfx pane: the chosen panes drawn by gfx-core, inside the same update
+      if (fullCanvas?.panesActive?.()) {
+        const panes = fullCanvas.onPaneFrame(frame, context);
+        if (panes.inject) decision.inject = `${decision.inject || ""}${panes.inject}`;
+      }
+      return decision;
+    },
+  });
+  let lastFrameCursor = null;
+  function overlayFrame(frame, context) {
+    {
       frame.buffer = context?.buffer || "";
       const cursorSeen = editorCursorFrameSeen;
       editorCursorFrameSeen = false;
@@ -542,8 +555,8 @@ export default async function piGraphicsExtension(pi) {
       // placements our Unicode placeholders reference (cheap: no pixel data).
       inject = `${restoreAfterHostClear(frame)}${inject}`;
       return { inject };
-    },
-  });
+    }
+  }
 
   let lastEditorWrapper = null;
   let lastFooterComponent = null;
@@ -595,7 +608,7 @@ export default async function piGraphicsExtension(pi) {
       const kind = name(box);
       if (kind === "PaneArea" && !area) area = box;
       if (kind === "PaneFrame" && usable(box.rect)) {
-        panes.push({ ...box.rect, editor: editorIn(box) });
+        panes.push({ ...box.rect, editor: editorIn(box), component: box.component });
         return;
       }
       if (kind === "Divider" && usable(box.rect)) dividers.push(box.rect);
@@ -604,7 +617,7 @@ export default async function piGraphicsExtension(pi) {
     };
     walk(root);
     if (!area) return undefined;
-    if (!panes.length && usable(area.rect)) panes.push({ ...area.rect, editor: editorIn(area) });
+    if (!panes.length && usable(area.rect)) panes.push({ ...area.rect, editor: editorIn(area), component: area.component });
     return { panes, sidebar, dividers };
   }
   // The canvas, as other extensions see it (visual thoughts blend into its background): whether
@@ -667,7 +680,7 @@ export default async function piGraphicsExtension(pi) {
         try { host.discover(hostTui); } catch {}
       }
       const classes = new Map(host.names().map((name) => [name, host.get(name)]));
-      ensureSemanticTaps(classes, () => fullCanvasActive());
+      ensureSemanticTaps(classes, () => fullCanvasActive() || fullCanvas?.panesActive?.() === true);
     },
     trace,
     onStateChange(active) {
@@ -3085,6 +3098,10 @@ export default async function piGraphicsExtension(pi) {
         await handleFullCanvasCommand(ctx, tokens.slice(1), settings, gfx);
         return;
       }
+      if (action === "pane") {
+        await handlePaneCommand(ctx, tokens.slice(1), gfx);
+        return;
+      }
       if (action === "status" || action === "show" || action === "info") { describe(); return; }
       if (action === "save") {
         if (!hasUnsavedGfxChanges()) { ctx.ui.notify("Pi Graphics: no unsaved runtime changes to save.", "info"); return; }
@@ -3434,6 +3451,46 @@ export default async function piGraphicsExtension(pi) {
     return lines.join("\n");
   }
 
+  // /gfx pane (pi-client): gfx-core draws this pane (the one with the cursor) over its text; the
+  // rest of the screen stays text. Found again by its component as the layout changes.
+  async function handlePaneCommand(ctx, args, gfx) {
+    const sub = String(args[0] || "toggle").toLowerCase();
+    const notify = (message, type = "info") => { try { ctx.ui.notify(message, type); } catch {} };
+    if (!hostTui) discoverHostComponents(ctx);
+    if (!activeThemeRef) activeThemeRef = themeOf(ctx) || null;
+    ensureFrameCompositor();
+    if (sub === "status") {
+      const panes = fullCanvas?.paneStatus?.() || [];
+      notify(panes.length ? `Pi Graphics panes: ${panes.map((p) => `${p.size || "?"}${p.ready ? "" : " (starting)"}${p.error ? ` – ${p.error}` : ""}`).join(", ")}` : "Pi Graphics: no gfx panes (/gfx pane to draw this one).");
+      return;
+    }
+    const root = () => hostTui?.currentLayout?.root;
+    const client = clientLayout(root());
+    if (!client?.panes?.length) { notify("/gfx pane is pi-client's: in TUI Pi, /gfx full draws the screen.", "warning"); return; }
+    // this pane: where its backdrop area is (pi-client's ctx is the focused pane's), else the cursor
+    let area;
+    try { area = typeof ctx?.ui?.backdrop === "function" ? ctx.ui.backdrop()?.rect?.() : undefined; } catch {}
+    const holds = (p, r) => r && r.x >= p.x && r.y >= p.y && r.x < p.x + p.width && r.y < p.y + p.height;
+    const at = lastFrameCursor;
+    const inside = (p) => at && at.row >= p.y && at.row < p.y + p.height && at.col >= p.x && at.col < p.x + p.width;
+    const chosen = client.panes.find((p) => holds(p, area)) || client.panes.find(inside) || client.panes[0];
+    const component = chosen.component;
+    const rect = () => {
+      const now = clientLayout(root());
+      const pane = now?.panes.find((p) => p.component === component) || (now?.panes.length && !now.panes.some((p) => p.component === component) && component?.constructor?.name === "PaneArea" ? now.panes[0] : null);
+      return pane ? { x: pane.x, y: pane.y, width: pane.width, height: pane.height } : undefined;
+    };
+    const enabled = fullCanvas?.hasPane?.(component) === true;
+    try {
+      if (sub === "off" && !enabled) { notify("Pi Graphics: this pane is not drawn by gfx."); return; }
+      if (sub === "on" && enabled) { notify("Pi Graphics: this pane is already drawn by gfx-core."); return; }
+      const on = await fullCanvas.togglePane(component, rect, { ...fullCanvasConfig(gfx), renderer: "gfx", tapInput: (fn) => (hostTui?.terminal ? tapTerminalInput(hostTui.terminal, fn) : null) });
+      notify(on ? "Pi Graphics: this pane is drawn by gfx-core (/gfx pane again to stop)." : "Pi Graphics: this pane is text again.");
+    } catch (error) {
+      notify(`Pi Graphics: ${error.message}`, "warning");
+    }
+  }
+
   async function handleFullCanvasCommand(ctx, args, settings, gfx) {
     const sub = String(args[0] || "toggle").toLowerCase();
     const notify = (message, type = "info") => { try { ctx.ui.notify(message, type); } catch {} };
@@ -3520,6 +3577,7 @@ export default async function piGraphicsExtension(pi) {
     if (shutdownComplete) return;
     shutdownComplete = true;
     try { await fullCanvas?.stop?.({ reason: "shutdown" }); } catch {}
+    try { fullCanvas?.stopPanes?.(); } catch {}
     try {
       const overlayClear = overlayPlacements.clear();
       if (overlayClear) resolveGraphicsWriter(ctx)?.(overlayClear);

@@ -211,3 +211,23 @@ test("the canvas reads the terminal's background from an OSC 11 reply (pi-tui wi
   assert.deepEqual(parseBackgroundReply("\x1b]11;rgb:ff/80/00\x07"), { r: 255, g: 128, b: 0 });
   assert.equal(parseBackgroundReply("\x1b[6;24;10t"), null);
 });
+
+test("renderer=gfx for /gfx pane: a renderer placed at a pane's origin, its layers above the text, moved by target()", { skip: !findGfxWasm() && "gfx_wasm.wasm not found (gfxsh / $PI_GFX_WASM)" }, async (t) => {
+  const engine = await createGfxCoreEngine({ wasmPath: findGfxWasm(), font: "", cols: 30, rows: 8, cell: [10, 20], gutter: 0, origin: [12, 3], zBase: 1000 }).catch((error) => {
+    if (/no font/.test(error.message)) return null;
+    throw error;
+  });
+  if (!engine) return t.skip("no font file");
+  t.after(() => engine.drop());
+  if (!engine.canTarget()) return t.skip("this gfx-core cannot draw a pane (older gfxsh)");
+  const rows = screen(["hello", "", "› typing"], 30);
+  const out = engine.frame(toGfxFrame(rows, { cursor: { row: 2, col: 3 }, editor: { x: 0, y: 2, width: 30, height: 1 } }));
+  const places = [...out.matchAll(/\x1b\[(\d+);(\d+)H\x1b_G([^;\x1b]*)/g)].map((m) => ({ row: Number(m[1]), col: Number(m[2]), z: Number(/(?:^|,)z=(-?\d+)/.exec(m[3])?.[1] ?? NaN) }));
+  assert.ok(places.length > 0, "placed");
+  assert.ok(places.every((p) => p.row >= 4 && p.col >= 13), `inside the pane from row 4, col 13: ${JSON.stringify(places.slice(0, 3))}`);
+  assert.ok(places.filter((p) => Number.isFinite(p.z)).every((p) => p.z >= 1000), "above the text");
+  // moved: the old placements go, the next frame places them at the new origin
+  assert.equal(typeof engine.target({ origin: [0, 0], zBase: 1000 }), "string");
+  const moved = engine.frame(toGfxFrame(rows, { cursor: { row: 2, col: 3 } }));
+  assert.ok([...moved.matchAll(/\x1b\[(\d+);(\d+)H\x1b_G/g)].some((m) => Number(m[1]) < 4), "placed from the new origin");
+});
