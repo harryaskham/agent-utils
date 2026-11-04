@@ -731,3 +731,51 @@ test("the cost chip uses pi-client's ledger of the whole conversation when it ha
   const editor = editorFactory({ requestRender() {} }, { fg: (_c, t) => t, bg: (_c, t) => t, bold: (t) => t }, {});
   assert.match(stripAnsi(editor.render(120).join("\n")), /12\.3/);
 });
+
+test("the context chip shows a /context limit: the share of it, then ≤LIMIT in the override colour", async () => {
+  // The rail: 256k of a 1M window under a 512k limit is half the limit.
+  const limited = buildEditorChipRails({ width: 260, config, values: values({ contextPct: 50, contextMax: 1_000_000, contextLimit: 512_000 }), theme });
+  assert.match(stripAnsi(limited.bottom), /50\.0%▌≤512k/);
+  assert.doesNotMatch(stripAnsi(limited.bottom), /1\.0M/, "the limit, not the window");
+  assert.match(limited.bottom, /\x1b\[38;2;0;0;0m\x1b\[48;2;\d+;\d+;\d+m≤512k/, "on its own colour");
+  assert.match(stripAnsi(buildEditorChipRails({ width: 260, config, values: values({ contextPct: 50, contextMax: 1_000_000 }), theme }).bottom), /50\.0%▌1\.0M/);
+
+  // Through the extension: TUI Pi reads the branch's limit entry; pi-client follows the module's state.
+  const mount = async (ctx) => {
+    const handlers = new Map();
+    let editorFactory;
+    const ui = { getEditorComponent: () => null, setEditorComponent(factory) { editorFactory = factory; }, setFooter() {}, setStatus() {} };
+    const pi = {
+      registerCommand() {},
+      on(name, handler) { handlers.set(name, [...(handlers.get(name) || []), handler]); },
+      getThinkingLevel: () => "low",
+      exec: async () => ({ code: 0, stdout: "" }),
+    };
+    class FakeCustomEditor { render() { return ["────────", "", "────────"]; } invalidate() {} }
+    await createEditorChipsExtension({ settings: { agentUtils: { editorChips: { enabled: true } } }, env: { HOME: "/tmp" }, host: { CustomEditor: FakeCustomEditor } })(pi);
+    await handlers.get("session_start")[0]({}, { ...ctx, ui });
+    return { draw: () => stripAnsi(editorFactory({ requestRender() {} }, theme, {}).render(200).at(-1)), stop: () => handlers.get("session_shutdown")?.[0]?.({}, { ...ctx, ui }) };
+  };
+  const usage = { getContextUsage: () => ({ tokens: 256_000, contextWindow: 1_000_000, percent: 25.6 }), model: { provider: "p", id: "m", contextWindow: 1_000_000 }, cwd: "/tmp" };
+  const tui = await mount({ ...usage, sessionManager: { getEntries: () => [], getBranch: () => [{ type: "custom", customType: "agent-utils:context-limit", data: { limit: 512_000 } }] } });
+  assert.match(tui.draw(), /50\.0%▌≤512k/);
+  await tui.stop();
+
+  let send;
+  const watched = [];
+  const client = await mount({
+    ...usage,
+    sessionManager: { getEntries: () => [], getSessionId: () => "s1" },
+    chord: { watchDocument: async (address, onValue) => { watched.push(address); if (address.key === "context-limit") send = onValue; return () => {}; } },
+  });
+  assert.match(client.draw(), /25\.6%▌1\.0M/, "no limit known yet: the window");
+  await new Promise((resolve) => setImmediate(resolve));
+  const limits = () => watched.filter((address) => address.key === "context-limit");
+  assert.deepEqual(limits(), [{ kind: "pi-daemon.module-state", version: 1, scope: "session", key: "context-limit" }]);
+  send({ values: { limit: 512_000 } });
+  assert.match(client.draw(), /50\.0%▌≤512k/);
+  send({ values: {} });
+  assert.match(client.draw(), /25\.6%▌1\.0M/, "cleared (/context off): the window again");
+  assert.equal(limits().length, 1, "followed once");
+  await client.stop();
+});

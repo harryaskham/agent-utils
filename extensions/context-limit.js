@@ -10,6 +10,7 @@
 // AHP bridge are left alone (compact() would abort their own request).
 import {
   CONTEXT_LIMIT_ENTRY,
+  branchContextLimit,
   describeLimit,
   formatTokens,
   parseContextLimit,
@@ -20,13 +21,7 @@ import {
 const STATUS_KEY = "context-limit";
 
 /** The limit recorded on the session's branch (its last context-limit entry), or null. */
-export function branchLimit(entries) {
-  for (let index = (entries?.length ?? 0) - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
-    if (entry?.type === "custom" && entry.customType === CONTEXT_LIMIT_ENTRY) return storedLimit(entry.data?.limit);
-  }
-  return null;
-}
+export const branchLimit = branchContextLimit;
 
 /** The session's context now: Pi's own measure, else the last response's usage. */
 function contextTokens(ctx) {

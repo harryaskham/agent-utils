@@ -312,13 +312,16 @@ function chipFor(field, values, theme) {
     case "cost": return renderParts([part(`$${Number(values.cost || 0).toFixed(2)}`, darken(p.green), [248, 248, 248])]);
     case "context": {
       const pct = Number(values.contextPct || 0);
+      // A /context limit: the share of it, then the limit (≤500k) in the override colour, not the window.
+      const limited = Number(values.contextLimit) > 0;
+      const size = limited ? `≤${formatChipTokens(values.contextLimit)}` : formatChipTokens(values.contextMax);
       if (pct > 80) return renderParts([
         part(`${pct.toFixed(1)}%`, p.white, darken(p.red, 0.7)),
-        part(formatChipTokens(values.contextMax), p.red, [0, 0, 0]),
+        part(size, limited ? p.orange : p.red, [0, 0, 0]),
       ], { divider: "vertical" });
       return renderParts([
         part(`${pct.toFixed(1)}%`, pct < 40 ? p.green : p.context, pct < 40 ? darken(p.green, 0.42) : undefined),
-        part(formatChipTokens(values.contextMax), p.grey, p.dark),
+        limited ? part(size, p.orange, [0, 0, 0]) : part(size, p.grey, p.dark),
       ], { divider: "vertical" });
     }
     // The editor's own border labels: its working status (pi-client), and how much is scrolled off.

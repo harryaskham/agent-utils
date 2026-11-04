@@ -14,6 +14,18 @@
 export const CONTEXT_LIMIT_ENTRY = "agent-utils:context-limit";
 /** pi-daemon: the module state key holding a session's limit. */
 export const CONTEXT_LIMIT_KEY = "limit";
+/** pi-daemon: the module's per-session state document (context-limit.mjs), as pi-client follows it. */
+export const CONTEXT_LIMIT_DOC = Object.freeze({ kind: "pi-daemon.module-state", version: 1, scope: "session", key: "context-limit" });
+
+/** TUI Pi: the limit recorded on a session's branch (its last context-limit entry), or null. */
+export function branchContextLimit(entries) {
+  for (let index = (entries?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry?.type === "custom" && entry.customType === CONTEXT_LIMIT_ENTRY) return storedLimit(entry.data?.limit);
+  }
+  return null;
+}
+
 /** The smallest limit: below it a compaction's own summary and kept messages would not fit. */
 export const MIN_CONTEXT_LIMIT = 20_000;
 /** A limit that asked for compaction may ask again after this, if the context is still over it. */

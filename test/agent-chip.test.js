@@ -121,7 +121,9 @@ test("pi-client draws each pane's session's agent, from its cacophony module's s
   const callbacks = new Map();
   let drawingSession;
   const chord = {
+    // The chips watch other documents too (a /context limit): this test follows the agent's.
     watchDocument(address, onValue) {
+      if (address.key !== CACOPHONY_STATE_ADDRESS.key) return Promise.resolve(() => {});
       watched.push({ address, session: drawingSession });
       callbacks.set(drawingSession, onValue);
       return Promise.resolve(() => watched.push({ stopped: drawingSession }));

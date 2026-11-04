@@ -21,6 +21,11 @@ The plugin isn't loaded by default, and once loaded it does nothing until a sess
 | TUI Pi | `extensions/context-limit.js` (not in the package manifest) | listing it in `settings.json`'s `extensions` | a custom session entry (`agent-utils:context-limit`), so it follows the session and its branches across restarts |
 | pi-daemon | `extensions/durable/context-limit.mjs` (the Nix package exports it as `context-limit.mjs`) | listing it in a profile's extensions | the module's per-session state |
 
+The editor chips' context chip shows a session's limit while one is set: the share of the limit
+used, then `≤500k` (the limit, not the model's window) in orange. TUI Pi reads it from the
+session's limit entry; pi-client follows the pi-daemon module's per-session state, so a limit set
+from any client shows in every pane of that session. `/context off` brings back the window.
+
 ## When it compacts
 
 - **TUI Pi:** after a run, once the agent has settled. Pi's `compact()` stops a running agent, so the extension waits for `agent_settled`, as `self-compact.js` does, and compacts only if Pi is idle with nothing pending. A long run can pass the limit until it ends; the model's own threshold still applies during it. RPC mode and Paratenic's AHP bridge are left alone.

@@ -2,6 +2,7 @@
 // is extensions/editor-chips.js, which supplies the running Pi's CustomEditor.
 import { LOOPS_EVENT, LOOPS_REQUEST, nextLoopIn, shortDuration } from "./loop-indicator.js";
 import { GIT_EVENT, GIT_REQUEST } from "./git-indicator.js";
+import { CONTEXT_LIMIT_DOC, CONTEXT_LIMIT_KEY, branchContextLimit, storedLimit } from "./context-limit.js";
 import { CACOPHONY_STATE_ADDRESS, runtimeAgentChip, stateAgentChip } from "./agent-chip.js";
 import { onCacophonyRuntimeIdentity } from "./cacophony-runtime.js";
 import { readAgentSettings, agentSettingsPath } from "../pi-graphics/agent-io.js";
@@ -80,6 +81,10 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       // Each session's live loops (loop.mjs's client part publishes them), and when we last asked.
       loops: new Map(),
       loopRequests: new Map(),
+      // Each session's /context limit: pi-client follows the daemon module's state; TUI Pi reads
+      // the session's branch (cached by its length).
+      contextLimits: new Map(),
+      branchLimit: { length: -1, last: undefined, limit: null },
       loopTimer: null,
       loopsUnsubscribe: null,
       footerData: null,
@@ -207,6 +212,45 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
     subscribeLoops();
 
     // The loops of the session this ctx draws: asked for (now and then), the count and next.
+    // A session's /context limit (agent-utils' context-limit), or null. pi-client: the daemon
+    // module's per-session state, followed once per session (at most 32 at once); TUI Pi: the
+    // session branch's last limit entry, read again only when the branch grows.
+    const contextLimitFor = (ctx) => {
+      if (typeof ctx?.chord?.watchDocument === "function") {
+        const sessionId = sessionIdOf(ctx);
+        if (!sessionId) return null;
+        let entry = state.contextLimits.get(sessionId);
+        if (entry === undefined) {
+          entry = { limit: null, stop: undefined, stopped: false };
+          state.contextLimits.set(sessionId, entry);
+          while (state.contextLimits.size > 32) {
+            const [oldest, gone] = state.contextLimits.entries().next().value;
+            state.contextLimits.delete(oldest);
+            gone.stopped = true;
+            gone.stop?.();
+          }
+          const followed = entry;
+          Promise.resolve()
+            .then(() => ctx.chord.watchDocument(CONTEXT_LIMIT_DOC, (value) => {
+              if (followed.stopped) return;
+              const limit = storedLimit(value?.values?.[CONTEXT_LIMIT_KEY]);
+              if (limit === followed.limit) return;
+              followed.limit = limit;
+              try { state.tui?.requestRender?.(); } catch {}
+            }))
+            .then((stop) => { if (followed.stopped) stop?.(); else followed.stop = stop; }, () => { if (state.contextLimits.get(sessionId) === followed) state.contextLimits.delete(sessionId); });
+        }
+        return entry.limit;
+      }
+      let entries = [];
+      try { entries = ctx?.sessionManager?.getBranch?.() || []; } catch {}
+      const cached = state.branchLimit;
+      if (cached.length !== entries.length || cached.last !== entries.at(-1)) {
+        state.branchLimit = { length: entries.length, last: entries.at(-1), limit: branchContextLimit(entries) };
+      }
+      return state.branchLimit.limit;
+    };
+
     const loopsFor = (ctx) => {
       if (!configuredFields.has("loops")) return { loopsCount: 0 };
       let sessionId;
@@ -281,7 +325,11 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       })();
       const contextMax = Number(usage.contextWindow ?? usage.contextWindowSize ?? ctx.model?.contextWindow ?? 0);
       const contextTokens = Number(usage.tokens ?? usage.contextTokens ?? 0);
-      const contextPct = Number(usage.percent ?? usage.usedPercentage ?? (contextMax > 0 ? (contextTokens / contextMax) * 100 : 0));
+      const windowPct = Number(usage.percent ?? usage.usedPercentage ?? (contextMax > 0 ? (contextTokens / contextMax) * 100 : 0));
+      // A /context limit: the share of it, and the chip says the limit, not the model's window.
+      const contextLimit = contextLimitFor(ctx);
+      const used = contextTokens > 0 ? contextTokens : (windowPct / 100) * contextMax;
+      const contextPct = contextLimit > 0 ? (used / contextLimit) * 100 : windowPct;
       const provider = String(ctx.model?.provider || "model");
       return {
         provider,
@@ -300,6 +348,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         subscription: provider === "github-copilot" || provider === "kimi-coding",
         contextPct: Number.isFinite(contextPct) ? contextPct : 0,
         contextMax: Number.isFinite(contextMax) ? contextMax : 0,
+        contextLimit: contextLimit > 0 ? contextLimit : 0,
         directory: prettyDirectory(ctx.cwd || process.cwd(), env.HOME || env.USERPROFILE),
         agent: agentFor(ctx),
         branch: footerBranch || git?.branch || "",
@@ -448,6 +497,11 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       try { state.speechUnsubscribe?.(); } catch {}
       state.speechUnsubscribe = null;
       try { state.loopsUnsubscribe?.(); } catch {}
+      for (const entry of state.contextLimits.values()) {
+        entry.stopped = true;
+        try { entry.stop?.(); } catch {}
+      }
+      state.contextLimits.clear();
       try { state.agentUnsubscribe?.(); } catch {}
       state.agentUnsubscribe = null;
       for (const entry of state.agents.values()) {
