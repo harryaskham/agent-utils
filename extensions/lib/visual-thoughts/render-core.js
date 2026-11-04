@@ -83,7 +83,7 @@ export function createRenderCore({ dir, transport = "file", pid = process.pid, n
   function context(name = "default") {
     let state = contexts.get(name);
     if (!state) {
-      state = { images: new Map(), area: null, txPixels: 400_000, display: { fit: "cover", feather: 0.12, opacity: 0.3 }, current: null };
+      state = { images: new Map(), area: null, txPixels: 400_000, display: { fit: "cover", feather: 0.12, opacity: 0.3, luminanceAlpha: 0 }, current: null };
       contexts.set(name, state);
     }
     return state;
@@ -122,13 +122,13 @@ export function createRenderCore({ dir, transport = "file", pid = process.pid, n
 
   const handlers = {
     /** Display geometry and look; prepared rasters for another size or look are dropped. */
-    configure(state, { area: nextArea, txPixels: nextTx, fit, feather, opacity }) {
+    configure(state, { area: nextArea, txPixels: nextTx, fit, feather, opacity, luminanceAlpha = 0 }) {
       const { area, txPixels, display } = state;
       const changed = !area || nextArea.width !== area.width || nextArea.height !== area.height || nextTx !== txPixels
-        || fit !== display.fit || feather !== display.feather || opacity !== display.opacity;
+        || fit !== display.fit || feather !== display.feather || opacity !== display.opacity || luminanceAlpha !== display.luminanceAlpha;
       state.area = { width: Math.max(16, Math.round(nextArea.width)), height: Math.max(16, Math.round(nextArea.height)) };
       if (Number.isFinite(nextTx)) state.txPixels = nextTx;
-      state.display = { fit, feather, opacity };
+      state.display = { fit, feather, opacity, luminanceAlpha };
       if (changed) for (const image of state.images.values()) { image.hold = null; image.tx = null; }
       return { changed };
     },

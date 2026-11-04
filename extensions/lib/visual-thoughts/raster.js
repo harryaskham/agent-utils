@@ -26,7 +26,10 @@ function smoothstep(edge, x) {
  * side) fades the image's edges into transparency, and `opacity` scales its alpha. Downscaling
  * averages each target pixel's footprint; upscaling interpolates.
  */
-export function prepareBackdrop(src, { width, height, fit = "cover", feather = 0.1, opacity = 0.25 }) {
+export function prepareBackdrop(src, { width, height, fit = "cover", feather = 0.1, opacity = 0.25, luminanceAlpha = 0 }) {
+  // Blended into a background that moves (pi-graphics' canvas): dark parts fade out with this
+  // strength (0..1), so the background glows through the painting's shadows; light parts stay.
+  const lumaAlpha = Math.max(0, Math.min(1, Number(luminanceAlpha) || 0));
   const out = new Uint8Array(width * height * 4);
   const sw = src.width;
   const sh = src.height;
@@ -90,7 +93,13 @@ export function prepareBackdrop(src, { width, height, fit = "cover", feather = 0
       }
       const o = (y * width + x) * 4;
       out[o] = r; out[o + 1] = g; out[o + 2] = b;
-      out[o + 3] = a * alphaScale * edgeY * smoothstep(edge, Math.min(tx, iw - tx));
+      let alpha = a * alphaScale * edgeY * smoothstep(edge, Math.min(tx, iw - tx));
+      if (lumaAlpha > 0) {
+        const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+        const t = Math.max(0, Math.min(1, (luma - 0.03) / 0.5));
+        alpha *= 1 - lumaAlpha + lumaAlpha * t * t * (3 - 2 * t);
+      }
+      out[o + 3] = alpha;
     }
   }
   return { width, height, rgba: out };

@@ -33,7 +33,7 @@ const PI_UI_DOC = Object.freeze({ kind: "pi.ui", version: 1, scope: "session" })
 const BACKDROP_SLOT = "backdrop";
 const EMPTY_SLOT = Object.freeze({ kind: "image-set", images: [], current: 0 });
 /** Settings about how this client shows images; the rest is the painter's (the host's, where it paints). */
-const LOCAL_KEYS = new Set(["layer", "area", "fps", "effect", "transitionPixels", "transport", "fadeMs", "minShowMs", "canvasOpacity"]);
+const LOCAL_KEYS = new Set(["layer", "area", "fps", "effect", "transitionPixels", "transport", "fadeMs", "minShowMs", "canvasOpacity", "canvasBlend"]);
 const PROVIDER_KEYS = new Set(["provider", "imageModel", "size", "quality", "baseUrl", "apiKeyEnv", "maiEndpoint", "maiAuth", "maiKeyEnv"]);
 
 export function resolvePromptModel(registry, reference) {
@@ -180,7 +180,64 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
     }
 
     /** A new surface for the pane; throws where none can be drawn. */
+    /**
+     * pi-graphics' canvas (gfx-core) as the render backend while it runs: the frames go to the
+     * canvas, which places them in its own frames above its background (TUI Pi: the screen; a
+     * pi-client pane: its area); otherwise to `base`. A switch empties the other and the engine
+     * uploads again. A pi-client without backdrop rects keeps its backdrop.
+     */
+    function canvasAware(base, holder, backdrop) {
+      const CANVAS = Symbol.for("agent-utils.pi-graphics.canvas");
+      if (backdrop && typeof backdrop.rect !== "function") return Object.assign(base, { onCanvas: () => false });
+      let onCanvas = null;
+      let unsubscribe = null;
+      const switched = () => queueMicrotask(() => holder.current?.engine.lost());
+      const pick = () => {
+        const canvas = globalThis[CANVAS];
+        if (!unsubscribe && typeof canvas?.subscribe === "function") {
+          unsubscribe = canvas.subscribe((event) => { if (event === "start" || event === "stop") pick(); });
+        }
+        if (canvas?.active && !onCanvas) {
+          const surface = canvas.surface?.({
+            ...(backdrop ? { rect: () => backdrop.rect() } : {}),
+            onResize: () => holder.current?.engine.resized(),
+            onLost: () => holder.current?.engine.lost(),
+          });
+          if (surface) {
+            onCanvas = surface;
+            try { base.clear(); } catch {}
+            switched();
+          }
+        } else if (!canvas?.active && onCanvas) {
+          try { onCanvas.dispose?.(); } catch {}
+          onCanvas = null;
+          switched();
+        }
+        return onCanvas || base;
+      };
+      return {
+        size: () => pick().size(),
+        transport: () => pick().transport(),
+        has: (key) => pick().has(key),
+        upload: (key, payload) => pick().upload(key, payload),
+        show: (key) => pick().show(key),
+        get shown() { return pick().shown; },
+        drop: (key) => pick().drop(key),
+        clear: () => pick().clear(),
+        onCanvas: () => Boolean(onCanvas),
+        dispose() {
+          try { unsubscribe?.(); } catch {}
+          try { onCanvas?.dispose?.(); } catch {}
+          base.dispose?.();
+        },
+      };
+    }
+
     function makeSurface(ctx, backdrop, holder, paneConfig = config) {
+      return canvasAware(makeOwnSurface(ctx, backdrop, holder, paneConfig), holder, backdrop);
+    }
+
+    function makeOwnSurface(ctx, backdrop, holder, paneConfig = config) {
       if (backdrop) {
         return hostSurface(backdrop, {
           config: paneConfig,
@@ -256,7 +313,16 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
           budget,
           warn: warnOnce,
           // Blended into pi-graphics' canvas (TUI Pi's /gfx full), stronger.
-          look: () => ({ fit: paneConfig.fit, feather: paneConfig.feather, opacity: !backdrop && activeCanvas() ? paneConfig.canvasOpacity : paneConfig.opacity }),
+          // On pi-graphics' canvas: stronger, its dark parts giving way to the canvas's background.
+          look: () => {
+            const onCanvas = surface.onCanvas?.() === true;
+            return {
+              fit: paneConfig.fit,
+              feather: paneConfig.feather,
+              opacity: onCanvas || (!backdrop && activeCanvas()) ? paneConfig.canvasOpacity : paneConfig.opacity,
+              luminanceAlpha: onCanvas ? paneConfig.canvasBlend : 0,
+            };
+          },
           ...(env.PI_VISUAL_THOUGHTS_TRACE ? { trace: (line) => appendFileSync(env.PI_VISUAL_THOUGHTS_TRACE, `${line}\n`) } : {}),
           fetchImage: async (uri) => {
             const item = await paneCtx?.sessionMedia?.(uri);

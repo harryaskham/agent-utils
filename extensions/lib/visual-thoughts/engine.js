@@ -82,6 +82,8 @@ export function createVisualThoughtsEngine({
       fit: pick("fit", (v) => ["cover", "contain", "stretch"].includes(v)),
       feather: pick("feather", (v) => Number.isFinite(v) && v >= 0 && v <= 0.5),
       opacity: pick("opacity", (v) => Number.isFinite(v) && v >= 0 && v <= 1),
+      // how the host blends it (pi-graphics' canvas), never the painter's
+      luminanceAlpha: own.luminanceAlpha ?? 0,
     };
   }
 
@@ -139,15 +141,15 @@ export function createVisualThoughtsEngine({
   function ensureConfigured(size = surface.size()) {
     if (!size) return null;
     const area = { width: size.cols * size.cellWidthPx, height: size.rows * size.cellHeightPx };
-    const { fit, feather, opacity } = currentLook();
-    const key = `${area.width}x${area.height}:${fit}:${feather}:${opacity}:${config.transitionPixels}`;
+    const { fit, feather, opacity, luminanceAlpha = 0 } = currentLook();
+    const key = `${area.width}x${area.height}:${fit}:${feather}:${opacity}:${luminanceAlpha}:${config.transitionPixels}`;
     if (key === areaKey) return configuring;
     areaKey = key;
     holdRequests.clear();
     if (job) endJob();
     holdGen += 1;
     for (const key of [...liveHolds]) if (surface.shown !== key) { surface.drop(key); liveHolds.delete(key); }
-    configuring = ensureRenderer().configure({ area, txPixels: config.transitionPixels, fit, feather, opacity });
+    configuring = ensureRenderer().configure({ area, txPixels: config.transitionPixels, fit, feather, opacity, luminanceAlpha });
     return configuring;
   }
 

@@ -36,6 +36,7 @@ import { decodePng, drawScaledImage } from "./png-decode.js";
 import { addRadialGlow, encodeRgbaPng } from "../png-renderer.js";
 import { blendMask } from "./raster.js";
 import { createGfxCoreEngine, findGfxWasm, toGfxFrame } from "./gfx-core-engine.js";
+import { fileTransportUsable, transmitCommand } from "../../lib/visual-thoughts/tui-surface.js";
 import { gfxshEffects, loadGfxshSettings } from "./gfx-settings.js";
 import { BACKGROUND_PALETTES, BACKGROUND_SCALE, autoBackground, mixRgb, renderActivityTint, renderBackground, renderCaret, renderEditorGlow, renderEditorSurface, renderGrainTile, renderImpulse, renderPaneBeacon, renderPaneFlash, renderScanlines, renderShimmer, renderVignette } from "./effects.js";
 
@@ -2072,6 +2073,91 @@ export function createFullCanvas({
     return { row: Math.floor(py / cellH), col: Math.floor(px / cellW), X: px % cellW, Y: py % cellH };
   }
 
+  // ---- backdrops another extension hands the canvas (visual thoughts): their images placed by
+  // the canvas just above its background (gfx-core's base + 2: under its glow, panes and text), at
+  // the screen or a pane's area (in its cells, through the canvas's text-area offset), placed
+  // again when the area moves and uploaded again (onLost) after the screen is cleared.
+  const BACKDROP_BLEND_Z = 2;
+  const backdropSurfaces = new Set();
+  function backdropSurface({ rect = null, onResize = () => {}, onLost = () => {} } = {}) {
+    const images = new Map();
+    let shown = null;
+    let placed = null;
+    let lastSize = "";
+    const area = () => {
+      if (!state.active) return null;
+      if (typeof rect !== "function") return { row: 0, col: 0, X: 0, Y: 0, cols: state.real.cols, rows: state.real.rows };
+      const r = rect();
+      if (!r || r.width <= 0 || r.height <= 0) return null;
+      return { ...gfxCellAt(r.y, r.x), cols: r.width, rows: r.height };
+    };
+    const del = (id, placement = false) => serialize({ a: "d", d: placement ? "i" : "I", i: id, ...(placement ? { p: 1 } : {}), q: 2 });
+    const place = (force = false) => {
+      const a = area();
+      const id = shown === null ? null : images.get(shown);
+      if (!a || id == null) return "";
+      const at = `${id}@${a.row},${a.col},${a.X},${a.Y},${a.cols}x${a.rows}`;
+      if (!force && at === placed) return "";
+      const old = placed?.split("@")[0];
+      placed = at;
+      return `\x1b7\x1b[${a.row + 1};${a.col + 1}H${serialize({ a: "p", i: id, p: 1, c: a.cols, r: a.rows, X: a.X, Y: a.Y, z: zBase() + BACKDROP_BLEND_Z, C: 1, q: 2 })}\x1b8`
+        + (old && Number(old) !== id ? del(Number(old), true) : "");
+    };
+    const entry = {
+      /** Each canvas frame: placed again where the area moved; told when its size changed. */
+      frame() {
+        const a = area();
+        const size = a ? `${a.cols}x${a.rows}` : "";
+        if (size !== lastSize) { lastSize = size; if (size) queueMicrotask(onResize); }
+        return place();
+      },
+      lost() { placed = null; queueMicrotask(() => onLost(shown)); },
+      surface: {
+        size: () => { const a = area(); return a ? { cols: a.cols, rows: a.rows, cellWidthPx: state.real.cellW, cellHeightPx: state.real.cellH } : null; },
+        transport: () => (fileTransportUsable(process.env) ? "file" : "stream"),
+        has: (key) => images.has(key),
+        upload(key, payload) {
+          let id = images.get(key);
+          if (id == null) { id = allocateImageId(`backdrop:${key}`); images.set(key, id); }
+          write(transmitCommand(id, payload));
+          if (shown === key) write(place(true));
+        },
+        show(key) {
+          if (key !== null && !images.has(key)) return false;
+          shown = key;
+          if (key === null) {
+            const old = placed?.split("@")[0];
+            placed = null;
+            if (old) write(del(Number(old), true));
+            return true;
+          }
+          write(place(true));
+          return true;
+        },
+        get shown() { return shown; },
+        drop(key) {
+          const id = images.get(key);
+          if (id == null) return;
+          images.delete(key);
+          if (shown === key) { shown = null; placed = null; }
+          write(del(id));
+        },
+        clear() {
+          let out = "";
+          for (const id of images.values()) out += del(id);
+          images.clear();
+          shown = null;
+          placed = null;
+          if (out) write(out);
+        },
+        dispose() { entry.surface.clear(); backdropSurfaces.delete(entry); },
+      },
+    };
+    backdropSurfaces.add(entry);
+    return entry.surface;
+  }
+  const backdropFrames = () => [...backdropSurfaces].map((entry) => entry.frame()).join("");
+
   // Above every gfx-core layer (its base is -1 000 000).
   const GFX_IMAGE_Z = -999_000;
 
@@ -2164,6 +2250,8 @@ export function createFullCanvas({
       trace(`gfx-core frame failed: ${error.message}`);
     }
     out += gfxImageCommands(images);
+    // visual thoughts' painting, blended above the background
+    out += backdropFrames();
     state.stats.frames += 1;
     state.stats.lastFrameMs = performance.now() - started;
     // the terminal's own cursor stays hidden (gfx-core draws the caret);
@@ -2478,6 +2566,7 @@ export function createFullCanvas({
 
   async function stop({ reason = "user" } = {}) {
     if (!state.active) return status();
+    for (const entry of [...backdropSurfaces]) { try { entry.surface.clear(); } catch {} }
     state.active = false;
     clearTimeout(state.geometryTimer);
     if (state.tmux.timer) { clearInterval(state.tmux.timer); state.tmux.timer = null; }
@@ -2645,6 +2734,10 @@ export function createFullCanvas({
     get active() { return state.active; },
     /** The background layer's z; the layers up to its glow (+4) leave room to blend others in. */
     zBase: () => zBase(),
+    backdropSurface,
+    /** On, drawing with gfx-core (whose frames place the backdrops). */
+    gfxActive: () => state.active && Boolean(state.gfx),
+    backdropsLost: () => { for (const entry of backdropSurfaces) entry.lost(); },
     start,
     stop,
     onFrame,

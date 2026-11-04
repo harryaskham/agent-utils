@@ -620,13 +620,22 @@ export default async function piGraphicsExtension(pi) {
       canvasListeners.add(listener);
       return () => canvasListeners.delete(listener);
     },
+    // The canvas as visual thoughts' render backend (gfx-core renderer): a surface whose images
+    // the canvas places inside its own frames, above its background; `rect()` is a pi-client
+    // pane's area (the whole screen without). Null while the canvas is off.
+    surface(options = {}) {
+      return fullCanvas?.gfxActive?.() ? fullCanvas.backdropSurface(options) : null;
+    },
   };
   fullCanvas = createFullCanvas({
     getTui: () => hostTui,
     write: (data) => {
       const writer = terminalWriter(hostTui?.terminal);
       if (writer && data) writer(data);
-      if (data && (data.includes("\x1b[2J") || /\x1b_Ga=d,d=A[,;\x1b]/.test(data))) notifyCanvas("cleared");
+      if (data && (data.includes("\x1b[2J") || /\x1b_Ga=d,d=A[,;\x1b]/.test(data))) {
+        notifyCanvas("cleared");
+        fullCanvas?.backdropsLost?.();
+      }
     },
     serialize: (control, payload = "") => serializeKittyGraphicsCommand(control, payload, { passthrough: state.config.passthrough }),
     serializeRaw: (control, payload = "") => serializeKittyGraphicsCommand(control, payload, { passthrough: "none" }),

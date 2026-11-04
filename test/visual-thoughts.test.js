@@ -1263,3 +1263,66 @@ test("painter: a prompt model that answers nothing (or fails) is followed by the
   assert.equal(painter.status().fallbacks, 2);
   painter.dispose();
 });
+
+test("on pi-graphics' canvas the painting's dark parts give way to the background (luminanceAlpha)", () => {
+  const source = { width: 2, height: 1, rgba: new Uint8Array([10, 10, 10, 255, 240, 240, 240, 255]) };
+  const plain = prepareBackdrop(source, { width: 2, height: 1, fit: "stretch", feather: 0, opacity: 1 });
+  const blended = prepareBackdrop(source, { width: 2, height: 1, fit: "stretch", feather: 0, opacity: 1, luminanceAlpha: 0.6 });
+  assert.equal(plain.rgba[3], 255);
+  assert.ok(blended.rgba[3] < 120, `a dark pixel fades (${blended.rgba[3]})`);
+  assert.ok(blended.rgba[7] > 240, `a light one stays (${blended.rgba[7]})`);
+});
+
+test("extension in pi-client with pi-graphics' canvas (gfx-core): the canvas draws the pane's painting, the backdrop again once it stops", async () => {
+  const { createVisualThoughtsExtension } = await import("../extensions/lib/visual-thoughts-extension.js");
+  const CANVAS = Symbol.for("agent-utils.pi-graphics.canvas");
+  const previous = globalThis[CANVAS];
+  const listeners = new Set();
+  const onCanvas = fakeBackdrop("canvas");
+  let options = null;
+  const handle = { active: true, zBase: -1_000_000, subscribe: (fn) => (listeners.add(fn), () => listeners.delete(fn)), surface: (given) => { options = given; return onCanvas; } };
+  globalThis[CANVAS] = handle;
+  const dir = mkdtempSync(join(tmpdir(), "vt-canvas-"));
+  const handlers = new Map();
+  const commands = new Map();
+  const pi = { on: (name, fn) => handlers.set(name, [...(handlers.get(name) || []), fn]), registerCommand: (name, def) => commands.set(name, def) };
+  const extension = createVisualThoughtsExtension({
+    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 1, minIntervalMs: 0, fadeMs: 0 } } },
+    env: { PI_VISUAL_THOUGHTS_DIR: dir, LITELLM_BASE_URL: "http://proxy:4000" },
+    fetchImpl: paintingFetch([]),
+  });
+  extension(pi);
+  const backdrop = fakeBackdrop("pane");
+  backdrop.rect = () => ({ x: 3, y: 1, width: 40, height: 20 });
+  let watcher = null;
+  const media = new Map([["ahp-session:/s/content/m1", solidPng(8, 8, [200, 200, 200])]]);
+  const ctx = {
+    ui: { backdrop: () => backdrop, notify() {}, setStatus() {} },
+    sessionManager: { getSessionId: () => "s-canvas", getEntries: () => [], getBranch: () => [] },
+    sessionMedia: async (uri) => ({ data: media.get(uri).toString("base64"), mimeType: "image/png" }),
+    sendUserMessage() {},
+    chord: {
+      call: async (method) => (method === "session.commands" ? { items: [{ name: "thoughts", kind: "extension" }] } : null),
+      watchDocument: async (_address, onValue) => { watcher = onValue; return () => { watcher = null; }; },
+    },
+  };
+  ctx.pinned = () => ctx;
+  const emit = async (name, event) => { for (const fn of handlers.get(name) || []) await fn(event, ctx); };
+  const waitFor = async (what, check) => { for (let i = 0; i < 400; i += 1) { if (check()) return; await new Promise((resolve) => setTimeout(resolve, 10)); } throw new Error(`timed out: ${what}`); };
+  try {
+    await emit("session_start", {});
+    await waitFor("the slot followed", () => watcher);
+    watcher({ rev: 1, slots: { backdrop: { kind: "image-set", owner: "visual-thoughts", rev: 1, images: [{ uri: "ahp-session:/s/content/m1", digest: "sha256:m1", alt: "a" }], current: 0, hints: {} } } });
+    await waitFor("shown by the canvas", () => onCanvas.log.some((line) => /^show hold:/.test(line)));
+    assert.deepEqual(options.rect(), { x: 3, y: 1, width: 40, height: 20 }, "the canvas places it at the pane's area");
+    assert.ok(!backdrop.log.some((line) => /^show hold:/.test(line)), "not pi-client's backdrop as well");
+    // The canvas stops: the pane's backdrop shows it again.
+    handle.active = false;
+    for (const listener of listeners) listener("stop");
+    await waitFor("shown by the backdrop again", () => backdrop.log.some((line) => /^show hold:/.test(line)));
+  } finally {
+    await emit("session_shutdown", {});
+    if (previous === undefined) delete globalThis[CANVAS]; else globalThis[CANVAS] = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
