@@ -49,16 +49,18 @@ Enable immutable startup policy in `settings.json`:
 
 `PI_CACO_AUTO_REGISTER=1|0` is an optional process-local startup override.
 
-Registration runs only when:
+Registration runs on the session's **first agent run**, never merely because a session started: sessions opened, switched to, forked, or moved (`/cd`, `/clone`, `/new`, `/resume`) without a turn stay unregistered. It runs only when:
 
-1. Cacophony integration is not globally disabled.
-2. a project environment variable is present;
-3. no explicit agent identity is present;
-4. auto-registration is enabled.
+1. Cacophony integration is not globally disabled;
+2. no explicit agent identity is present;
+3. auto-registration is enabled;
+4. a project is known: a project environment variable (`CACO_PROJECT` or `CACOPHONY_PROJECT`), or else the configured project that the checkout's git remotes match, as `/caco-agent-register` infers it (`caco agent register --preview --checkout-root <cwd>`). A checkout that no project claims stays unregistered, without a warning.
+
+A failed automatic registration is retried after 30 minutes, not on every run.
 
 Registration supports Herdr and other hosts supported by the Caco CLI; the plugin does not require tmux. The CLI runs with Pi's session `ctx.cwd` as its working directory, not the MCP daemon's directory.
 
-After session startup, registration runs asynchronously:
+At the first run, registration runs asynchronously:
 
 ```text
 caco agent register --project <project> --session-id <current-pi-session-id> [--session-name <human-name>] [--runtime-agent-id <explicit-external-id>] --json
@@ -86,7 +88,7 @@ Manual and startup registration share the same in-flight request, durable receip
 
 ## Durable / pi-daemon registration
 
-`extensions/durable/cacophony.mjs` provides the equivalent `/caco-agent-register` (with the same project inference) and `/caco-runtime` commands for Durable sessions. With auto-registration enabled, it registers on the session's first agent run. It passes the session's `cwd` as both the CLI working directory and `--checkout-root`, never the worker/server directory. It requires per-session environment support (pi-daemon 1.12+) and session directory metadata (1.13+).
+`extensions/durable/cacophony.mjs` provides the equivalent `/caco-agent-register` (with the same project inference) and `/caco-runtime` commands for Durable sessions. With auto-registration enabled, it registers on the session's first agent run, in the configured project (the worker's `CACO_PROJECT` or `CACOPHONY_PROJECT`, `agentUtils.cacophony.project`, or the session's own variables), or else the one the checkout's git remotes match. A session that is created, cloned or moved without a turn never registers. It passes the session's `cwd` as both the CLI working directory and `--checkout-root`, never the worker/server directory. It requires per-session environment support (pi-daemon 1.12+) and session directory metadata (1.13+).
 
 The Durable module registers with `--ahp-host pi-daemon` (cacophony bd-6cf22b), so Cacophony delivers the visitor's messages into its session, as it does for a native pi-daemon agent. A caco older than 1.2.1911 refuses the flag. The session then registers without it, and its messages wait in `caco msg inbox`.
 

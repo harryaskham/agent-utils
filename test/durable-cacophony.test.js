@@ -365,3 +365,39 @@ test("a visitor registered before host routing gets its host bound once (cacopho
   await module.observe({ type: "agent_start" }, { sessionId: migrated.ctx.sessionId, state: migrated.ctx.state, env: migrated.ctx.env, cwd: migrated.ctx.cwd });
   assert.equal(caco.calls.length, 1);
 });
+
+test("auto-registration infers the checkout's project on the first run, uses a session's own CACOPHONY_PROJECT, and leaves an unclaimed checkout alone", async () => {
+  // Nothing configured: the project the checkout's git remotes match, on the session's first run.
+  const caco = fakeCaco({ id: "visiting-inferred", preview: { project: "agent-utils", source: "cwd git remote" } });
+  const module = createCacophonyModule({ env: { HOME: "/nonexistent" }, settings: { autoRegister: true }, execFileImpl: caco.execFileImpl, now: () => 1 });
+  const fresh = sessionContext("pd-fresh", {}, "/work/agent-utils");
+  await module.commands["caco-runtime"].run("", fresh.ctx);
+  assert.match(fresh.notices.at(-1), /not registered \(registers on its next run, in the project this checkout's git remotes match\)/);
+  assert.equal(caco.calls.length, 0, "a session that has not run is not registered");
+  await module.observe({ type: "agent_start" }, fresh.ctx);
+  assert.deepEqual(caco.calls.map((call) => call.slice(1, 4)), [["agent", "register", "--preview"], ["agent", "register", "--project"]]);
+  assert.equal(caco.calls[1][4], "agent-utils");
+  assert.deepEqual(fresh.env, { CACO_AGENT_ID: "visiting-inferred", CACO_PROJECT: "agent-utils" });
+  await module.observe({ type: "agent_start" }, fresh.ctx);
+  assert.equal(caco.calls.length, 2, "once");
+
+  // A session's own CACOPHONY_PROJECT names it; no inference.
+  const named = sessionContext("pd-named", { CACOPHONY_PROJECT: "cacophony" }, "/work/cacophony");
+  await module.observe({ type: "agent_start" }, named.ctx);
+  assert.deepEqual(caco.calls.at(-1).slice(1, 5), ["agent", "register", "--project", "cacophony"]);
+  assert.equal(caco.calls.filter((call) => call.includes("--preview")).length, 1);
+
+  // A checkout no project claims: unregistered and silent, not asked again on every run.
+  let clock = 1;
+  const none = fakeCaco({ preview: { project: "scratch", source: "derived path name" } });
+  const quiet = createCacophonyModule({ env: { HOME: "/nonexistent" }, settings: { autoRegister: true }, execFileImpl: none.execFileImpl, now: () => clock });
+  const scratch = sessionContext("pd-scratch", {}, "/tmp/scratch");
+  await quiet.observe({ type: "agent_start" }, scratch.ctx);
+  await quiet.observe({ type: "agent_start" }, scratch.ctx);
+  assert.equal(none.calls.length, 1, "one preview");
+  assert.deepEqual(scratch.env, {});
+  assert.deepEqual(scratch.notices, []);
+  clock += 31 * 60_000;
+  await quiet.observe({ type: "agent_start" }, scratch.ctx);
+  assert.equal(none.calls.length, 2, "asked again after the backoff");
+});

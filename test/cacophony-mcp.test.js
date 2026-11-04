@@ -170,6 +170,8 @@ test("visiting registration hands identity to MCP without mutating parent enviro
     registerServer(options) { registrations.push(options); return { async dispose() {} }; },
   })(h.pi);
   await h.fire("session_start");
+  // Registration waits for the session's first run.
+  await h.fire("agent_start");
   await settle();
   await settle();
   assert.equal(registrations.length, 1);

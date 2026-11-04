@@ -57,7 +57,10 @@ function restoreVisitor(entries, project, sessionId, runtimeAgentId) {
   return latest;
 }
 
-export function createCacophonyRuntimeExtension({ env = process.env, settings, settingsPath, execFileImpl = execFile } = {}) {
+/** How long an automatic registration that failed waits before this session tries again. */
+export const AUTO_RETRY_MS = 30 * 60_000;
+
+export function createCacophonyRuntimeExtension({ env = process.env, settings, settingsPath, execFileImpl = execFile, now = () => Date.now() } = {}) {
   return function cacophonyRuntimeExtension(pi) {
     // Resolve inside the factory: a Pi-Daemon module import can be shared, but
     // each factory invocation runs in its own logical environment.
@@ -65,6 +68,8 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
     const config = resolveCacophonyRuntimeConfig(env, startupSettings);
     let active = null;
     let registration = null;
+    // When an automatic registration last failed, per session and directory: not every run again.
+    const autoFailed = new Map();
     const reset = () => {
       if (active) clearCacophonyRuntimeIdentity(active.sessionId, active);
       active = null;
@@ -121,12 +126,15 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
             ? `${identity.visiting ? "visiting" : "managed"} ${identity.agentId} in ${identity.project} (${identity.source})`
             : registration
               ? "visiting registration in progress"
-              : `unregistered; auto-registration ${config.autoRegister ? "on" : "off"}; use /caco-agent-register`;
+              : `unregistered; auto-registration ${config.autoRegister ? `on (on the first run, in ${config.project || "the project this checkout's git remotes match"})` : "off"}; use /caco-agent-register`;
         ctx.ui?.notify?.(`caco-runtime: ${status}`, "info");
       },
     });
 
-    const ensureRegistration = (ctx, { manual = false, project: requestedProject } = {}) => {
+    // `restoreOnly` (a session starting): restore this session's own receipt, register nothing.
+    // Automatic registration waits for the session's first run, so sessions opened, switched to,
+    // forked or moved without a turn never become visiting agents.
+    const ensureRegistration = (ctx, { manual = false, project: requestedProject, restoreOnly = false } = {}) => {
       const owner = activate(ctx);
       if (config.disabled || isPiCacoDisabled(env)) {
         if (manual) ctx.ui?.notify?.("Cacophony integration disabled by DISABLE_PI_CACO; unset it to allow registration. To disable only boot registration, use PI_CACO_AUTO_REGISTER=0 instead.", "warning");
@@ -140,7 +148,7 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
       const project = requestedProject || config.project;
       const sessionId = owner.sessionId;
       if (!sessionId) {
-        if (manual || config.autoRegister) ctx.ui?.notify?.("Cacophony registration requires the current Pi sessionManager.getSessionId(); inherited session environment is not a safe fallback.", "warning");
+        if (manual || (config.autoRegister && !restoreOnly)) ctx.ui?.notify?.("Cacophony registration requires the current Pi sessionManager.getSessionId(); inherited session environment is not a safe fallback.", "warning");
         return;
       }
 
@@ -152,10 +160,16 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
         if (manual) ctx.ui?.notify?.(`Restored visiting agent ${restored.agentId} in ${restored.project}.`, "info");
         return;
       }
-      // Auto-registration needs a configured project; the operator's command infers one
-      // from the checkout's git remotes instead (registerInferringProject).
-      if (!project && !manual) return;
+      if (restoreOnly) return;
+      // Without a configured project, both infer the one the checkout's git remotes match
+      // (registerInferringProject); automatically, a checkout matching none stays unregistered,
+      // silently, and a failure waits AUTO_RETRY_MS before this session tries again.
       if (!manual && !config.autoRegister) return;
+      const failureKey = `${sessionId}\0${ctx.cwd ?? ""}`;
+      if (!manual) {
+        const failed = autoFailed.get(failureKey);
+        if (failed !== undefined && now() - failed < AUTO_RETRY_MS) return;
+      }
       if (registration) {
         if (registration.project !== project && manual) ctx.ui?.notify?.(`Registration is already in progress for ${registration.project}; wait before choosing another project.`, "warning");
         return registration.promise;
@@ -179,13 +193,12 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
       };
       const run = (args) => execJson(execFileImpl, config.command, args, ctx.cwd);
       const attempt = (chosen) => run(argsFor(chosen));
-      pending.promise = (manual
-        ? registerInferringProject({
-          requested: project,
-          infer: () => inferVisitingProject({ run, cwd: ctx.cwd, sessionId }),
-          attempt,
-        })
-        : attempt(project).then((result) => ({ result, project, note: "" })))
+      let inferring = false;
+      pending.promise = registerInferringProject({
+        requested: project,
+        infer: () => { inferring = true; return inferVisitingProject({ run, cwd: ctx.cwd, sessionId }); },
+        attempt,
+      })
         .then(({ result: response, project: chosen, note }) => {
           if (!current()) return null;
           const data = response?.data || response;
@@ -203,7 +216,10 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
           return identity;
         })
         .catch((error) => {
-          if (current()) {
+          if (!manual) autoFailed.set(failureKey, now());
+          // A checkout no project claims is simply not a visitor, unless asked.
+          const unclaimed = inferring && /no configured Cacophony project matches|no project can be inferred/.test(String(error?.message || error));
+          if (current() && (manual || !unclaimed)) {
             try { ctx.ui?.notify?.(`Cacophony visiting-agent registration failed: ${error?.message || String(error)}`, "warning"); } catch {}
           }
           return null;
@@ -227,7 +243,10 @@ export function createCacophonyRuntimeExtension({ env = process.env, settings, s
 
     // Successful switches/new sessions/forks provide the fresh context. Do not
     // clear on before_* events: another extension can cancel the transition.
-    pi.on("session_start", (_event, ctx) => { void ensureRegistration(ctx); });
+    pi.on("session_start", (_event, ctx) => { void ensureRegistration(ctx, { restoreOnly: true }); });
+    // The first run is the session's first activity: register then (and on later runs while
+    // unregistered), never merely for starting.
+    pi.on("agent_start", (_event, ctx) => { void ensureRegistration(ctx); });
     pi.on("session_shutdown", reset);
   };
 }

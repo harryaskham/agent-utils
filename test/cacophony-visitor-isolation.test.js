@@ -134,10 +134,10 @@ for (const reason of ["new", "resume", "fork"]) {
   test(`session_start(${reason}) invalidates visitor fallback and fences old async completion/finalizer`, async () => {
     const h = host("old", [], "Old name"), c = cli();
     createCacophonyRuntimeExtension({ env: { CACO_PROJECT: "p", PI_CACO_AUTO_REGISTER: "1" }, settings: {}, execFileImpl: c.execFileImpl })(h.pi);
-    await h.fire("session_start");
+    await h.fire("session_start"); await h.fire("agent_start");
     h.setSessionId("new");
     h.setSessionName("New name");
-    await h.fire("session_start", { reason });
+    await h.fire("session_start", { reason }); await h.fire("agent_start");
     assert.equal(c.calls.length, 2);
     assert.equal(c.calls[0].args[c.calls[0].args.indexOf("--session-name") + 1], "Old name");
     assert.equal(c.calls[1].args[c.calls[1].args.indexOf("--session-name") + 1], "New name");
@@ -173,9 +173,9 @@ test("completed registration is cleared on fork and switching back restores only
 test("shutdown ignores late success/failure and does not attach to a restarted session", async () => {
   const h = host("same"), c = cli();
   createCacophonyRuntimeExtension({ env: { CACO_PROJECT: "p", PI_CACO_AUTO_REGISTER: "1" }, settings: {}, execFileImpl: c.execFileImpl })(h.pi);
-  await h.fire("session_start");
+  await h.fire("session_start"); await h.fire("agent_start");
   await h.fire("session_shutdown");
-  await h.fire("session_start");
+  await h.fire("session_start"); await h.fire("agent_start");
   c.finish(0);
   await settle();
   assert.equal(h.messages.length, 0);
@@ -207,7 +207,7 @@ test("four concurrent logical sessions in one cwd keep runtime identity, consume
     });
     return { h, values, run, registrations, disposals };
   });
-  await Promise.all(sessions.map(({ h, run }) => run(() => h.fire("session_start"))));
+  await Promise.all(sessions.map(({ h, run }) => run(async () => { await h.fire("session_start"); await h.fire("agent_start"); })));
   assert.equal(c.calls.length, 4);
   // Reverse completion order exposes module-global fallback/listener bugs.
   for (let i = 3; i >= 0; i--) sessions[i].run(() => c.finish(i, { runtime_agent_id: `pd-${i}` }));

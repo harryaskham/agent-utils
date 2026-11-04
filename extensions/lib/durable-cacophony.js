@@ -150,6 +150,9 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
   // When each session's host binding was last attempted in this process: an older caco cannot
   // bind, so the attempt is repeated after HOST_BIND_RETRY_MS (a caco update needs no restart).
   const rebound = new Map();
+  // When automatic registration last failed, per session and directory: retried after
+  // HOST_BIND_RETRY_MS, not on every run.
+  const autoFailed = new Map();
 
   /**
    * Bind a visitor this module registered before Cacophony routed by host (cacophony
@@ -266,7 +269,7 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
             return ctx.notify(`visiting ${identity.agentId} in ${identity.project} (${origin}); ${deliveryOf(identity)}`);
           }
           if (vars.CACO_AGENT_ID) return ctx.notify(`managed ${vars.CACO_AGENT_ID} in ${vars.CACO_PROJECT ?? "?"} (environment)`);
-          ctx.notify(config.disabled ? "disabled" : `not registered${config.autoRegister ? " (registers on the next run)" : "; /caco-agent-register"}`);
+          ctx.notify(config.disabled ? "disabled" : `not registered${config.autoRegister ? ` (registers on its next run, in ${config.project || vars.CACO_PROJECT || vars.CACOPHONY_PROJECT || "the project this checkout's git remotes match"})` : "; /caco-agent-register"}`);
         },
       },
     },
@@ -279,8 +282,8 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
       // (pi-daemon's /migrate, bd-737651): it is that agent, as if registered here.
       const identity = await info.state.get("identity");
       const registered = identity?.agentId && identity.sessionId === info.sessionId;
+      const vars = registered ? {} : ((await info.env.get?.()) ?? {});
       if (!registered) {
-        const vars = (await info.env.get?.()) ?? {};
         const agentId = String(vars.CACO_AGENT_ID || "").trim();
         const project = String(vars.CACO_PROJECT || "").trim();
         if (agentId.startsWith("visiting-") && project) {
@@ -298,9 +301,19 @@ export function createCacophonyModule({ env = process.env, settings, execFileImp
         }
         return;
       }
-      if (!config.autoRegister || !config.project) return;
+      // Automatic registration, on a session's first run (a session opened, cloned or moved
+      // without a turn never registers): in the configured project (the worker's CACO_PROJECT or
+      // CACOPHONY_PROJECT, agentUtils.cacophony.project, or the session's own variables), else the
+      // one the checkout's git remotes match, as /caco-agent-register. A checkout no project
+      // claims stays unregistered, and a failure is retried after HOST_BIND_RETRY_MS.
+      if (!config.autoRegister) return;
       if (registered || (await preset(info.env))) return;
-      await register(info, config.project).catch(() => undefined);
+      const project = config.project || String(vars.CACO_PROJECT || vars.CACOPHONY_PROJECT || "").trim();
+      if (!project && !info.cwd) return;
+      const key = `${info.sessionId}\0${info.cwd ?? ""}`;
+      const failed = autoFailed.get(key);
+      if (failed !== undefined && now() - failed < HOST_BIND_RETRY_MS) return;
+      await register(info, project || undefined, { infer: true }).catch(() => { autoFailed.set(key, now()); });
     },
   };
 }

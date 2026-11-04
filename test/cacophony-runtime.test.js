@@ -132,14 +132,17 @@ test("manual command preserves the global disable; without a project it infers o
   assert.match(bare.notifications.at(-1).message, /registration failed: no configured Cacophony project matches the git remotes/);
   assert.equal(getCacophonyRuntimeIdentity({}, bare.ctx).agentId, "");
 
-  // Auto-registration never infers: it needs a configured project.
+  // Auto-registration waits for the first run, then infers the checkout's project as the command does.
   clearCacophonyRuntimeIdentity();
   const auto = harness();
-  let autoCalls = 0;
-  createCacophonyRuntimeExtension({ env: { TMUX: "yes" }, settings: { agentUtils: { cacophony: { autoRegister: true } } }, execFileImpl() { autoCalls++; } })(auto.pi);
+  const autoCalls = [];
+  createCacophonyRuntimeExtension({ env: { TMUX: "yes" }, settings: { agentUtils: { cacophony: { autoRegister: true } } }, execFileImpl(_c, args) { autoCalls.push(args); } })(auto.pi);
   await auto.emit("session_start");
   await settle();
-  assert.equal(autoCalls, 0);
+  assert.equal(autoCalls.length, 0, "starting a session registers nothing");
+  await auto.emit("agent_start");
+  await settle();
+  assert.deepEqual(autoCalls.map((args) => args.slice(0, 3)), [["agent", "register", "--preview"]]);
 });
 
 test("/caco-agent-register infers the checkout's project and replaces a refused one with the sole match", async () => {
@@ -206,9 +209,9 @@ test("visiting registration supports non-tmux hosts and uses the session cwd", a
       callback(null, JSON.stringify({ id: "herdr-visitor", project: "agent-utils" }), "");
     },
   })(h.pi);
-  await h.emit("session_start");
+  await h.emit("session_start"); await h.emit("agent_start");
   await settle();
-  await h.emit("session_start");
+  await h.emit("session_start"); await h.emit("agent_start");
   assert.equal(calls, 1);
   assert.equal(getCacophonyRuntimeIdentity({}, h.ctx).agentId, "herdr-visitor");
   await h.emit("session_shutdown");
@@ -228,7 +231,7 @@ test("successful registration publishes one durable runtime identity and context
       callback(null, JSON.stringify({ ok: true, data: { id: "visiting-1", project: "agent-utils" } }), "");
     },
   })(h.pi);
-  await h.emit("session_start");
+  await h.emit("session_start"); await h.emit("agent_start");
   await settle();
   assert.equal(calls, 1);
   assert.equal(h.appended[0].customType, CACO_VISITOR_ENTRY_TYPE);
@@ -290,7 +293,7 @@ test("malformed registration never invents an identity and warns once", async ()
     settings: { agentUtils: { cacophony: { autoRegister: true } } },
     execFileImpl(_command, _args, _options, callback) { callback(null, JSON.stringify({ ok: true, data: {} }), ""); },
   })(h.pi);
-  await h.emit("session_start");
+  await h.emit("session_start"); await h.emit("agent_start");
   await settle();
   assert.equal(getCacophonyRuntimeIdentity({}, h.ctx).agentId, "");
   assert.match(h.notifications[0].message, /returned no durable/);
@@ -303,7 +306,7 @@ test("choice bridge consumes a visiting runtime identity and global disable over
     env: { CACO_PROJECT: "agent-utils", PI_CACO_AUTO_REGISTER: "1" }, settings: {},
     execFileImpl(_command, _args, _options, callback) { callback(null, JSON.stringify({ id: "visitor", project: "agent-utils" }), ""); },
   })(registered.pi);
-  await registered.emit("session_start");
+  await registered.emit("session_start"); await registered.emit("agent_start");
   await settle();
   {
     const bridge = createCacophonyChoiceBridge({ env: {}, persisted: {}, scope: registered.ctx });
@@ -329,7 +332,7 @@ test("registration injects Cacophony's visiting guidance into the context messag
       callback(null, JSON.stringify({ ok: true, data: { id: "visiting-g", project: "cacophony" }, guidance: { profile: "visiting", text: `${guidance}\n` } }), "");
     },
   })(h.pi);
-  await h.emit("session_start");
+  await h.emit("session_start"); await h.emit("agent_start");
   await settle();
   const message = h.messages[0].message;
   assert.match(message.content, /^Registered as Cacophony visiting agent visiting-g in project cacophony\.\n\n## Visiting agent/);
@@ -350,9 +353,70 @@ test("registration without guidance keeps the one-line message", async () => {
       callback(null, JSON.stringify({ ok: true, data: { id: "visiting-old", project: "cacophony" } }), "");
     },
   })(h.pi);
-  await h.emit("session_start");
+  await h.emit("session_start"); await h.emit("agent_start");
   await settle();
   assert.equal(h.messages[0].message.content, "Registered as Cacophony visiting agent visiting-old in project cacophony.");
   assert.equal(h.messages[0].message.details.guidance, false);
+  await h.emit("session_shutdown");
+});
+
+test("auto-registration waits for the session's first run: starting, switching and moving register nothing; an unclaimed checkout stays silent", async () => {
+  clearCacophonyRuntimeIdentity();
+  const h = harness({ sessionId: "pi-a" });
+  const calls = [];
+  let clock = 0;
+  let previewProject = "agent-utils";
+  createCacophonyRuntimeExtension({
+    env: { TMUX: "yes" },
+    settings: { agentUtils: { cacophony: { autoRegister: true } } },
+    now: () => clock,
+    execFileImpl(_command, args, _options, callback) {
+      calls.push(args);
+      const sessionId = args[args.indexOf("--session-id") + 1];
+      setImmediate(() => {
+        if (args.includes("--preview")) {
+          return callback(null, JSON.stringify({ project: previewProject, project_source: previewProject === "agent-utils" ? "cwd git remote" : "derived path name", session_id: sessionId }), "");
+        }
+        callback(null, JSON.stringify({ data: { id: `visiting-${sessionId}`, project: args[args.indexOf("--project") + 1], session_id: sessionId } }), "");
+      });
+    },
+  })(h.pi);
+  // /cd, /clone, /new, /resume: sessions start, and none registers.
+  await h.emit("session_start");
+  h.ctx.sessionManager.getSessionId = () => "pi-b";
+  await h.emit("session_start");
+  h.ctx.sessionManager.getSessionId = () => "pi-c";
+  await h.emit("session_start");
+  await settle();
+  assert.deepEqual(calls, []);
+  await h.commands.get("caco-runtime").handler("", h.ctx);
+  assert.match(h.notifications.at(-1).message, /auto-registration on \(on the first run, in the project this checkout's git remotes match\)/);
+  // Its first run: the checkout's project, once.
+  await h.emit("agent_start");
+  await settle(); await settle();
+  assert.deepEqual(calls.map((args) => args.slice(0, 3)), [["agent", "register", "--preview"], ["agent", "register", "--project"]]);
+  assert.equal(getCacophonyRuntimeIdentity({}, h.ctx).agentId, "visiting-pi-c");
+  assert.equal(getCacophonyRuntimeIdentity({}, h.ctx).project, "agent-utils");
+  assert.ok(h.notifications.some((n) => /inferred from this checkout's git remotes/.test(n.message)));
+  await h.emit("agent_start");
+  await settle();
+  assert.equal(calls.length, 2);
+
+  // Another session in a checkout no project claims: no warning, and not asked again each run.
+  previewProject = "scratch";
+  h.ctx.sessionManager.getSessionId = () => "pi-d";
+  await h.emit("session_start");
+  const before = h.notifications.length;
+  await h.emit("agent_start");
+  await settle(); await settle();
+  await h.emit("agent_start");
+  await settle(); await settle();
+  assert.equal(calls.length, 3, "one preview");
+  assert.equal(h.notifications.length, before, "silent");
+  assert.equal(getCacophonyRuntimeIdentity({}, h.ctx).agentId, "");
+  clock += 31 * 60_000;
+  await h.emit("agent_start");
+  await settle(); await settle();
+  assert.equal(calls.length, 4, "asked again after the backoff");
   await h.emit("session_shutdown");
 });
