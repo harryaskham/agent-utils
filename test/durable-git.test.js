@@ -259,9 +259,11 @@ test("the client part shows the focused session's repository in pi-client's side
   await Promise.resolve();
   const workspace = { repo: true, branch: "main", project: "project", mainRoot: "/src/project", worktrees: ["/src/project", "/wt/project-feature"], unstaged: 1, additions: 2, deletions: 0 };
   watches[0].onValue({ values: { workspace } });
+  await Promise.resolve();
   assert.deepEqual(panels, [{ key: "pi-git", lines: ["⎇ main  project", "  1 modified +2 −0"], placement: "sidebar" }]);
   // The same state again: not set again.
   watches[0].onValue({ values: { workspace } });
+  await Promise.resolve();
   assert.equal(panels.length, 1);
 
   // /repo: this repository's other sessions on this host, newest first; the chosen one opens.
@@ -274,17 +276,27 @@ test("the client part shows the focused session's repository in pi-client's side
   assert.deepEqual(offered, ["1. Feature work · project-feature", "2. Older · project"]);
   assert.deepEqual(opened, ["c"]);
 
-  // Focus moves to a session whose state has not arrived: the panel is cleared.
+  // Focus moves to a session whose state has not arrived: the panel is cleared. Its editor chips
+  // ask for its git state while drawing: they show the branch and diff, so from now on the panel
+  // never repeats a session's own repository, only those git_track follows.
   current = "z";
   events.emit(GIT_REQUEST, { sessionId: "z" });
+  await Promise.resolve();
   assert.deepEqual(panels.at(-1), { key: "pi-git", lines: undefined, placement: "sidebar" });
-
-  // A session whose editor chips draw its branch and diff (they ask for its state): its own
-  // repository is not repeated in the panel, which keeps only the repositories git_track follows.
   current = "a";
-  events.emit(GIT_REQUEST, { sessionId: "a" });
-  assert.deepEqual(panels.at(-1), { key: "pi-git", lines: undefined, placement: "sidebar" });
+  const before = panels.length;
+  watches[0].onValue({ values: { workspace } });
+  await Promise.resolve();
+  assert.equal(panels.length, before, "the chips show a's repository: nothing above the editor");
   watches[0].onValue({ values: { workspace, tracked: [{ repo: true, branch: "trunk", project: "other", mainRoot: "/src/other" }] } });
+  await Promise.resolve();
+  assert.deepEqual(panels.at(-1), { key: "pi-git", lines: ["⎇ trunk  other", "  clean"], placement: "sidebar" });
+  // Another pane being drawn (pi-client's ctx is that pane's meanwhile) never changes the panel:
+  // it follows the focused session once the drawing is done.
+  current = "z";
+  events.emit(GIT_REQUEST, { sessionId: "z" });
+  current = "a";
+  await Promise.resolve();
   assert.deepEqual(panels.at(-1), { key: "pi-git", lines: ["⎇ trunk  other", "  clean"], placement: "sidebar" });
 
   // Without pi-client's sidebar (TUI Pi, an earlier pi-client), no panel is set.
@@ -355,6 +367,7 @@ test("git_track follows another repository: recorded in the session's document, 
   });
   await Promise.resolve();
   watches[0]({ values: { workspace: { repo: true, branch: "main", project: "project" }, tracked } });
+  await Promise.resolve();
   assert.deepEqual(panels.at(-1), ["⎇ main  project", "  clean", "⎇ trunk  other", "  clean"]);
 
   // Stopped: no longer recorded, and the next refresh clears the states.
