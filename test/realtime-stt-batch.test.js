@@ -144,16 +144,30 @@ function fakeRes({ ok = true, status = 200, json, text, contentType = "applicati
   };
 }
 
-test("transcribeMaiAudioDirect uses East US JSON audio_url and derives the deployment", async () => {
+test("transcribeMaiAudioDirect posts multipart file + model to East US and derives the deployment (bd-34ba98)", async () => {
   let request;
-  const fetchImpl = async (url, init) => { request = { url, init, body: JSON.parse(init.body) }; return fakeRes({ json: { text: "new model" } }); };
+  const fetchImpl = async (url, init) => { request = { url, init }; return fakeRes({ json: { text: "new model" } }); };
   const text = await transcribeMaiAudioDirect({ pcm: Buffer.from([0, 0]), model: "mai-transcribe-2", endpoint: "https://resource.cognitiveservices.azure.com", auth: "key", env: {}, apiKey: "secret", language: "en", fetchImpl });
   assert.equal(text, "new model");
   assert.equal(request.url, "https://resource.services.ai.azure.com/mai/v1/audio/transcriptions");
-  assert.equal(request.body.model, "harryaskham-sandbox-ais-mai-transcribe-2");
-  assert.match(request.body.audio_url, /^data:audio\/wav;base64,/);
-  assert.equal(request.body.language, "en");
+  assert.ok(request.init.body instanceof FormData, "multipart/form-data body");
+  assert.equal(request.init.headers["Content-Type"], undefined, "fetch sets the multipart boundary");
+  assert.equal(request.init.body.get("model"), "harryaskham-sandbox-ais-mai-transcribe-2");
+  assert.equal(request.init.body.get("language"), "en");
+  assert.equal(request.init.body.get("audio_url"), null, "no JSON/base64 audio_url");
+  const file = request.init.body.get("file");
+  assert.equal(file.name, "audio.wav");
+  assert.equal(file.type, "audio/wav");
+  assert.equal(Buffer.from(await file.arrayBuffer()).subarray(0, 4).toString(), "RIFF");
   assert.equal(request.init.headers["api-key"], "secret");
+});
+
+test("transcribeMaiAudioDirect omits language when unset (bd-34ba98)", async () => {
+  let form;
+  const fetchImpl = async (_url, init) => { form = init.body; return fakeRes({ json: { text: "ok" } }); };
+  await transcribeMaiAudioDirect({ pcm: Buffer.from([0, 0]), endpoint: "https://resource.cognitiveservices.azure.com", auth: "key", env: {}, apiKey: "secret", fetchImpl });
+  assert.equal(form.get("language"), null);
+  assert.ok(form.get("model"));
 });
 
 test("transcribeAudioDirect POSTs one WAV to /v1/audio/transcriptions and returns {text} (bd-adde03)", async () => {

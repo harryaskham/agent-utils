@@ -135,7 +135,10 @@ A single Azure resource base URL works for both capabilities:
 
 - TTS uses `/tts/cognitiveservices/v1` on the resource custom domain;
 - MAI STT uses the corresponding `services.ai.azure.com` host and
-  `/mai/v1/audio/transcriptions`.
+  `/mai/v1/audio/transcriptions`, sent as `multipart/form-data` with a `file`
+  part (the WAV, `audio.wav`), `model` (the deployment) and optional `language`.
+  The older JSON body with a base64 `audio_url` is no longer sent; the MAI Audio
+  team asked for all MAI-Transcribe traffic to use multipart.
 
 For Azure resource hosts, the STT resolver also accepts `/stt`, `/tts`, and
 `/tts/cognitiveservices/v1` suffixes, removing the surface suffix before deriving
