@@ -2158,6 +2158,19 @@ export function createFullCanvas({
   }
   const backdropFrames = () => [...backdropSurfaces].map((entry) => entry.frame()).join("");
 
+  /** Typing heat: the editor's text and the caret's offset in it, from the rows drawn. */
+  function feedEditorText(parsed, editorRect, cursor) {
+    if (!editorRect || !cursor || cursor.row < editorRect.y || cursor.row >= editorRect.y + editorRect.height) return;
+    let text = ""; let offset = 0;
+    for (let r = editorRect.y; r < editorRect.y + editorRect.height && r < parsed.length; r += 1) {
+      const rowText = (parsed[r]?.cells || []).slice(editorRect.x, editorRect.x + editorRect.width).map((c) => (c.cont ? "" : c.ch)).join("");
+      if (/^[\s─━═-]*$/.test(rowText)) continue; // rule rows
+      if (r === cursor.row) offset = text.length + Math.max(0, cursor.col - editorRect.x);
+      text += `${rowText.replace(/\s+$/, "")}\n`;
+    }
+    try { onEditorText(text, offset); } catch {}
+  }
+
   // ---- /gfx pane (pi-client): gfx-core draws chosen panes over their own text, the rest of the
   // screen stays text. One gfx-core renderer per pane, its grid the pane's own cells (no gutter,
   // no padding: the mouse needs no translation), placed at the pane's origin (and tmux's outer
@@ -2279,8 +2292,11 @@ export function createFullCanvas({
       const editor = (regions.client?.panes || [])
         .map((p) => p.editor)
         .find((e) => e && e.x >= r.x && e.y >= r.y && e.x + e.width <= r.x + r.width && e.y + e.height <= r.y + r.height);
+      const local = editor ? { ...editor, x: editor.x - r.x, y: editor.y - r.y } : null;
+      if (cursor) feedEditorText(parsed, local, cursor);
       try {
-        pane.last = toGfxFrame(parsed, { cursor, editor: editor ? { ...editor, x: editor.x - r.x, y: editor.y - r.y } : null, editorPadding: cfg().editorPadding });
+        pane.last = toGfxFrame(parsed, { cursor, editor: local, editorPadding: cfg().editorPadding });
+        pane.caret = Boolean(cursor);
         pane.last.heat = cursor ? Math.max(0, Math.min(1, Number(getHeat()) || 0)) : 0;
         out += pane.engine.frame(pane.last);
         pane.shown = true;
@@ -2296,6 +2312,8 @@ export function createFullCanvas({
     let out = "";
     for (const pane of paneState.panes.values()) {
       if (!pane.engine || !pane.last || !pane.shown) continue;
+      // the caret's pane: its typing heat decays between Pi's renders
+      if (pane.caret) pane.last.heat = Math.max(0, Math.min(1, Number(getHeat()) || 0));
       try { out += pane.engine.frame(pane.last); } catch {}
     }
     if (out) write(`${BSU}\x1b7${out}\x1b8${ESU}`);
@@ -2394,6 +2412,8 @@ export function createFullCanvas({
       state.gfxLast = toGfxFrame(parsed, { cursor, editor: regions.editor || null, editorPadding: cfg().editorPadding, client: regions.client || null, focused: state.gfxPane || 0 });
       // pi-client: the pane focused last stays the shell's while no pane holds the cursor
       if (Number.isInteger(state.gfxLast.paneIndex)) state.gfxPane = state.gfxLast.paneIndex;
+      // typing heat from the editor drawn as the card (the focused pane's in pi-client)
+      feedEditorText(parsed, Number.isInteger(state.gfxLast.paneIndex) ? regions.client?.panes?.[state.gfxLast.paneIndex]?.editor : regions.editor, cursor);
       state.gfxLast.heat = Math.max(0, Math.min(1, Number(getHeat()) || 0));
       out = state.gfx.frame(state.gfxLast);
     } catch (error) {
@@ -2462,17 +2482,7 @@ export function createFullCanvas({
     const now = Date.now();
     // Typing heat comes from the editor rows the canvas sees, independent of
     // the classic graphics mode (which may be off).
-    const editorRect = regions.editorRect;
-    if (editorRect && cursor && cursor.row >= editorRect.y && cursor.row < editorRect.y + editorRect.height) {
-      let text = ""; let offset = 0;
-      for (let r = editorRect.y; r < editorRect.y + editorRect.height && r < rows; r += 1) {
-        const rowText = parsed[r].cells.slice(editorRect.x, editorRect.x + editorRect.width).map((c) => (c.cont ? "" : c.ch)).join("");
-        if (/^[\s─━═-]*$/.test(rowText)) continue; // rule rows
-        if (r === cursor.row) offset = text.length + Math.max(0, cursor.col - editorRect.x);
-        text += `${rowText.replace(/\s+$/, "")}\n`;
-      }
-      try { onEditorText(text, offset); } catch {}
-    }
+    feedEditorText(parsed, regions.editorRect, cursor);
     trackStreamIn(now);
     detectTyped(cursor, now);
     collectOverlays(now);
