@@ -58,7 +58,7 @@ import {
 import { installCompactChatSpacingPatch } from "./pi-graphics/compact-chat-spacing.js";
 import { captureHostFromUi, createHostComponentRegistry } from "./pi-graphics/host-components.js";
 import { createFrameCompositor, createOverlayPlacementSet, gfxMarker } from "./pi-graphics/frame-compositor.js";
-import { createPixelGeometryTracker, tapTerminalInput } from "./pi-graphics/terminal-io.js";
+import { createPixelGeometryTracker, nativeSurface, tapSurfaceInput, tapTerminalInput } from "./pi-graphics/terminal-io.js";
 import { FULL_CANVAS_DEFAULTS, createFullCanvas } from "./pi-graphics/canvas/full-canvas.js";
 import { gfxSettingRows, gfxSettingValue, loadGfxshSettings } from "./pi-graphics/canvas/gfx-settings.js";
 import { ROLE_BY_CLASS, ensureSemanticTaps, tapSemanticClass } from "./pi-graphics/canvas/semantics.js";
@@ -3451,11 +3451,68 @@ export default async function piGraphicsExtension(pi) {
     return lines.join("\n");
   }
 
+  // pi-client's Rex workspaces: one process, a terminal of its own for each pane (its Rex block),
+  // so a pane is that whole terminal. /gfx pane and /gfx full both draw this pane with gfx-core,
+  // from its own TUI's frames, onto its own terminal (ticks too), at its own cell size; panes on
+  // other terminals are untouched. Each such terminal has its own frame compositor.
+  const nativePanes = new Map(); // terminal -> { tui, compositor, geometry }
+  async function handleNativePane(ctx, sub, gfx, notify) {
+    const tui = captureHostFromUi(ctx?.ui).tui;
+    const terminal = tui?.terminal;
+    if (!terminal || terminal !== nativeSurface()?.terminal) { notify("Pi Graphics: this pane's terminal is not available here.", "warning"); return; }
+    if (!hostTui) discoverHostComponents(ctx);
+    if (!activeThemeRef) activeThemeRef = themeOf(ctx) || null;
+    if (sub === "status") {
+      const panes = fullCanvas?.paneStatus?.() || [];
+      notify(panes.length ? `Pi Graphics panes: ${panes.map((p) => `${p.size || "?"}${p.cell ? ` @ ${p.cell.join("x")}px` : ""}${p.ready ? "" : " (starting)"}${p.error ? ` – ${p.error}` : ""}`).join(", ")}` : "Pi Graphics: no gfx panes (/gfx pane to draw this one).");
+      return;
+    }
+    const enabled = fullCanvas.hasPane(terminal);
+    if (sub === "off" && !enabled) { notify("Pi Graphics: this pane is not drawn by gfx."); return; }
+    if (sub === "on" && enabled) { notify("Pi Graphics: this pane is already drawn by gfx-core."); return; }
+    const release = (entry) => {
+      try { entry.compositor.detach(); } catch {}
+      try { entry.geometry.dispose(); } catch {}
+      nativePanes.delete(terminal);
+      // the pane's overlays come back where the client-wide compositor drew them
+      if (hostTui?.terminal === terminal) { compositorInstalled = false; ensureFrameCompositor(hostTui); }
+    };
+    if (enabled) {
+      await fullCanvas.togglePane(terminal);
+      const entry = nativePanes.get(terminal);
+      if (entry) release(entry);
+      notify("Pi Graphics: this pane is text again.");
+      return;
+    }
+    const write = terminalWriter(terminal);
+    if (!write) { notify("Pi Graphics: this pane's terminal cannot be written to.", "warning"); return; }
+    const geometry = createPixelGeometryTracker({ tap: (target, handler) => tapSurfaceInput(ctx.ui, target, handler) });
+    geometry.attach(terminal);
+    const compositor = createFrameCompositor({
+      getTui: () => tui,
+      onError: (error) => trace(`pane compositor error: ${error?.stack || error}`),
+      onFrame: (frame, context) => fullCanvas.onPaneFrame(frame, context),
+    });
+    const entry = { tui, compositor, geometry };
+    nativePanes.set(terminal, entry);
+    compositor.ensure(tui);
+    try {
+      await fullCanvas.togglePane(terminal, () => ({ x: 0, y: 0, width: Math.max(1, Number(terminal.columns) || 80), height: Math.max(1, Number(terminal.rows) || 24) }), {
+        ...fullCanvasConfig(gfx), renderer: "gfx", tapInput: (fn) => tapSurfaceInput(ctx.ui, terminal, fn), host: { tui, terminal, write, geometry },
+      });
+      notify("Pi Graphics: this pane is drawn by gfx-core (/gfx pane again to stop).");
+    } catch (error) {
+      release(entry);
+      notify(`Pi Graphics: ${error.message}`, "warning");
+    }
+  }
+
   // /gfx pane (pi-client): gfx-core draws this pane (the one with the cursor) over its text; the
   // rest of the screen stays text. Found again by its component as the layout changes.
   async function handlePaneCommand(ctx, args, gfx) {
     const sub = String(args[0] || "toggle").toLowerCase();
     const notify = (message, type = "info") => { try { ctx.ui.notify(message, type); } catch {} };
+    if (nativeSurface()) { await handleNativePane(ctx, sub, gfx, notify); return; }
     if (!hostTui) discoverHostComponents(ctx);
     if (!activeThemeRef) activeThemeRef = themeOf(ctx) || null;
     ensureFrameCompositor();
@@ -3494,6 +3551,8 @@ export default async function piGraphicsExtension(pi) {
   async function handleFullCanvasCommand(ctx, args, settings, gfx) {
     const sub = String(args[0] || "toggle").toLowerCase();
     const notify = (message, type = "info") => { try { ctx.ui.notify(message, type); } catch {} };
+    // A Rex pane is its whole terminal: the full canvas there is this pane drawn by gfx-core.
+    if (nativeSurface() && ["on", "off", "toggle", "start", "status"].includes(sub)) { await handleNativePane(ctx, sub === "start" ? "on" : sub, gfx, notify); return; }
     if (!hostTui) discoverHostComponents(ctx);
     if (!activeThemeRef) activeThemeRef = themeOf(ctx) || null;
     ensureFrameCompositor();

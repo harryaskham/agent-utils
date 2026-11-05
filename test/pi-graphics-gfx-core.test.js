@@ -231,3 +231,109 @@ test("renderer=gfx for /gfx pane: a renderer placed at a pane's origin, its laye
   const moved = engine.frame(toGfxFrame(rows, { cursor: { row: 2, col: 3 } }));
   assert.ok([...moved.matchAll(/\x1b\[(\d+);(\d+)H\x1b_G/g)].some((m) => Number(m[1]) < 4), "placed from the new origin");
 });
+
+// pi-client's Rex workspaces (pi-daemon): one process, a terminal of its own for each pane, the
+// pane being drawn known from the terminal's async scope. A fake of that: two panes' terminals.
+test("renderer=gfx in pi-client's Rex workspaces: /gfx pane draws that pane's own terminal, from its frames, at its own cell size", { skip: !findGfxWasm() && "gfx_wasm.wasm not found (gfxsh / $PI_GFX_WASM)" }, async (t) => {
+  const { AsyncLocalStorage } = await import("node:async_hooks");
+  const { createStrictMockPi } = await import("./helpers/strict-mock-pi.js");
+  const { default: piGraphicsExtension } = await import("../extensions/pi-graphics.js");
+  const agentDir = mkdtempSync(join(tmpdir(), "pi-graphics-rex-"));
+  const previousDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  const symbol = Symbol.for("pi-client.surfaceContext");
+  const previousScope = globalThis[symbol];
+  const scope = new AsyncLocalStorage();
+  globalThis[symbol] = scope;
+  const inputs = [];
+  class Surface {
+    constructor(name, cell) { this.name = name; this.cell = cell; this.columns = 60; this.rows = 16; this.out = ""; this.delivered = []; this.context = { terminal: this }; }
+    run(callback) { return scope.run(this.context, callback); }
+    write(data) {
+      this.out += data;
+      // a terminal answers its own size queries (Rex does: CSI 6 t and CSI 4 t)
+      if (data.includes("\x1b[16t")) setImmediate(() => this.input(`\x1b[6;${this.cell[1]};${this.cell[0]}t`));
+      if (data.includes("\x1b[14t")) setImmediate(() => this.input(`\x1b[4;${this.rows * this.cell[1]};${this.columns * this.cell[0]}t`));
+    }
+    // as pi-client's native terminals: extensions' input handlers first, in this terminal's scope
+    input(data) {
+      this.run(() => {
+        for (const handler of [...inputs]) if (handler(data)?.consume) return;
+        this.delivered.push(data);
+      });
+    }
+  }
+  class Tui {
+    constructor(terminal) { this.terminal = terminal; this.mode = "fullscreen"; this.previousScreen = []; this.frames = 0; this.currentLayout = { root: { component: {}, rect: { x: 0, y: 0, width: 60, height: 16 }, children: [] } }; }
+    doRender() {
+      // new text each frame: gfx-core sends only what changed
+      this.previousScreen = [`hello from ${this.terminal.name} ${++this.frames}`, "", "› typing"];
+      this.terminal.write("\x1b[?2026h\x1b[1;1Hframe\x1b[3;9H\x1b[?25h\x1b[?2026l");
+    }
+    requestRender() { this.doRender(); }
+    invalidate() {}
+  }
+  const a = new Surface("a", [10, 20]);
+  const b = new Surface("b", [8, 16]);
+  const tuis = new Map([[a, new Tui(a)], [b, new Tui(b)]]);
+  const theme = { getFgAnsi: () => "", fg: (_token, text) => text };
+  const notes = [];
+  const ui = {
+    hasSidebar: true,
+    notify: (message) => notes.push(String(message)),
+    setWidget() {},
+    onTerminalInput(handler) { inputs.push(handler); return () => inputs.splice(inputs.indexOf(handler), 1); },
+    // pi-client's custom(): the factory gets the TUI of the pane being drawn
+    custom: async (factory) => { factory(tuis.get(scope.getStore()?.terminal), theme, {}, () => {}); },
+  };
+  const { pi, commands } = createStrictMockPi();
+  await piGraphicsExtension(pi);
+  const gfx = (surface, args) => surface.run(() => commands.get("gfx").handler(args, { ui, cwd: agentDir }));
+  t.after(async () => {
+    for (const surface of [a, b]) if (notes.length) await gfx(surface, "pane off").catch(() => {});
+    globalThis[symbol] = previousScope;
+    if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previousDir;
+    rmSync(agentDir, { recursive: true, force: true });
+  });
+  const status = async (surface) => { notes.length = 0; await gfx(surface, "pane status"); return notes.at(-1) ?? ""; };
+  const ready = async (surface) => {
+    for (let i = 0; i < 200; i++) {
+      tuis.get(surface).requestRender();
+      const line = await status(surface);
+      if (/–/.test(line) || !/starting|\?/.test(line)) return line;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return status(surface);
+  };
+
+  await gfx(a, "pane");
+  let line = await ready(a);
+  if (/font/i.test(line)) return t.skip(`no font file for gfx-core: ${line}`);
+  if (/cannot draw a pane/.test(line)) return t.skip("this gfx-core cannot draw a pane (older gfxsh)");
+  assert.match(line, /60x16 @ 10x20px/, "its own grid and cell size");
+  // b's frames and its terminal are untouched; a's frames carry gfx-core's placements
+  a.out = ""; b.out = "";
+  tuis.get(b).requestRender();
+  tuis.get(a).requestRender();
+  assert.ok(a.out.includes("\x1b_G"), "a's frame has gfx-core's images");
+  assert.ok(!b.out.includes("\x1b_G"), "b's frame has none");
+  // ticks (between Pi's renders) never reach b
+  b.out = "";
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(b.out, "", "nothing reaches b");
+  // the size replies were a's own and never reached its TUI as input
+  assert.ok(!a.delivered.some((data) => data.startsWith("\x1b[4;")), "the text-area reply is swallowed");
+
+  // b on too, at its own cell size; then a off: b goes on
+  await gfx(b, "full on");
+  line = await ready(b);
+  assert.match(line, /60x16 @ 8x16px/);
+  await gfx(a, "pane");
+  assert.match(notes.at(-1), /text again/);
+  a.out = ""; b.out = "";
+  tuis.get(a).requestRender(); tuis.get(b).requestRender();
+  assert.ok(!a.out.includes("\x1b_G"), "a is text again");
+  assert.ok(b.out.includes("\x1b_G"), "b is still drawn");
+  await gfx(b, "full off");
+  assert.match(notes.at(-1), /text again/);
+});

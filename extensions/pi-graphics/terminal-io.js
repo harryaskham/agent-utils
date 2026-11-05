@@ -88,7 +88,34 @@ const XTVERSION_RE = /^\x1bP>\|([^\x1b]*)\x1b\\$/;
 const KITTY_PROBE_ID = 31337;
 const KITTY_PROBE_RE = /^\x1b_Gi=31337(?:,[^;]*)?;([^\x1b]*)\x1b\\$/;
 
-export function createPixelGeometryTracker({ onChange = () => {} } = {}) {
+/**
+ * pi-client's Rex workspaces run one process for many panes, each with a terminal of its own
+ * (pi-daemon's native workspaces). Its input reaches extensions through `ctx.ui.onTerminalInput()`
+ * inside that terminal's scope (`Symbol.for("pi-client.surfaceContext")`, an AsyncLocalStorage
+ * whose store's `terminal` is the pane's terminal): the surface the code runs for now, if any.
+ */
+export function nativeSurface() {
+  try { return globalThis[Symbol.for("pi-client.surfaceContext")]?.getStore?.() ?? null; } catch { return null; }
+}
+
+/**
+ * tapTerminalInput for such a terminal: through `ui.onTerminalInput()`, for its input only. The
+ * handler's answers are the same (undefined passes, a string replaces, null swallows).
+ */
+export function tapSurfaceInput(ui, terminal, handler) {
+  if (typeof ui?.onTerminalInput !== "function" || !terminal || typeof handler !== "function") return () => {};
+  const off = ui.onTerminalInput((data) => {
+    if (nativeSurface()?.terminal !== terminal) return undefined;
+    let next;
+    try { next = handler(data); } catch { return undefined; }
+    if (next === null) return { consume: true };
+    if (typeof next === "string") return next.length ? { data: next } : { consume: true };
+    return undefined;
+  });
+  return typeof off === "function" ? off : () => {};
+}
+
+export function createPixelGeometryTracker({ onChange = () => {}, tap = tapTerminalInput } = {}) {
   const geometry = { cellWidthPx: 0, cellHeightPx: 0, textAreaWidthPx: 0, textAreaHeightPx: 0 };
   let untap = null;
   let terminal = null;
@@ -154,7 +181,7 @@ export function createPixelGeometryTracker({ onChange = () => {} } = {}) {
       if (!nextTerminal || terminal === nextTerminal) return;
       untap?.();
       terminal = nextTerminal;
-      untap = tapTerminalInput(terminal, handler);
+      untap = tap(terminal, handler);
     },
     query(write = terminal?.write?.bind(terminal)) {
       try { write?.("\x1b[16t\x1b[14t"); } catch {}

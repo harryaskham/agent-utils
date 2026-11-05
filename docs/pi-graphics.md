@@ -459,6 +459,14 @@ follows the pane as the layout changes (found again by its component); a pane re
 renderer of its new size. Needs gfx-core with `gfx_target` (tools #47) and the gfx renderer
 settings; `/gfx full` and `/gfx pane` are exclusive.
 
+**In Rex workspaces** (`pi-client --rex`) one pi-client process serves many panes, each on a
+terminal of its own (its Rex block). There a pane *is* its whole terminal, so `/gfx pane` and
+`/gfx full` (`on`, `off`, `toggle`, `status`) both draw the pane you type them in with gfx-core:
+from that pane's own frames, onto its own terminal (ticks too), at the cell size its terminal
+reports. Other panes are untouched and can be turned on separately. The terminal's replies are
+read through pi-client's `ctx.ui.onTerminalInput()` for that terminal only, and never reach the
+editor. This needs gfx-core with `gfx_target` too.
+
 ## Commands
 
 `/gfx` with no arguments opens the settings UI. Useful direct forms include:

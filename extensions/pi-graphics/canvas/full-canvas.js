@@ -2176,6 +2176,10 @@ export function createFullCanvas({
   // no padding: the mouse needs no translation), placed at the pane's origin (and tmux's outer
   // origin) with its layers above the text, fed the composed screen cropped to the pane (dialogs
   // over it included). pi-client lays out as ever; nothing else changes.
+  //
+  // A pane may bring its own `host` (pi-client's Rex workspaces: one process, a terminal per pane):
+  // { tui, terminal, write, geometry }. Its renderer then draws from that terminal's frames, writes
+  // to that terminal (ticks too) at its own cell size, and the pane is that whole terminal.
   const PANE_Z = 1_000;
   const paneState = { panes: new Map(), ticker: null, ready: false };
   const panesActive = () => paneState.panes.size > 0;
@@ -2191,16 +2195,18 @@ export function createFullCanvas({
   }
   async function preparePanes(options) {
     if (paneState.ready) return;
-    const { tapInput, ...rest } = options;
+    const { tapInput, host, ...rest } = options;
     state.startOptions = options;
     state.config = { ...FULL_CANVAS_DEFAULTS, ...Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined && v !== "")) };
-    if (!pixelGeometry) throw new Error("pixel geometry tracker unavailable");
-    const geometry = await pixelGeometry.ensure({ write: (data) => write(data), columns: process.stdout.columns, rows: process.stdout.rows });
-    if (!geometry.known) throw new Error("this terminal did not report its cell size (CSI 16 t / 14 t): /gfx full cell <width>x<height>");
-    state.terminalName = String(await pixelGeometry.probeTerminalName?.({ write: (data) => write(data) }) || "").toLowerCase();
-    state.real = realGeometry();
+    if (!host) {
+      if (!pixelGeometry) throw new Error("pixel geometry tracker unavailable");
+      const geometry = await pixelGeometry.ensure({ write: (data) => write(data), columns: process.stdout.columns, rows: process.stdout.rows });
+      if (!geometry.known) throw new Error("this terminal did not report its cell size (CSI 16 t / 14 t): /gfx full cell <width>x<height>");
+      state.terminalName = String(await pixelGeometry.probeTerminalName?.({ write: (data) => write(data) }) || "").toLowerCase();
+      state.real = realGeometry();
+    }
     buildFonts();
-    await learnTerminalBackground(getTui());
+    await learnTerminalBackground(host?.tui ?? getTui(), 300, host?.write ?? write);
     resolveTheme();
     paneState.ready = true;
   }
@@ -2212,23 +2218,36 @@ export function createFullCanvas({
       dropPane(existing);
       paneState.panes.delete(key);
       if (!panesActive()) { clearInterval(paneState.ticker); paneState.ticker = null; }
-      getTui()?.requestRender?.(true);
+      paneTui(existing)?.requestRender?.(true);
       return false;
     }
     if (!/^gfx/.test(String(options.renderer || state.config?.renderer || ""))) throw new Error("/gfx pane draws with gfx-core: /gfx full renderer gfx");
     if (!findGfxWasm(options.gfxWasm)) throw new Error("gfx-core (gfx_wasm.wasm) not found: install gfxsh or set gfxWasm / $PI_GFX_WASM");
+    const host = options.host || null;
+    if (host) {
+      // Its own terminal's cell size (each answers for itself).
+      const terminal = host.terminal;
+      const known = await host.geometry.ensure({ write: host.write, columns: terminal?.columns, rows: terminal?.rows });
+      if (!known.known) throw new Error("this pane's terminal did not report its cell size (CSI 16 t / 14 t)");
+    }
     await preparePanes(options);
-    paneState.panes.set(key, { key, rect, engine: null, size: "", origin: "", last: null, shown: false, error: "" });
+    paneState.panes.set(key, { key, rect, host, engine: null, size: "", origin: "", last: null, shown: false, error: "" });
     if (!paneState.ticker) {
       const fps = Math.max(5, Math.min(60, Number(cfg().fps) || 30));
       paneState.ticker = setInterval(tickPanes, Math.round(1000 / fps));
       paneState.ticker.unref?.();
     }
-    getTui()?.requestRender?.(true);
+    paneTui(paneState.panes.get(key))?.requestRender?.(true);
     return true;
   }
+  const paneTui = (pane) => (pane?.host ? pane.host.tui : getTui());
+  const paneWrite = (pane) => (pane?.host ? pane.host.write : write);
+  function paneCell(pane) {
+    const g = pane.host?.geometry?.geometry;
+    return g?.cellWidthPx > 0 && g?.cellHeightPx > 0 ? [g.cellWidthPx, g.cellHeightPx] : [state.real.cellW, state.real.cellH];
+  }
   function dropPane(pane) {
-    try { if (pane.engine) write(`${BSU}\x1b7${pane.engine.clear()}\x1b8${ESU}`); } catch {}
+    try { if (pane.engine) paneWrite(pane)(`${BSU}\x1b7${pane.engine.clear()}\x1b8${ESU}`); } catch {}
     try { pane.engine?.drop(); } catch {}
     pane.engine = null;
   }
@@ -2242,18 +2261,18 @@ export function createFullCanvas({
       font: state.fonts?.resolved?.default?.path || "",
       cols: r.width,
       rows: r.height,
-      cell: [state.real.cellW, state.real.cellH],
+      cell: paneCell(pane),
       gutter: 0,
       effects: gfxEffects(),
       theme: gfxTheme(),
       origin: [r.x, r.y],
-      tmux: tmuxOuterOrigin(),
+      tmux: pane.host ? null : tmuxOuterOrigin(),
       zBase: PANE_Z,
     }).then((engine) => {
       if (paneState.panes.get(made.key) !== made) { engine.drop(); return; }
       if (!engine.canTarget()) { made.error = "this gfx-core cannot draw a pane (update gfxsh)"; engine.drop(); return; }
       made.engine = engine;
-      getTui()?.requestRender?.(true);
+      paneTui(made)?.requestRender?.(true);
     }).catch((error) => { made.error = error.message; trace(`gfx pane: ${error.message}`); });
   }
   /** Pi's frame: each enabled pane drawn from its cells, inside the same update. */
@@ -2262,10 +2281,12 @@ export function createFullCanvas({
     try { semanticTick(); } catch {}
     const screen = Array.isArray(renderer?.previousScreen) ? renderer.previousScreen : [];
     const regions = getRegions(renderer) || {};
-    const width = Math.max(1, Number(getTui()?.terminal?.columns) || process.stdout.columns || 80);
+    const width = Math.max(1, Number(renderer?.terminal?.columns) || Number(getTui()?.terminal?.columns) || process.stdout.columns || 80);
     let out = "";
     let caret = false;
     for (const pane of paneState.panes.values()) {
+      // A pane with its own terminal is drawn only from that terminal's frames.
+      if (pane.host && pane.host.terminal !== renderer?.terminal) continue;
       const r = pane.rect();
       if (!r || r.width < 4 || r.height < 2) {
         if (pane.engine && pane.shown) { out += pane.engine.clear(); pane.shown = false; }
@@ -2275,7 +2296,7 @@ export function createFullCanvas({
       if (size !== pane.size) { pane.size = size; makePaneEngine(pane, r); continue; }
       if (!pane.engine) continue;
       const origin = `${r.x},${r.y}`;
-      if (origin !== pane.origin) { pane.origin = origin; out += pane.engine.target({ origin: [r.x, r.y], tmux: tmuxOuterOrigin(), zBase: PANE_Z }); }
+      if (origin !== pane.origin) { pane.origin = origin; out += pane.engine.target({ origin: [r.x, r.y], tmux: pane.host ? null : tmuxOuterOrigin(), zBase: PANE_Z }); }
       const parsed = [];
       for (let row = r.y; row < r.y + r.height; row += 1) {
         const line = parseAnsiLine(screen[row] ?? "", width);
@@ -2289,9 +2310,9 @@ export function createFullCanvas({
       const cursor = at && at.row >= r.y && at.row < r.y + r.height && at.col >= r.x && at.col < r.x + r.width ? { row: at.row - r.y, col: at.col - r.x } : null;
       if (cursor) caret = true;
       // its editor: the one in this pane (pi-client's layout), in its cells
-      const editor = (regions.client?.panes || [])
-        .map((p) => p.editor)
-        .find((e) => e && e.x >= r.x && e.y >= r.y && e.x + e.width <= r.x + r.width && e.y + e.height <= r.y + r.height);
+      const inside = (e) => e && e.x >= r.x && e.y >= r.y && e.x + e.width <= r.x + r.width && e.y + e.height <= r.y + r.height;
+      // pi-client's panes' editors; a terminal of its own has just its pane's
+      const editor = (regions.client?.panes || []).map((p) => p.editor).find(inside) ?? (pane.host && inside(regions.editor) ? regions.editor : undefined);
       const local = editor ? { ...editor, x: editor.x - r.x, y: editor.y - r.y } : null;
       if (cursor) feedEditorText(parsed, local, cursor);
       try {
@@ -2309,14 +2330,16 @@ export function createFullCanvas({
     return out || caret ? { inject: `\x1b7${out}\x1b8${caret ? "\x1b[?25l" : ""}` } : {};
   }
   function tickPanes() {
-    let out = "";
+    // By terminal: a pane with its own terminal ticks there, the rest on the client's.
+    const outs = new Map();
     for (const pane of paneState.panes.values()) {
       if (!pane.engine || !pane.last || !pane.shown) continue;
       // the caret's pane: its typing heat decays between Pi's renders
       if (pane.caret) pane.last.heat = Math.max(0, Math.min(1, Number(getHeat()) || 0));
-      try { out += pane.engine.frame(pane.last); } catch {}
+      const to = paneWrite(pane);
+      try { outs.set(to, (outs.get(to) ?? "") + pane.engine.frame(pane.last)); } catch {}
     }
-    if (out) write(`${BSU}\x1b7${out}\x1b8${ESU}`);
+    for (const [to, out] of outs) if (out) { try { to(`${BSU}\x1b7${out}\x1b8${ESU}`); } catch {} }
   }
   function stopPanes() {
     for (const pane of paneState.panes.values()) dropPane(pane);
@@ -2324,7 +2347,7 @@ export function createFullCanvas({
     clearInterval(paneState.ticker);
     paneState.ticker = null;
   }
-  const paneStatus = () => [...paneState.panes.values()].map((pane) => ({ size: pane.size, ready: Boolean(pane.engine), error: pane.error || "" }));
+  const paneStatus = () => [...paneState.panes.values()].map((pane) => ({ size: pane.size, ready: Boolean(pane.engine), error: pane.error || "", ...(pane.host ? { cell: paneCell(pane) } : {}) }));
 
   // Above every gfx-core layer (its base is -1 000 000).
   const GFX_IMAGE_Z = -999_000;
@@ -2573,19 +2596,19 @@ export function createFullCanvas({
   }
 
   /** The terminal's own background (OSC 11), once: transparent themes take it. */
-  async function learnTerminalBackground(tui, timeoutMs = 300) {
+  async function learnTerminalBackground(tui, timeoutMs = 300, to = write) {
     if (state.termBg || state.edgeColorSet) return;
     try {
       const bg = typeof tui?.queryTerminalBackgroundColor === "function"
         ? await tui.queryTerminalBackgroundColor({ timeoutMs })
-        : await queryBackgroundThroughTap(timeoutMs);
+        : await queryBackgroundThroughTap(timeoutMs, to);
       if (bg && typeof bg === "object") state.termBg = [bg.r, bg.g, bg.b].map((v) => (v > 255 ? v >> 8 : v));
     } catch {}
   }
 
   // A pi-tui without queryTerminalBackgroundColor (pi-client's): ask OSC 11 ourselves and take
   // the reply from the input tap (swallowed, never seen as input).
-  function queryBackgroundThroughTap(timeoutMs) {
+  function queryBackgroundThroughTap(timeoutMs, to = write) {
     const tap = state.startOptions?.tapInput;
     if (typeof tap !== "function") return Promise.resolve(null);
     return new Promise((resolve) => {
@@ -2605,7 +2628,7 @@ export function createFullCanvas({
         finish(color);
         return null;
       });
-      write("\x1b]11;?\x1b\\");
+      to("\x1b]11;?\x1b\\");
     });
   }
 
