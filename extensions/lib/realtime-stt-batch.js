@@ -152,6 +152,8 @@ export async function transcribeMaiAudioDirect({
   timeoutMs,
   signal,
   fetchImpl = fetch,
+  FormDataImpl = FormData,
+  BlobImpl = Blob,
 } = {}) {
   const root = maiTranscriptionRoot(endpoint);
   if (!root) throw new Error("transcribe: no Azure East US endpoint");
@@ -170,10 +172,16 @@ export async function transcribeMaiAudioDirect({
   try {
     credential = await azureAuthHeaders({ ...arguments[0], apiKey, signal: bound.signal }, { kind: "stt" });
     bound.signal.throwIfAborted();
+    // MAI-Transcribe takes multipart/form-data (bd-34ba98): the WAV as `file`,
+    // the deployment as `model`. fetch sets the multipart Content-Type boundary.
+    const form = new FormDataImpl();
+    form.append("file", new BlobImpl([audio], { type: "audio/wav" }), "audio.wav");
+    form.append("model", selectedDeployment);
+    if (language) form.append("language", String(language));
     res = await fetchImpl(`${root}/mai/v1/audio/transcriptions`, {
       method: "POST",
-      headers: { ...credential.headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: selectedDeployment, audio_url: `data:audio/wav;base64,${audio.toString("base64")}`, ...(language ? { language } : {}) }),
+      headers: { ...credential.headers },
+      body: form,
       signal: bound.signal, redirect: "error",
     });
     if (!res?.ok) {

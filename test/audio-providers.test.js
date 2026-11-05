@@ -90,7 +90,8 @@ test("named STT / PTT dispatch resolves Entra and preserves a deployment overrid
   assert.equal(text, "ok"); assert.deepEqual(b.calls, ["az-token"]);
   assert.equal(seen[0].url, "https://work.services.ai.azure.com/mai/v1/audio/transcriptions");
   assert.equal(seen[0].init.headers.Authorization, "Bearer fixture-token"); assert.equal(seen[0].init.headers["api-key"], undefined);
-  assert.equal(JSON.parse(seen[0].init.body).model, "custom-transcribe");
+  assert.equal(seen[0].init.body.get("model"), "custom-transcribe");
+  assert.ok(seen[0].init.body.get("file"), "multipart file part (bd-34ba98)");
 });
 
 test("auto chooses configured Azure for MAI and does not leak that endpoint into OpenAI", async () => {
