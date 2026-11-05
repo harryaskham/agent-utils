@@ -279,6 +279,14 @@ test("the client part shows the focused session's repository in pi-client's side
   events.emit(GIT_REQUEST, { sessionId: "z" });
   assert.deepEqual(panels.at(-1), { key: "pi-git", lines: undefined, placement: "sidebar" });
 
+  // A session whose editor chips draw its branch and diff (they ask for its state): its own
+  // repository is not repeated in the panel, which keeps only the repositories git_track follows.
+  current = "a";
+  events.emit(GIT_REQUEST, { sessionId: "a" });
+  assert.deepEqual(panels.at(-1), { key: "pi-git", lines: undefined, placement: "sidebar" });
+  watches[0].onValue({ values: { workspace, tracked: [{ repo: true, branch: "trunk", project: "other", mainRoot: "/src/other" }] } });
+  assert.deepEqual(panels.at(-1), { key: "pi-git", lines: ["⎇ trunk  other", "  clean"], placement: "sidebar" });
+
   // Without pi-client's sidebar (TUI Pi, an earlier pi-client), no panel is set.
   const plain = [];
   const handlers2 = new Map();

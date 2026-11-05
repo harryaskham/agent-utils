@@ -30,16 +30,21 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
       return undefined;
     }
   };
+  // Sessions whose editor chips draw their git state (they ask for it): their own repository is
+  // in the editor's border already, so the panel (in the sidebar, or above the editor while the
+  // sidebar is hidden) leaves it out and shows only the repositories git_track follows.
+  const chipped = new Set();
   // The focused session's repository in pi-client's sidebar; set again only when it changes.
   let panel;
   const showPanel = () => {
     if (live?.ui?.hasSidebar !== true || typeof live.ui.setWidget !== "function") return;
-    const entry = sessions.get(sessionIdOf(live));
+    const sessionId = sessionIdOf(live);
+    const entry = sessions.get(sessionId);
     // The session's repository, then those git_track follows.
     const followed = (Array.isArray(entry?.tracked) ? entry.tracked : []).flatMap((tracked) =>
       workspacePanel(tracked) ?? [`✗ ${String(tracked?.path ?? "").split("/").pop()} ${tracked?.error ?? "unavailable"}`],
     );
-    const own = workspacePanel(entry?.workspace) ?? [];
+    const own = chipped.has(sessionId) ? [] : workspacePanel(entry?.workspace) ?? [];
     const lines = own.length + followed.length === 0 ? undefined : [...own, ...followed];
     const key = JSON.stringify(lines ?? null);
     if (key === panel) return;
@@ -152,9 +157,14 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
   };
 
   pi.events?.on?.(GIT_REQUEST, (data) => {
+    const sessionId = data?.sessionId ? String(data.sessionId) : undefined;
+    if (sessionId) {
+      chipped.delete(sessionId);
+      chipped.add(sessionId);
+      while (chipped.size > maxSessions * 4) chipped.delete(chipped.values().next().value);
+    }
     // Panes are drawn as focus moves: the sidebar follows the focused session's repository.
     showPanel();
-    const sessionId = data?.sessionId ? String(data.sessionId) : undefined;
     if (!sessionId) return;
     if (sessions.has(sessionId)) return publish(sessionId);
     // pi-client's live ctx refers to the pane being drawn: follow it when it is that session's.
