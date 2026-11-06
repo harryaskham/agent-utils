@@ -451,3 +451,66 @@ test("the client part opens a fork made on another node there (ctx.sessions.crea
   // Said at once: copying a long conversation takes a while.
   assert.deepEqual(notices, ["Opening x on aurora: copying this conversation into a session there…"]);
 });
+
+test("a fork opens in the pane /git wt fork was typed in, wherever focus is when its record comes (a Rex workspace)", async () => {
+  const handlers = new Map();
+  const watches = [];
+  // pi-client: a dynamic ctx (the focused pane's session), and a pinned one per pane.
+  const panes = { left: { session: "a", created: [], notices: [] }, right: { session: "b", created: [], notices: [] } };
+  let focused = "left";
+  const paneCtx = (name) => ({
+    sessionManager: { getSessionId: () => panes[name].session },
+    chord: { async watchDocument(address, onValue) { watches.push({ session: panes[name].session, onValue }); return () => {}; } },
+    sessions: { create: async (options) => panes[name].created.push(options) },
+    ui: { notify: (text) => panes[name].notices.push(text) },
+  });
+  const ctx = {
+    sessionManager: { getSessionId: () => panes[focused].session },
+    chord: { watchDocument: (address, onValue) => paneCtx(focused).chord.watchDocument(address, onValue) },
+    sessions: { create: (options) => paneCtx(focused).sessions.create(options) },
+    ui: { notify: (text) => paneCtx(focused).ui.notify(text) },
+    pinned: () => paneCtx(focused),
+  };
+  gitClient({ on: (type, handler) => handlers.set(type, handler) });
+  const typed = (text) => handlers.get("input")({ type: "input", text }, ctx);
+
+  // Typed in the left pane, which is followed from then on; the record comes after focus moved.
+  assert.equal(typed("/git wt fork x"), undefined, "the text goes on as typed");
+  await Promise.resolve();
+  assert.equal(watches.length, 1);
+  watches[0].onValue({ values: {} });
+  focused = "right";
+  watches[0].onValue({ values: { forked: { path: "/wt/x", branch: "x", at: Date.now() + 1 } } });
+  await Promise.resolve();
+  assert.deepEqual(panes.left.created, [{ cwd: "/wt/x", title: "x", carry: true }], "in the pane it was typed in");
+  assert.deepEqual(panes.right.created, []);
+
+  // The left pane shows another session when the record comes: no session, but where to go.
+  focused = "left";
+  typed("/git worktree fork y");
+  panes.left.session = "c";
+  focused = "right";
+  watches[0].onValue({ values: { forked: { path: "/wt/y", branch: "y", at: Date.now() + 2 } } });
+  await Promise.resolve();
+  assert.equal(panes.left.created.length + panes.right.created.length, 1);
+  assert.match(panes.left.notices.at(-1), /^Worktree y ready: \/cd \/wt\/y continues this conversation there\.$/);
+
+  // Its record before the watch's first value: still this command's, so it opens.
+  panes.right.session = "d";
+  typed("/git wt fork z");
+  await Promise.resolve();
+  const third = watches.at(-1);
+  assert.equal(third.session, "d");
+  third.onValue({ values: { forked: { path: "/wt/z", branch: "z", at: Date.now() + 3 } } });
+  await Promise.resolve();
+  assert.deepEqual(panes.right.created, [{ cwd: "/wt/z", title: "z", carry: true }]);
+  // Other text is left alone, and an old record in a first value stays history.
+  assert.equal(typed("/git status"), undefined);
+  panes.right.session = "e";
+  focused = "right";
+  await handlers.get("session_start")({}, ctx);
+  await Promise.resolve();
+  watches.at(-1).onValue({ values: { forked: { path: "/wt/old", branch: "old", at: 1 } } });
+  await Promise.resolve();
+  assert.equal(panes.right.created.length, 1);
+});

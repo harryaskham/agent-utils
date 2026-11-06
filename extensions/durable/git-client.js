@@ -114,22 +114,43 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
 
   // A /git wt fork in this session: a session in the worktree, with this conversation; on
   // another node (`host`, bd-9fcd6a), there, through pi-daemon's cross-host clone (bd-cd7999).
-  const openForked = async (forked) => {
-    const sessionsApi = live?.sessions;
+  // `here`: the ctx of the pane showing the forking session (it opens there); without one, only
+  // where to go, in `tell` (the pane the fork was typed in, which shows another session now).
+  const openForked = async (forked, here, tell = here) => {
+    const sessionsApi = here?.sessions;
     const host = typeof forked.host === "string" && forked.host !== "" ? forked.host : undefined;
     const cd = host === undefined ? `/cd ${forked.path}` : `/cd @${host} ${forked.path}`;
     if (typeof sessionsApi?.create !== "function") {
-      live?.ui?.notify?.(`Worktree ready${host === undefined ? "" : ` on ${host}`}: ${cd} continues this conversation there.`, "info");
+      tell?.ui?.notify?.(`Worktree ${forked.branch} ready${host === undefined ? "" : ` on ${host}`}: ${cd} continues this conversation there.`, "info");
       return;
     }
     // Copying a long conversation takes a while: say so at once, rather than nothing until it opens.
-    live?.ui?.notify?.(`Opening ${forked.branch}${host === undefined ? "" : ` on ${host}`}: copying this conversation into a session there…`, "info");
+    here.ui?.notify?.(`Opening ${forked.branch}${host === undefined ? "" : ` on ${host}`}: copying this conversation into a session there…`, "info");
     try {
       await sessionsApi.create({ ...(host === undefined ? {} : { host }), cwd: forked.path, title: forked.branch, carry: true });
     } catch (error) {
-      live?.ui?.notify?.(`Cannot open a session in ${forked.path}${host === undefined ? "" : ` on ${host}`}: ${error?.message ?? error} (${cd} continues there)`, "error");
+      here.ui?.notify?.(`Cannot open a session in ${forked.path}${host === undefined ? "" : ` on ${host}`}: ${error?.message ?? error} (${cd} continues there)`, "error");
     }
   };
+
+  // /git wt fork typed in a pane: that pane opens the fork's session when its record comes,
+  // wherever focus is by then (a Rex workspace runs many windows in one client, and the focused
+  // pane may be another window's when the record arrives). Kept by session, at most 32, 10 min.
+  const expected = new Map();
+  const EXPECT_MS = 10 * 60_000;
+  // A record this much older than the typed command (clock skew between hosts) is still its own.
+  const SKEW_MS = 60_000;
+  pi.on("input", (event, ctx) => {
+    if (!/^\/git\s+(?:wt|worktree)\s+fork(?:\s|$)/.test(String(event?.text ?? "").trim())) return undefined;
+    const sessionId = sessionIdOf(ctx);
+    if (!sessionId) return undefined;
+    expected.delete(sessionId);
+    expected.set(sessionId, { ctx: typeof ctx?.pinned === "function" ? ctx.pinned() : ctx, at: Date.now() });
+    while (expected.size > 32) expected.delete(expected.keys().next().value);
+    // Followed from now: its record is then a change, not history.
+    follow(ctx, sessionId);
+    return undefined;
+  });
 
   // Follow a session's git state; `ctx` refers to that session now (pi-client binds the watch to
   // the pane the ctx refers to when it is called).
@@ -151,12 +172,19 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
         if (Array.isArray(values.tracked)) entry.tracked = values.tracked;
         if (entry.workspace || entry.tracked) publish(sessionId);
         const forked = values.forked;
-        const at = Number(forked?.at);
-        // The first value is history: only a fork made while followed opens a session.
-        if (entry.forkedAt === undefined) entry.forkedAt = Number.isFinite(at) ? at : 0;
-        else if (Number.isFinite(at) && at > entry.forkedAt && typeof forked.path === "string") {
-          entry.forkedAt = at;
-          if (sessionIdOf(live) === sessionId) void openForked(forked);
+        const at = Number.isFinite(Number(forked?.at)) ? Number(forked.at) : 0;
+        const waiting = expected.get(sessionId);
+        const typed = waiting !== undefined && Date.now() - waiting.at <= EXPECT_MS ? waiting : undefined;
+        // The first value is history: only a fork made while followed opens a session (or the one
+        // just typed here, when its record came before the first value).
+        const first = entry.forkedAt === undefined;
+        const fresh = typeof forked?.path === "string" && (first ? typed !== undefined && at >= typed.at - SKEW_MS : at > entry.forkedAt);
+        if (first || fresh) entry.forkedAt = at;
+        if (fresh) {
+          if (waiting !== undefined) expected.delete(sessionId);
+          // The pane it was typed in, if it still shows this session; else the focused one, if it does.
+          const here = typed !== undefined && sessionIdOf(typed.ctx) === sessionId ? typed.ctx : sessionIdOf(live) === sessionId ? live : undefined;
+          if (here !== undefined || typed !== undefined) void openForked(forked, here, typed?.ctx);
         }
       }),
     ).then(
