@@ -154,6 +154,27 @@ export function createVisualThoughtsModule({
     }
   }
 
+  /**
+   * Give back images the slot no longer lists (pi-daemon's `ui.release`, where it has it): the
+   * session's media store keeps only the ring. Hosts without it keep them (and tidy them
+   * themselves, or not). Called after the slot write that dropped them, never before.
+   */
+  async function release(session, images) {
+    const ui = session.ui;
+    if (typeof ui?.release !== "function" || !images?.length) return;
+    for (const image of images) {
+      try {
+        await ui.release(image);
+      } catch (error) {
+        // An older shape takes the URI alone.
+        if (errorCode(error) === "invalid_argument" && typeof image?.uri === "string") {
+          try { await ui.release(image.uri); continue; } catch {}
+        }
+        log(`visual thoughts (${session.id}): could not release ${image?.uri || image}: ${error?.message || error}`);
+      }
+    }
+  }
+
   async function onImage(session, record, png) {
     const ui = session.ui;
     if (!ui || session.blocked) return;
@@ -172,9 +193,13 @@ export function createVisualThoughtsModule({
       }
       throw error;
     }
-    session.images = [...session.images, ref].slice(-Math.max(1, Math.min(32, session.config.slotImages)));
+    const kept = [...session.images, ref].slice(-Math.max(1, Math.min(32, session.config.slotImages)));
+    const dropped = session.images.filter((image) => !kept.includes(image));
+    session.images = kept;
     session.current = session.images.length - 1;
     await publish(session);
+    // Out of the ring and out of the slot: their files go (pi-daemon's ui.release, bd-8620a0).
+    await release(session, dropped);
     session.lastError = "";
     log(`visual thoughts (${session.id}): painted in ${(record.ms / 1000).toFixed(1)}s, ${bytes.length} bytes; ${session.images.length} in the slot; budget ${JSON.stringify(budget.status())}`);
   }
@@ -352,7 +377,13 @@ export function createVisualThoughtsModule({
       if (verb === "on" || verb === "off" || verb === "auto" || verb === "toggle") {
         session.choice = verb === "toggle" ? (decide(session).paint ? "off" : "on") : verb;
         update(session);
-        if (session.choice === "off") { session.images = []; session.current = 0; await publish(session).catch((error) => report(session, error)); }
+        if (session.choice === "off") {
+          const dropped = session.images;
+          session.images = [];
+          session.current = 0;
+          await publish(session).catch((error) => report(session, error));
+          await release(session, dropped);
+        }
         await save(session);
         return reply(describe(session));
       }
@@ -366,9 +397,11 @@ export function createVisualThoughtsModule({
         return reply(`visual thoughts: image ${session.current + 1} of ${session.images.length}`);
       }
       if (verb === "clear") {
+        const dropped = session.images;
         session.images = [];
         session.current = 0;
         await publish(session);
+        await release(session, dropped);
         return reply("visual thoughts: backdrop cleared");
       }
       if (words.length >= 2) {

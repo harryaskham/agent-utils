@@ -799,7 +799,7 @@ test("store: old sessions and an over-full store are pruned, the session in use 
 });
 
 /** pi-daemon's module `ui` (session UI slots, 1.15), recording what a module asks of it. */
-function fakeSlotsUi({ owner = "visual-thoughts", watchers } = {}) {
+function fakeSlotsUi({ owner = "visual-thoughts", watchers, release = false } = {}) {
   const slots = new Map();
   const media = new Map();
   let n = 0;
@@ -826,6 +826,16 @@ function fakeSlotsUi({ owner = "visual-thoughts", watchers } = {}) {
     async clear(name) { slots.delete(name); ui.calls.push(`clear ${name}`); },
     async get(name) { return slots.get(name); },
   };
+  // A host that can delete an image no slot lists (pi-daemon's ui.release, bd-8620a0).
+  if (release) {
+    ui.released = [];
+    ui.release = async (image) => {
+      const uri = typeof image === "string" ? image : image?.uri;
+      for (const slot of slots.values()) if (slot.images?.some((ref) => ref.uri === uri)) throw Object.assign(new Error("a slot lists it"), { code: "invalid_argument" });
+      media.delete(uri);
+      ui.released.push(uri);
+    };
+  }
   // A host that counts the clients showing the session (the demand signal).
   if (watchers !== undefined) {
     ui.watcherCount = watchers;
@@ -1365,6 +1375,36 @@ test("pi-daemon module: a full session media store stops painting for a while, n
     await module.observe({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "y".repeat(800) }] } }, info);
     for (let i = 0; i < 100 && !slots.get("backdrop")?.images.length; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(slots.get("backdrop").images.length >= 1, "painting again once the store has room");
+  } finally {
+    module.dispose();
+  }
+});
+
+test("pi-daemon module: paintings out of the ring are released (pi-daemon ui.release), after the slot drops them", async () => {
+  const { createVisualThoughtsModule } = await import("../extensions/lib/durable-visual-thoughts.js");
+  const requests = [];
+  const { ui, slots, media } = fakeSlotsUi({ watchers: 1, release: true });
+  const module = createVisualThoughtsModule({
+    env: { LITELLM_BASE_URL: "http://proxy:4000" },
+    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minChars: 5, minIntervalMs: 0, slotImages: 2, budgetPerMinute: 60 } } },
+    fetchImpl: paintingFetch(requests),
+    log: () => {},
+  });
+  try {
+    const { info } = moduleInfo(ui);
+    await module.observe({ type: "agent_start" }, info);
+    for (let n = 1; n <= 3; n += 1) {
+      await module.observe({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: `painting ${n} `.repeat(20) }] } }, info);
+      for (let i = 0; i < 200 && (slots.get("backdrop")?.images.length ?? 0) < Math.min(n, 2); i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+      for (let i = 0; i < 200 && n === 3 && !ui.released.length; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    // Three painted, two kept: the first released, its file gone; the slot's still there.
+    assert.equal(ui.released.length, 1);
+    assert.equal(media.has(ui.released[0]), false);
+    assert.deepEqual(slots.get("backdrop").images.map((ref) => media.has(ref.uri)), [true, true]);
+    // clear gives back the rest.
+    await module.commands.thoughts.run("clear", info);
+    assert.equal(ui.released.length, 3);
   } finally {
     module.dispose();
   }
