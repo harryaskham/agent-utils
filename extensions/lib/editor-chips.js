@@ -48,8 +48,19 @@ export function resolveEditorChipsConfig(settings = {}, env = process.env) {
     if (placed.has(field)) continue;
     config[group] = at === "start" ? [field, ...config[group]] : [...config[group], field];
   }
+  // A Cacophony agent's chip has a place of its own where a directory is shown and it is not
+  // placed: just before the git branch, else before the directory. (It used to stand in for the
+  // directory, and the two then swapped as the agent's state came and went.)
+  if (!placed.has("agent") && placed.has("directory")) {
+    const before = CHIP_GROUPS.some((group) => config[group].includes("branch")) ? "branch" : "directory";
+    const group = CHIP_GROUPS.find((name) => config[name].includes(before));
+    const at = config[group].indexOf(before);
+    config[group] = [...config[group].slice(0, at), "agent", ...config[group].slice(at)];
+  }
   return config;
 }
+
+const CHIP_GROUPS = Object.freeze(["bottomCenter", "bottomLeft", "bottomRight", "topLeft", "topCenter", "topRight"]);
 
 function resolveConfiguredChips(settings, env) {
   const raw = settings?.agentUtils?.editorChips || settings?.editorChips || {};
@@ -308,9 +319,8 @@ function chipFor(field, values, theme) {
       part(values.model || "n/a", p.white, p.dark),
     ]);
     case "effort": return values.effortLabel === "" ? "" : renderParts([part(values.effortLabel ?? (values.effort || "off"), p.effort)]);
-    // A Cacophony agent's chip stands in for the directory (its project and agent determine it),
-    // unless "agent" is placed itself.
-    case "directory": return values.agent && !values.agentPlaced ? agentChip(values, p) : renderParts([part("", p.blue), part(values.directory || ".", p.nord3)], { divider: "rounded" });
+    // A Cacophony agent's chip is its own (by default just before the branch): see resolveEditorChipsConfig.
+    case "directory": return renderParts([part("", p.blue), part(values.directory || ".", p.nord3)], { divider: "rounded" });
     case "agent": return values.agent ? agentChip(values, p) : "";
     case "branch": return values.inGitRepo ? renderParts([part("", p.blue), ...(values.branchCollapsed ? [] : [part(values.branch, p.nord3)])], { divider: "rounded" }) : "";
     case "diff": return values.inGitRepo ? renderParts([part(`+${values.additions || 0}`, p.green), part(`-${values.deletions || 0}`, p.red)], { divider: "vertical" }) : "";
@@ -440,7 +450,7 @@ function fitValues(width, config, initialValues, theme, separator, memo) {
   // Only the row that actually carries a chip may compact it.
   const exceedsFor = (field) => rows.some((row) => row.some((group) => group.includes(field)) && totalWidth(...row) > width);
   // An agent chip sheds its project first; a directory shortens step by step.
-  if (values.agent && (exceedsFor("directory") || exceedsFor("agent"))) values.agentCompact = true;
+  if (values.agent && exceedsFor("agent")) values.agentCompact = true;
   while (exceeds() && candidateIndex + 1 < candidates.length) {
     candidateIndex += 1;
     values.directory = candidates[candidateIndex];
@@ -492,7 +502,7 @@ export function buildEditorChipRails({ width, config, values, theme, memo }) {
   const padding = Math.max(0, Math.trunc(Number(config.editorPaddingX) || 0));
   const innerWidth = Math.max(1, safeWidth - padding * 2);
   const separator = rail(theme, values.effort, 1);
-  const placed = { ...values, agentPlaced: editorChipFieldSet(config).has("agent") };
+  const placed = { ...values };
   const fittedValues = fitValues(innerWidth, config, applyChipAliases(placed, config.aliases), theme, separator, memo);
   const top = composeRailRow({
     width: safeWidth,

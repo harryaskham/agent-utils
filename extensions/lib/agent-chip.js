@@ -1,5 +1,5 @@
-// The editor chips' agent chip: a Cacophony agent's project and name (`cacophony▌router`), shown
-// in place of the directory chip, which the project and agent already determine. A visiting
+// The editor chips' agent chip: a Cacophony agent's project and name (`cacophony▌router`), by
+// default just before the git branch, beside the directory (editor-chips.js). A visiting
 // agent's name is its id (`pi-daemon▌visiting-abcdef`); a native one's is the name its
 // configuration declares (CACOPHONY_AGENT_NAME, from Cacophony), else its full id.
 //

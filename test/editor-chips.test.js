@@ -67,7 +67,7 @@ test("editor chip settings resolve the requested immutable startup layout", () =
   assert.deepEqual(config.topCenter, []);
   assert.deepEqual(config.bottomRight, ["mcp", "cost", "context", "scrollDown"]);
   assert.deepEqual(config.bottomLeft, ["directory"]);
-  assert.deepEqual(config.bottomCenter, ["branch", "diff"]);
+  assert.deepEqual(config.bottomCenter, ["agent", "branch", "diff"], "a Cacophony agent before the branch");
   assert.equal(config.hideFooter, true);
   assert.equal(resolveEditorChipsConfig({}, {}).enabled, false);
   assert.equal(resolveEditorChipsConfig({ agentUtils: { editorChips: { enabled: true } } }, { PI_EDITOR_CHIPS_ENABLED: "" }).enabled, true, "empty launcher env does not disable settings policy");

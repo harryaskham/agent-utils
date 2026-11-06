@@ -32,7 +32,8 @@ Available fields are:
 - `mcp` — MCP count recovered from Pi's extension status data.
 - `cost` — cumulative session cost, including nested usage-bearing entries.
 - `context` — current context percentage and context-window size.
-- `directory` — current working directory, with the home prefix rendered as `~`. In a Cacophony agent's session it shows the agent chip instead, unless `agent` is placed itself.
+- `directory` — the session's working directory, under `~` by its host's home (pi-client's `ctx.home` for a session on another machine, else this machine's).
+  Where a directory is shown and `agent` is not placed, a Cacophony agent's chip goes just before `branch` (else before `directory`), beside it and never in its place.
 - `agent` — a Cacophony agent's project and name, `cacophony▌router`. A native agent's name is the one its configuration declares (`CACOPHONY_AGENT_NAME`), else its full id (`CACO_AGENT_ID`, `CACOPHONY_AGENT`); a visiting agent's (`/caco-agent-register`) is its id, `pi-daemon▌visiting-abcdef`. TUI Pi reads its own identity; pi-client reads each pane's session's from agent-utils' cacophony module (`extensions/durable/cacophony.mjs`), which records a native agent's identity from the session's variables (pi-daemon 1.15's `env.all()`; clients never receive the variables). None when Cacophony is disabled (`DISABLE_PI_CACO`, incognito).
 - `branch` — current Git branch.
 - `diff` — tracked additions and deletions relative to `HEAD`.
@@ -77,7 +78,7 @@ Configured `topLeft`, `topCenter` and `topRight` groups share the top rail. The 
 When space is constrained, fitting proceeds deterministically:
 
 1. Drop the agent chip's project, leaving its name.
-2. Collapse directory components from left to right until each component reaches one character (for example `~/.cacophony/agents/agent-utils/...` becomes `~/./a/a/...`).
+2. Shorten the directory: every component but the last to its first character, a dot-directory keeping its dot (`/home/me/.herdr/worktrees/pi-daemon/pi-client` becomes `/h/m/.h/w/p/pi-client`), then the last component alone. Once shortened it stays so until the longer form has 4 cells to spare, so a ticking working status does not flip it.
 3. Drop the speech hint and the meter's dB label, but only on the row that carries them.
 4. Collapse the branch chip to its Git icon.
 5. Reduce the speech chip to its state glyph.

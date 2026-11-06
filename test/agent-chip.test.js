@@ -1,5 +1,5 @@
-// The agent chip (extensions/lib/agent-chip.js): a Cacophony agent's `project▌name` in place of
-// the directory chip, in TUI Pi (its own identity) and pi-client (each pane's session's, from
+// The agent chip (extensions/lib/agent-chip.js): a Cacophony agent's `project▌name`, by default
+// just before the git branch (beside the directory, never in its place), in TUI Pi (its own identity) and pi-client (each pane's session's, from
 // agent-utils' cacophony module state); the module records a native agent's identity for it.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -28,13 +28,24 @@ const values = (overrides = {}) => ({
 });
 const config = (chips = {}) => resolveEditorChipsConfig({ agentUtils: { editorChips: { enabled: true, ...chips } } }, {});
 
-test("a Cacophony agent's chip stands in for the directory: project▌name, the name alone when narrow", () => {
+test("a Cacophony agent's chip sits just before the git branch, beside the directory: project▌name, the name alone when narrow", () => {
   const agent = { project: "cacophony", name: "router" };
   const bottom = stripAnsi(buildEditorChipRails({ width: 160, config: config(), values: values({ agent }), theme }).bottom);
-  assert.match(bottom, /cacophony▌router/);
-  assert.doesNotMatch(bottom, /pi-daemon/, "no directory");
-  // Without an agent: the directory, as before.
-  assert.match(stripAnsi(buildEditorChipRails({ width: 160, config: config(), values: values(), theme }).bottom), /~\/src\/pi-daemon/);
+  assert.match(bottom, /~\/src\/pi-daemon/, "the directory stays");
+  assert.match(bottom, /cacophony▌router\W+main/, "just before the branch");
+  // Without an agent: the same directory, nothing in the agent's place.
+  const plain = stripAnsi(buildEditorChipRails({ width: 160, config: config(), values: values(), theme }).bottom);
+  assert.match(plain, /~\/src\/pi-daemon/);
+  assert.doesNotMatch(plain, /cacophony/);
+  // The operator's layout (directory top centre, branch bottom centre): the agent before the branch.
+  const layout = config({ topCenter: ["directory"], bottomCenter: ["branch", "diff"], bottomLeft: ["meter"] });
+  assert.deepEqual(layout.bottomCenter, ["agent", "branch", "diff"]);
+  const rails = buildEditorChipRails({ width: 160, config: layout, values: values({ agent }), theme });
+  assert.match(stripAnsi(rails.top), /~\/src\/pi-daemon/);
+  assert.match(stripAnsi(rails.bottom), /cacophony▌router\W+main/);
+  // No branch chip: before the directory; no directory chip: not shown unless placed.
+  assert.deepEqual(config({ bottomCenter: [], bottomLeft: ["directory"] }).bottomLeft, ["agent", "directory"]);
+  assert.ok(!Object.values(config({ bottomLeft: [], bottomCenter: ["branch"] })).some((group) => Array.isArray(group) && group.includes("agent")));
   // Placed itself ("caco" is its alias): the directory stays and the agent chip is where placed.
   const placed = stripAnsi(buildEditorChipRails({ width: 160, config: config({ bottomCenter: ["caco"] }), values: values({ agent }), theme }).bottom);
   assert.match(placed, /~\/src\/pi-daemon/);
@@ -105,11 +116,11 @@ async function chips({ env = {}, chord } = {}) {
   return { draw, renders, shutdown: () => handlers.get("session_shutdown")?.[0]?.() };
 }
 
-test("TUI Pi draws its own agent in place of the directory", async () => {
+test("TUI Pi draws its own agent beside the directory", async () => {
   const tui = await chips({ env: { CACO_AGENT_ID: "ms-mac-cacophony-router", CACO_PROJECT: "cacophony", CACOPHONY_AGENT_NAME: "router" } });
   const drawn = tui.draw("s1");
   assert.match(drawn, /cacophony▌router/);
-  assert.doesNotMatch(drawn, /~\/src\/pi-daemon/);
+  assert.match(drawn, /~\/src\/pi-daemon/);
   tui.shutdown();
   const plain = await chips();
   assert.match(plain.draw("s1"), /~\/src\/pi-daemon/);
