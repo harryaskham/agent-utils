@@ -803,3 +803,18 @@ test("the context chip shows a /context limit: the share of it, then ≤LIMIT in
   assert.equal(limits().length, 1, "followed once");
   await client.stop();
 });
+
+test("the directory chip is under ~ by the session's host's home (pi-client's ctx.home), else this machine's", async () => {
+  const handlers = new Map();
+  let editorFactory;
+  const ui = { getEditorComponent: () => null, setEditorComponent(factory) { editorFactory = factory; }, setFooter() {}, setStatus() {} };
+  const pi = { registerCommand() {}, on(name, handler) { handlers.set(name, [...(handlers.get(name) || []), handler]); }, getThinkingLevel: () => "low", exec: async () => ({ code: 0, stdout: "" }) };
+  class FakeCustomEditor { render() { return ["────────", "", "────────"]; } invalidate() {} }
+  await createEditorChipsExtension({ settings: { agentUtils: { editorChips: { enabled: true } } }, env: { HOME: "/Users/harryaskham" }, host: { CustomEditor: FakeCustomEditor } })(pi);
+  const ctx = { cwd: "/home/harryaskham/src/x", home: undefined, model: { provider: "p", id: "m", contextWindow: 100 }, getContextUsage: () => ({ percent: 1, contextWindow: 100 }), sessionManager: { getEntries: () => [] }, ui };
+  await handlers.get("session_start")[0]({}, ctx);
+  const draw = () => stripAnsi(editorFactory({ requestRender() {} }, theme, {}).render(200).join("\n"));
+  assert.match(draw(), /\/home\/harryaskham\/src\/x/, "the host's home not known yet: this machine's");
+  ctx.home = "/home/harryaskham";
+  assert.match(draw(), /~\/src\/x/);
+});

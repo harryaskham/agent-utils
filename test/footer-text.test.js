@@ -41,11 +41,11 @@ test("formatFooterPct strips a trailing .0 and rounds to one decimal", () => {
   assert.equal(formatFooterPct("bad"), "0%");
 });
 
-test("compactPathSegment keeps the first non-dot character", () => {
-  assert.equal(compactPathSegment(".config"), "c");
-  assert.equal(compactPathSegment(".gitignore"), "g");
+test("compactPathSegment keeps the first non-dot character, after one dot for a dot-directory", () => {
+  assert.equal(compactPathSegment(".config"), ".c");
+  assert.equal(compactPathSegment(".gitignore"), ".g");
   assert.equal(compactPathSegment("abc"), "a");
-  assert.equal(compactPathSegment("...x"), "x");
+  assert.equal(compactPathSegment("...x"), ".x");
   assert.equal(compactPathSegment(".."), "."); // all dots -> first raw char
   assert.equal(compactPathSegment(""), "");
 });
@@ -101,4 +101,9 @@ test("prettyFooterCwd renders ~ for HOME and compacts paths", () => {
   assert.equal(prettyFooterCwd(HOME_SENTINEL), "~");
   assert.equal(prettyFooterCwd(`${HOME_SENTINEL}/projects/foo`), "~/p/foo");
   assert.equal(prettyFooterCwd("/var/log/syslog"), "/v/l/syslog");
+});
+
+test("prettyFooterCwd puts a session's directory under ~ by the home given (its host's, pi-client's ctx.home)", () => {
+  assert.equal(prettyFooterCwd("/home/harryaskham/.herdr/worktrees/pi-daemon/pi-client", "/home/harryaskham"), "~/.h/w/p/pi-client");
+  assert.equal(compactFooterPath("/home/harryaskham/.herdr/worktrees/pi-daemon/pi-client"), "/h/h/.h/w/p/pi-client");
 });

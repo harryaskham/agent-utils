@@ -1558,7 +1558,7 @@ export default async function piGraphicsExtension(pi) {
       ? `${provider ? `${provider}/` : ""}${modelName}`
       : "model n/a";
     return [
-      { key: "cwd", token: "muted", value: prettyFooterCwd(ctx?.cwd || process.cwd()), truncate: truncateFooterStart, min: 4, max: 48 },
+      { key: "cwd", token: "muted", value: prettyFooterCwd(ctx?.cwd || process.cwd(), ctx?.home || process.env.HOME), truncate: truncateFooterStart, min: 4, max: 48 },
       { key: "branch", token: "accent", value: branch, truncate: truncateFooterEnd, min: 4, max: 96 },
       { key: "context", token: "thinkingXhigh", value: context, truncate: truncateFooterEnd, min: 5, max: 18 },
       { key: "compact", token: "borderAccent", value: `${compactFooterModeLabel()} (${footerState.compactions})`, truncate: truncateFooterEnd, min: 5, max: 16 },

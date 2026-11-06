@@ -349,7 +349,9 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         contextPct: Number.isFinite(contextPct) ? contextPct : 0,
         contextMax: Number.isFinite(contextMax) ? contextMax : 0,
         contextLimit: contextLimit > 0 ? contextLimit : 0,
-        directory: prettyDirectory(ctx.cwd || process.cwd(), env.HOME || env.USERPROFILE),
+        // Under ~ by the session's host's home (pi-client's ctx.home: a session on another host),
+        // else this machine's.
+        directory: prettyDirectory(ctx.cwd || process.cwd(), ctx.home || env.HOME || env.USERPROFILE),
         agent: agentFor(ctx),
         branch: footerBranch || git?.branch || "",
         inGitRepo: Boolean(git?.inGitRepo) || Boolean(footerBranch),

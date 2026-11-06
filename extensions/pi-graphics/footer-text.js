@@ -26,9 +26,12 @@ export function formatFooterPct(pct) {
   return `${value.toFixed(1).replace(/\.0$/, "")}%`;
 }
 
+/** A path segment as its first character; a dot-directory keeps its dot (.config → .c). */
 export function compactPathSegment(segment) {
-  const chars = Array.from(String(segment || "").replace(/^\.+/, ""));
-  return chars[0] || Array.from(String(segment || ""))[0] || "";
+  const raw = String(segment || "");
+  const chars = Array.from(raw.replace(/^\.+/, ""));
+  if (chars.length === 0) return Array.from(raw)[0] || "";
+  return raw.startsWith(".") ? `.${chars[0]}` : chars[0];
 }
 
 export function compactFooterPath(path, threshold = 0) {
@@ -41,8 +44,8 @@ export function compactFooterPath(path, threshold = 0) {
   return `${prefix}${[...parts.slice(0, -1).map(compactPathSegment), parts.at(-1)].join("/")}`;
 }
 
-export function prettyFooterCwd(cwd) {
-  const home = process.env.HOME;
+/** `cwd` under ~ by `home` (pi-client's ctx.home: the session's host's), else this machine's. */
+export function prettyFooterCwd(cwd, home = process.env.HOME) {
   const value = String(cwd || process.cwd());
   const display = home && value === home
     ? "~"
