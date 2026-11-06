@@ -87,7 +87,7 @@ tmux is not supported yet (`PI_VISUAL_THOUGHTS_TMUX=1` to try). `PI_VISUAL_THOUG
 | `firstChars`, `minChars` | `160`, `600` | new output needed |
 | `maxPerRun`, `maxImages`, `minSet` | `10`, `8`, `3` | |
 | `slotImages` | `8` | paintings a pi-daemon session's backdrop slot keeps (`images` at runtime) |
-| `slotImageBytes` | `900000` | each painting stored in the session's media at most this size (a scaled-down PNG); the media stays (pi-daemon bd-1e28c9) |
+| `slotImageBytes` | `900000` | each painting stored in the session's media at most this size (a scaled-down PNG); the media stays until pi-daemon deletes slot images no slot lists (bd-1e28c9). A session whose media store is full (pi-daemon keeps 256 MiB a session) stops painting for 30 minutes, then tries again |
 | `daemon` | `watched` | pi-daemon sessions that paint: `watched`, `manual`, `all` |
 | `budgetConcurrent`, `budgetPerMinute` | `1`, `4` | one process's painting budget (`concurrent`, `per-minute` at runtime) |
 | `timeoutMs` | `120000` | a painting request taking longer is dropped |

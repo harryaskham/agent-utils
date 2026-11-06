@@ -37,6 +37,8 @@ export const OWNER = "visual-thoughts";
 /** ui.image's limit (2 MiB), with room to spare. */
 export const MAX_IMAGE_BYTES = 2 * 1024 * 1024 - 16 * 1024;
 const SETTINGS_KEY = "settings";
+/** After the session's media store refused a painting (full), how long before trying again. */
+export const MEDIA_FULL_RETRY_MS = 30 * 60_000;
 /** Session-scoped settings `/thoughts <key> <value>` may change (persisted per session). */
 const SESSION_KEYS = new Set(["promptModel", "clientPromptModel", "imageModel", "size", "quality", "style", "opacity", "fit", "feather", "holdMs", "minIntervalMs", "firstChars", "minChars", "maxPerRun", "slotImages", "provider"]);
 const HINT_KEYS = new Set(["opacity", "fit", "feather", "holdMs"]);
@@ -156,7 +158,20 @@ export function createVisualThoughtsModule({
     const ui = session.ui;
     if (!ui || session.blocked) return;
     const bytes = await fitted(png, session.config.slotImageBytes);
-    const ref = await ui.image(bytes, "image/png", { alt: String(record.prompt || "").slice(0, 280) });
+    let ref;
+    try {
+      ref = await ui.image(bytes, "image/png", { alt: String(record.prompt || "").slice(0, 280) });
+    } catch (error) {
+      // The session's media store is full (pi-daemon keeps 256 MiB a session): stop painting
+      // for a while rather than fail every painting, leaving the rest to the session's own media.
+      if (/media store is full|quota/i.test(String(error?.message)) || errorCode(error) === "quota_exceeded") {
+        session.mediaFullUntil = now() + MEDIA_FULL_RETRY_MS;
+        log(`visual thoughts (${session.id}): not painting for ${MEDIA_FULL_RETRY_MS / 60_000} min: ${error.message}`);
+        update(session);
+        return;
+      }
+      throw error;
+    }
     session.images = [...session.images, ref].slice(-Math.max(1, Math.min(32, session.config.slotImages)));
     session.current = session.images.length - 1;
     await publish(session);
@@ -243,6 +258,9 @@ export function createVisualThoughtsModule({
   function decide(session) {
     if (!session.ui) return { paint: false, why: "this pi-daemon has no session UI slots (needs 1.15)" };
     if (session.blocked) return { paint: false, why: session.blocked };
+    if (session.mediaFullUntil && now() < session.mediaFullUntil) {
+      return { paint: false, why: `this session's media store is full; trying again in ${Math.ceil((session.mediaFullUntil - now()) / 60_000)} min` };
+    }
     if (base.incognito) return { paint: false, why: "incognito" };
     if (session.choice === "on") return { paint: true, why: "on for this session" };
     if (session.choice === "off") return { paint: false, why: "off for this session" };

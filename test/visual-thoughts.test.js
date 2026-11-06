@@ -1326,3 +1326,46 @@ test("extension in pi-client with pi-graphics' canvas (gfx-core): the canvas dra
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("pi-daemon module: a full session media store stops painting for a while, not every painting failing", async () => {
+  const { createVisualThoughtsModule, MEDIA_FULL_RETRY_MS } = await import("../extensions/lib/durable-visual-thoughts.js");
+  let clock = 1_000_000;
+  const requests = [];
+  const { ui, slots } = fakeSlotsUi({ watchers: 1 });
+  let full = true;
+  const image = ui.image;
+  ui.image = async (...args) => {
+    if (full) throw new Error("the session's media store is full (268000000 of 268435456 bytes in 300 items)");
+    return image(...args);
+  };
+  const logs = [];
+  const module = createVisualThoughtsModule({
+    env: { LITELLM_BASE_URL: "http://proxy:4000" },
+    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minIntervalMs: 0, budgetPerMinute: 60 } } },
+    fetchImpl: paintingFetch(requests),
+    now: () => clock,
+    log: (line) => logs.push(line),
+  });
+  try {
+    const { info } = moduleInfo(ui);
+    const run = module.commands.thoughts.run;
+    await module.observe({ type: "agent_start" }, info);
+    await module.observe({ type: "message_end", message: { role: "user", content: [{ type: "text", text: "paint the harbour" }] } }, info);
+    for (let i = 0; i < 100 && !logs.some((line) => /media store is full/.test(line)); i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.match(await run("status", info), /off — this session's media store is full; trying again in 30 min/);
+    // More output: no more paintings while it is full.
+    const before = requests.length;
+    await module.observe({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "x".repeat(800) }] } }, info);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(requests.length, before);
+    // Later (the store freed): painting again.
+    full = false;
+    clock += MEDIA_FULL_RETRY_MS + 1;
+    await module.observe({ type: "agent_start" }, info);
+    await module.observe({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "y".repeat(800) }] } }, info);
+    for (let i = 0; i < 100 && !slots.get("backdrop")?.images.length; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(slots.get("backdrop").images.length >= 1, "painting again once the store has room");
+  } finally {
+    module.dispose();
+  }
+});
