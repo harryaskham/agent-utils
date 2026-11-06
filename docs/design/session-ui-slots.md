@@ -199,11 +199,13 @@ v1 has only daemon-hosted sessions, module producers and no demand signal. TUI P
 | `ui.set(slot, value)` | Sets the slot to a JSON object with a `kind`. The host stamps `owner` (the module's name), `rev` (+1 per write) and `updatedAt`, and returns `{ rev }`. |
 | `ui.clear(slot)` | Removes the slot. |
 | `ui.get(slot)` | Reads the slot, or `undefined`. |
+| `ui.release(image)` | Deletes an image this module stored with `ui.image()` (the image or its `uri`) that no slot lists, such as a ring's oldest painting. Returns `{ released }` (pi-daemon bd-8620a0). |
 
 **Rules.**
 - Slot names match `^[a-z][a-z0-9-]{0,31}$`.
 - A slot belongs to the module that set it until that module clears it; another module's write is refused.
 - At most 16 slots per session, 16 KiB of JSON per slot, and 32 images per `image-set`.
+- `ui.image()` images are the UI's. After each write, the host deletes those no slot lists, beyond the newest 32, so the session's media store stays bounded even without `ui.release()`. Shared media is never deleted.
 - Every image `uri` must be this session's media. Writes to one slot are refused at more than 4 per second.
 - Only modules write in v1: AHP and `/chord` clients read.
 
