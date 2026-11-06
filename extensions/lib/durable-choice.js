@@ -253,8 +253,25 @@ async function mirrorChoice(api, choices, question, context) {
   }) ?? undefined;
 }
 
+/**
+ * Answers given within this long of each other reach the agent as one message: answering several
+ * questions at once (pi-client's /choices sends its drafts together) does not start the agent on
+ * the first while the rest are still on their way.
+ */
+export const ASYNC_BATCH_MS = 1_000;
+
+const pause = (ms, signal) =>
+  ms <= 0
+    ? Promise.resolve()
+    : new Promise((resolve, reject) => {
+        if (signal?.aborted) return reject(signal.reason ?? new Error("aborted"));
+        const timer = setTimeout(() => { signal?.removeEventListener?.("abort", stop); resolve(); }, ms);
+        const stop = () => { clearTimeout(timer); reject(signal?.reason ?? new Error("aborted")); };
+        signal?.addEventListener?.("abort", stop, { once: true });
+      });
+
 /** The async question task (a Durable task definition as a plain object). */
-export function createAsyncChoiceTask() {
+export function createAsyncChoiceTask({ batchMs = ASYNC_BATCH_MS } = {}) {
   const finish = (runtime, task, context, record) =>
     runtime.commit(async (tx) => {
       const doc = await tx.doc(ASYNC_DOC);
@@ -285,11 +302,40 @@ export function createAsyncChoiceTask() {
             mirror.dispose();
           }
           if (result.status === "selected" || result.status === "freeform") {
-            // The answer reaches the agent as a steering message, as the TUI's async choices do.
-            const conversation = await runtime.conversation(runtime.conversationId, context);
+            // The answer reaches the agent as a steering message, as the TUI's async choices do,
+            // with every other answer given meanwhile: one message for a batch.
+            const id = String(runtime.taskId);
             const answer = result.status === "selected" ? `${result.label}${result.value !== undefined ? ` (${JSON.stringify(result.value)})` : ""}` : result.text;
-            const content = `[async_choice answer] ${key ? `${key}: ` : ""}"${question}" → ${answer} (id ${runtime.taskId})`;
-            await conversation?.submit({ type: "input", content, whenBusy: "steer", requestId: `async-choice:${runtime.taskId}` }, context);
+            const line = `[async_choice answer] ${key ? `${key}: ` : ""}"${question}" → ${answer} (id ${runtime.taskId})`;
+            // Recorded as answered and not yet delivered, for whichever task delivers first.
+            await runtime.commit(async (tx) => {
+              const record = (await tx.doc(ASYNC_DOC)).records[id];
+              if (record && record.delivered !== true && typeof record.line !== "string") record.line = line;
+              return undefined;
+            }, context);
+            await pause(batchMs, runtime.signal);
+            // The batch this task delivers, once: a restarted task sends the same one again (the
+            // same request id, so the conversation takes it once).
+            let lines = await runtime.memo?.("delivery", context)?.catch?.(() => undefined);
+            if (!Array.isArray(lines)) {
+              let batch = [line];
+              await runtime.commit(async (tx) => {
+                const records = (await tx.doc(ASYNC_DOC)).records;
+                if (records[id] === undefined) {
+                  batch = [line];
+                  return undefined;
+                }
+                const waiting = Object.values(records).filter((record) => typeof record.line === "string" && record.delivered !== true);
+                for (const record of waiting) record.delivered = true;
+                batch = waiting.map((record) => record.line);
+                return undefined;
+              }, context);
+              lines = (await runtime.memo?.("delivery", batch, context)?.catch?.(() => undefined)) ?? batch;
+            }
+            if (lines.length > 0) {
+              const conversation = await runtime.conversation(runtime.conversationId, context);
+              await conversation?.submit({ type: "input", content: lines.join("\n"), whenBusy: "steer", requestId: `async-choice:${runtime.taskId}` }, context);
+            }
           }
           await finish(runtime, task, context, { status: result.status === "selected" || result.status === "freeform" ? "answered" : result.status, result });
         },

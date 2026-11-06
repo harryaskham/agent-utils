@@ -64,7 +64,7 @@ test("async_choice posts non-blocking questions on background tasks; status and 
 
 test("the async task steers the conversation with the answer and records it", async () => {
   const store = durable();
-  const task = createAsyncChoiceTask();
+  const task = createAsyncChoiceTask({ batchMs: 0 });
   (await store.tx.doc(ASYNC_DOC)).records["12"] = { id: "12", status: "pending", question: "Ship it?" };
   const question = await store.tx.doc(INPUT_DOC, 12);
   Object.assign(question, { question: "Ship it?", choices: ["yes", "no"], blocking: false, status: "answered", answer: "yes" });
@@ -82,6 +82,51 @@ test("the async task steers the conversation with the answer and records it", as
   assert.deepEqual(submitted.map((submission) => [submission.content, submission.whenBusy, submission.requestId]), [['[async_choice answer] ship: "Ship it?" → yes (id 12)', "steer", "async-choice:12"]]);
   assert.equal((await store.tx.doc(ASYNC_DOC)).records["12"].status, "answered");
   assert.equal(commits.at(-1).status, "terminal");
+});
+
+test("answers given together reach the agent as one message; a restarted task sends its batch again, once", async () => {
+  const store = durable();
+  const task = createAsyncChoiceTask({ batchMs: 30 });
+  const records = (await store.tx.doc(ASYNC_DOC)).records;
+  const submitted = [];
+  const questions = { 21: "Ship it?", 22: "Rename?", 23: "Later?" };
+  for (const [id, text] of Object.entries(questions)) {
+    records[id] = { id, status: "pending", question: text };
+    Object.assign(await store.tx.doc(INPUT_DOC, Number(id)), { question: text, choices: ["yes", "no"], blocking: false, status: "answered", answer: "yes" });
+  }
+  const memos = new Map();
+  const runtimeFor = (taskId) => ({
+    taskId,
+    conversationId: 1,
+    signal: new AbortController().signal,
+    watchDoc: async (_doc, id) => ({ value: { ...store.question(id) }, start() {}, stop: async () => undefined }),
+    conversation: async () => ({ submit: async (submission) => submitted.push(submission) }),
+    commit: async (change) => change(store.tx),
+    memo: async (name, ...rest) => {
+      const key = `${taskId}:${name}`;
+      if (rest.length === 1) return memos.get(key);
+      if (!memos.has(key)) memos.set(key, JSON.parse(JSON.stringify(rest[0])));
+      return memos.get(key);
+    },
+  });
+  const run = (taskId) => task.definition.phases.wait({ input: { question: questions[taskId], choices: normalizeChoices([{ label: "yes" }, { label: "no" }]) } }, runtimeFor(taskId), {});
+
+  // Two answered together: the first task to deliver sends both; the other sends nothing.
+  await Promise.all([run(21), new Promise((resolve) => setTimeout(resolve, 5)).then(() => run(22))]);
+  assert.equal(submitted.length, 1);
+  assert.equal(submitted[0].content, '[async_choice answer] "Ship it?" → yes (id 21)\n[async_choice answer] "Rename?" → yes (id 22)');
+  assert.equal(submitted[0].whenBusy, "steer");
+  assert.equal(submitted[0].requestId, "async-choice:21");
+  assert.deepEqual([records["21"].status, records["22"].status], ["answered", "answered"]);
+
+  // Task 21 restarted after delivering: the same batch again, the same request id (the conversation takes it once).
+  await run(21);
+  assert.equal(submitted.length, 2);
+  assert.deepEqual([submitted[1].content, submitted[1].requestId], [submitted[0].content, submitted[0].requestId]);
+
+  // An answer given later is a message of its own.
+  await run(23);
+  assert.equal(submitted.at(-1).content, '[async_choice answer] "Later?" → yes (id 23)');
 });
 
 /** A Durable execution environment running commands with `vars` as its environment. */
