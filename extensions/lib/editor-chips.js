@@ -150,23 +150,35 @@ export function prettyDirectory(cwd, home = homedir()) {
   return target.split(sep).join("/");
 }
 
+/** A path segment as its first character; a dot-directory keeps its dot (.herdr → .h). */
+function shortSegment(segment) {
+  const chars = Array.from(segment);
+  if (chars[0] !== ".") return chars[0] ?? "";
+  const first = chars.find((char) => char !== ".");
+  return first === undefined ? segment : `.${first}`;
+}
+
+/**
+ * A directory's forms, longest first: in full; every segment but the last as its first character
+ * (/h/h/.h/w/p/pi-client, as the footer shortens it); the last segment alone. Two steps only, so
+ * a row whose width changes a little (a working timer) does not walk the path through many forms.
+ */
 export function directoryCollapseCandidates(directory) {
   const text = String(directory || "");
-  const absolute = text.startsWith("/");
-  const prefix = text.startsWith("~/") ? "~/" : absolute ? "/" : "";
-  const body = prefix === "~/" ? text.slice(2) : absolute ? text.slice(1) : text;
-  const parts = body.split("/").filter(Boolean);
+  const prefix = text.startsWith("~/") ? "~/" : text.startsWith("/") ? "/" : "";
+  const parts = text.slice(prefix.length).split("/").filter(Boolean);
   if (parts.length === 0) return [text || prefix || "."];
   const candidates = [text];
-  const collapsed = [...parts];
-  for (let index = 0; index < collapsed.length; index += 1) {
-    if (collapsed[index].length <= 1) continue;
-    collapsed[index] = collapsed[index][0];
-    const next = `${prefix}${collapsed.join("/")}`;
-    if (next !== candidates[candidates.length - 1]) candidates.push(next);
-  }
+  const add = (candidate) => {
+    if (candidate !== candidates.at(-1)) candidates.push(candidate);
+  };
+  if (parts.length > 1) add(`${prefix}${[...parts.slice(0, -1).map(shortSegment), parts.at(-1)].join("/")}`);
+  add(parts.at(-1));
   return candidates;
 }
+
+/** Spare cells a shortened directory needs before it is shown longer again. */
+export const DIRECTORY_SLACK = 4;
 
 export function collapseDirectoryToWidth(directory, maxWidth) {
   const candidates = directoryCollapseCandidates(directory);
@@ -410,7 +422,7 @@ function rail(theme, effort, width) {
   return `${fg(color)}${"─".repeat(width)}${reset()}`;
 }
 
-function fitValues(width, config, initialValues, theme, separator) {
+function fitValues(width, config, initialValues, theme, separator, memo) {
   const values = { ...initialValues };
   const candidates = directoryCollapseCandidates(values.directory);
   let candidateIndex = 0;
@@ -432,6 +444,19 @@ function fitValues(width, config, initialValues, theme, separator) {
   while (exceeds() && candidateIndex + 1 < candidates.length) {
     candidateIndex += 1;
     values.directory = candidates[candidateIndex];
+  }
+  // A directory shortened at the last draw (`memo`, the editor's own) stays so until the longer
+  // form has room to spare: a ticking working status or timer must not flip it at every draw.
+  if (memo && memo.directory === initialValues.directory && memo.level > candidateIndex) {
+    const roomy = rows.every((row) => !row.some((group) => group.includes("directory")) || totalWidth(...row) + DIRECTORY_SLACK <= width);
+    if (!roomy) {
+      candidateIndex = Math.min(memo.level, candidates.length - 1);
+      values.directory = candidates[candidateIndex];
+    }
+  }
+  if (memo) {
+    memo.directory = initialValues.directory;
+    memo.level = candidateIndex;
   }
   // Live speech keeps its state colour longest: shed its hint and the dB label
   // before the branch name, and its surface label last.
@@ -462,13 +487,13 @@ function composeRailRow({ width, padding, left, center, right, theme, effort }) 
   return { line: `${rail(theme, effort, edge)}${inner}${rail(theme, effort, edge)}`, overlapping };
 }
 
-export function buildEditorChipRails({ width, config, values, theme }) {
+export function buildEditorChipRails({ width, config, values, theme, memo }) {
   const safeWidth = Math.max(1, Math.trunc(Number(width) || 1));
   const padding = Math.max(0, Math.trunc(Number(config.editorPaddingX) || 0));
   const innerWidth = Math.max(1, safeWidth - padding * 2);
   const separator = rail(theme, values.effort, 1);
   const placed = { ...values, agentPlaced: editorChipFieldSet(config).has("agent") };
-  const fittedValues = fitValues(innerWidth, config, applyChipAliases(placed, config.aliases), theme, separator);
+  const fittedValues = fitValues(innerWidth, config, applyChipAliases(placed, config.aliases), theme, separator, memo);
   const top = composeRailRow({
     width: safeWidth,
     padding,

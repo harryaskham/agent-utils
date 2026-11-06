@@ -5,6 +5,7 @@ import { createEditorChipsExtension } from "../extensions/lib/editor-chips-exten
 import {
   buildEditorChipRails,
   collapseDirectoryToWidth,
+  DIRECTORY_SLACK,
   directoryCollapseCandidates,
   parseMcpCount,
   replaceEditorRails,
@@ -73,13 +74,36 @@ test("editor chip settings resolve the requested immutable startup layout", () =
   assert.equal(resolveEditorChipsConfig({ agentUtils: { editorChips: { enabled: true } } }, { PI_EDITOR_CHIPS_ENABLED: "0" }).enabled, false);
 });
 
-test("directory collapse progressively shortens earlier path components to one cell", () => {
+test("directory collapse: in full, then every segment but the last as one character (dots kept), then the last", () => {
   const full = "~/.cacophony/agents/agent-utils/ms-mac-agent-utils-agnt-dev-msm-0/checkout";
-  const candidates = directoryCollapseCandidates(full);
-  assert.equal(candidates[0], full);
-  assert.ok(candidates.includes("~/./a/a/ms-mac-agent-utils-agnt-dev-msm-0/checkout"));
-  assert.equal(candidates.at(-1), "~/./a/a/m/c");
-  assert.equal(collapseDirectoryToWidth(full, 48), candidates.find((item) => visibleCells(item) <= 48));
+  assert.deepEqual(directoryCollapseCandidates(full), [full, "~/.c/a/a/m/checkout", "checkout"]);
+  assert.deepEqual(directoryCollapseCandidates("/home/harryaskham/.herdr/worktrees/pi-daemon/pi-client"), [
+    "/home/harryaskham/.herdr/worktrees/pi-daemon/pi-client",
+    "/h/h/.h/w/p/pi-client",
+    "pi-client",
+  ]);
+  assert.deepEqual(directoryCollapseCandidates("~"), ["~"]);
+  assert.deepEqual(directoryCollapseCandidates("~/src"), ["~/src", "src"]);
+  assert.equal(collapseDirectoryToWidth(full, 48), "~/.c/a/a/m/checkout");
+});
+
+test("a shortened directory stays short until the full one has room to spare (no flicker as a timer ticks)", () => {
+  const chips = resolveEditorChipsConfig({ agentUtils: { editorChips: { enabled: true, topLeft: ["speech"], topCenter: ["directory"], topRight: ["model", "effort"] } } }, {});
+  const directory = "/home/harryaskham/.herdr/worktrees/pi-daemon/pi-client";
+  const top = (width, memo, extra = {}) => stripAnsi(buildEditorChipRails({ width, config: chips, values: values({ directory, ...extra }), theme, memo }).top);
+  // The narrowest width the full path fits at.
+  let fits = 60;
+  while (!top(fits).includes(directory)) fits += 1;
+  const memo = {};
+  assert.match(top(fits - 1, memo), /\/h\/h\/\.h\/w\/p\/pi-client/);
+  // One or two cells more (a working timer's digits): still short.
+  assert.match(top(fits, memo), /\/h\/h\/\.h\/w\/p\/pi-client/);
+  assert.match(top(fits + DIRECTORY_SLACK - 1, memo), /\/h\/h\/\.h\/w\/p\/pi-client/);
+  // Room to spare: in full again; without a memo, as before.
+  assert.ok(top(fits + DIRECTORY_SLACK, memo).includes(directory));
+  assert.ok(top(fits).includes(directory));
+  // Another directory starts afresh.
+  assert.ok(stripAnsi(buildEditorChipRails({ width: fits + 20, config: chips, values: values({ directory: "~/src" }), theme, memo }).top).includes("~/src"));
 });
 
 test("full-width rails render top-right and three-way bottom placement with semantic chips", () => {

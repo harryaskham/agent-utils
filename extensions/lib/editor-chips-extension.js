@@ -213,7 +213,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
 
     // The loops of the session this ctx draws: asked for (now and then), the count and next.
     // A session's /context limit (agent-utils' context-limit), or null. pi-client: the daemon
-    // module's per-session state, followed once per session (at most 32 at once); TUI Pi: the
+    // module's per-session state, followed once per session (at most 64 at once); TUI Pi: the
     // session branch's last limit entry, read again only when the branch grows.
     const contextLimitFor = (ctx) => {
       if (typeof ctx?.chord?.watchDocument === "function") {
@@ -223,7 +223,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         if (entry === undefined) {
           entry = { limit: null, stop: undefined, stopped: false };
           state.contextLimits.set(sessionId, entry);
-          while (state.contextLimits.size > 32) {
+          while (state.contextLimits.size > GIT_DIRECTORIES) {
             const [oldest, gone] = state.contextLimits.entries().next().value;
             state.contextLimits.delete(oldest);
             gone.stopped = true;
@@ -434,7 +434,9 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
               const borders = editorBorderInfo(baseLines);
               const indicator = base.embedWorkingStatus ? base.workingStatusIndicator : undefined;
               const working = indicator ? stripAnsi(String(indicator.renderInBorder?.(Math.max(1, width - 5)) ?? "")).trim() || borders.working : borders.working;
-              const rails = buildEditorChipRails({ width, config, values: { ...valuesFor(ctx), working, scrollUp: borders.scrollUp, scrollDown: borders.scrollDown }, theme });
+              // The editor's own memo: how short its directory was at the last draw (hysteresis).
+              base.__agentUtilsEditorChipsMemo ??= {};
+              const rails = buildEditorChipRails({ width, config, values: { ...valuesFor(ctx), working, scrollUp: borders.scrollUp, scrollDown: borders.scrollDown }, theme, memo: base.__agentUtilsEditorChipsMemo });
               return clampRenderedRowsToWidth(replaceEditorRails(baseLines, baseLines, rails), width);
             };
           }
