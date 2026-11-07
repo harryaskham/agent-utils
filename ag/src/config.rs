@@ -96,6 +96,79 @@ pub struct Host {
     pub paratenic: HostParatenic,
     /// This node's pi-daemon and pi-daemon bridge (independent of Paratenic).
     pub pi_daemon: HostPiDaemon,
+    /// This node's Cursive canvases (`ag canvas`, the dash's Canvases tab).
+    pub cursive: HostCursive,
+}
+
+/// Per-node Cursive canvases. Unset fields follow the fleet's `canvases`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct HostCursive {
+    /// Set false to skip this node's canvases.
+    pub enabled: Option<bool>,
+    /// What this machine passes to `cursive --remote`: an alias from Cursive's
+    /// `remote.hosts` (for a different remote program or data directory) or an
+    /// SSH destination. Default: `[username@]address`, or
+    /// `ssh://[username@]address:port` off port 22. Local hosts never use it.
+    pub remote: Option<String>,
+}
+
+/// Fleet Cursive canvases. This machine's `cursive` lists each node's
+/// canvases over `cursive --remote` (SSH, ControlMaster reuse) and exports
+/// only new or changed ones; the node's own `cursive` renders them.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct CanvasConfig {
+    pub enabled: bool,
+    /// Local cursive executable (name or path, not a shell snippet).
+    pub program: String,
+    /// svg (Cursive >= 0.5, falls back to png on older nodes) or png.
+    pub format: CanvasFormat,
+    /// Cursive theme for SVG renders (nord, charcoal, paper, terminal). Unset:
+    /// each node's configured theme.
+    pub theme: Option<String>,
+    /// Also collect handwriting notes (Cursive's non-canvas writings).
+    pub include_notes: bool,
+    /// Cache directory (default ~/.cache/ag/canvases).
+    pub cache_dir: Option<String>,
+    /// Deadline for one cursive call (list or export), SSH setup included.
+    pub timeout_seconds: u64,
+    /// Concurrent cursive processes across the fleet.
+    pub parallelism: usize,
+    /// Most recently updated canvases kept per node.
+    pub max_per_host: usize,
+}
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum CanvasFormat {
+    #[default]
+    Svg,
+    Png,
+}
+impl CanvasFormat {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Svg => "svg",
+            Self::Png => "png",
+        }
+    }
+}
+impl Default for CanvasConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            program: "cursive".into(),
+            format: CanvasFormat::Svg,
+            theme: None,
+            include_notes: false,
+            cache_dir: None,
+            timeout_seconds: 60,
+            parallelism: 4,
+            max_per_host: 200,
+        }
+    }
 }
 
 /// Per-node pi-daemon switches; unset follows the fleet's `pi_daemon` section.
@@ -231,6 +304,10 @@ pub struct DashConfig {
     pub tts: bool,
     /// Recent lines per host on collector startup (not per browser).
     pub tts_lines: usize,
+    /// Collect Cursive canvases for the Canvases tab (see `canvases`).
+    pub canvases: bool,
+    /// Canvas poll cadence: list every node, export only changed canvases.
+    pub canvas_refresh_seconds: u64,
 }
 impl Default for DashConfig {
     fn default() -> Self {
@@ -244,6 +321,8 @@ impl Default for DashConfig {
             audio: true,
             tts: true,
             tts_lines: 20,
+            canvases: true,
+            canvas_refresh_seconds: 300,
         }
     }
 }
@@ -260,6 +339,7 @@ impl Default for Host {
             paths: Paths::default(),
             paratenic: HostParatenic::default(),
             pi_daemon: HostPiDaemon::default(),
+            cursive: HostCursive::default(),
         }
     }
 }
@@ -303,6 +383,7 @@ pub struct Config {
     pub paratenic: ParatenicConfig,
     pub pi_daemon: PiDaemonConfig,
     pub dash: DashConfig,
+    pub canvases: CanvasConfig,
     pub hosts: Vec<Host>,
     /// SSH executable (primarily useful for an isolated transport fixture).
     pub ssh_command: String,
@@ -321,6 +402,7 @@ impl Default for Config {
             paratenic: ParatenicConfig::default(),
             pi_daemon: PiDaemonConfig::default(),
             dash: DashConfig::default(),
+            canvases: CanvasConfig::default(),
             ssh_command: "ssh".into(),
             connect_timeout_seconds: 10,
             command_timeout_seconds: 20,
@@ -388,9 +470,25 @@ impl AppConfig for Config {
             || !(30..=86_400).contains(&self.dash.refresh_seconds)
             || !(60..=86_400).contains(&self.dash.image_refresh_seconds)
             || self.dash.tts_lines > crate::model::MAX_ITEMS
+            || !(60..=86_400).contains(&self.dash.canvas_refresh_seconds)
         {
             return Err(invalid(
-                "dash: bind must be ip:port; refresh 30–86400s, image refresh 60–86400s, tts_lines 0–1000",
+                "dash: bind must be ip:port; refresh 30–86400s, image/canvas refresh 60–86400s, tts_lines 0–1000",
+            ));
+        }
+        let c = &self.canvases;
+        if !safe(&c.program, 4096)
+            || c.program.starts_with('-')
+            || c.cache_dir.as_ref().is_some_and(|p| !safe(p, 4096))
+            || c.theme
+                .as_ref()
+                .is_some_and(|t| !matches!(t.as_str(), "nord" | "charcoal" | "paper" | "terminal"))
+            || !(1..=600).contains(&c.timeout_seconds)
+            || !(1..=32).contains(&c.parallelism)
+            || !(1..=2000).contains(&c.max_per_host)
+        {
+            return Err(invalid(
+                "canvases: program is an executable, theme nord|charcoal|paper|terminal, timeout 1–600s, parallelism 1–32, max_per_host 1–2000",
             ));
         }
         if let Some(origin) = &self.dash.public_origin {
@@ -454,6 +552,18 @@ impl AppConfig for Config {
             }
             if !safe(&host.command, 4096) || host.command.starts_with('-') {
                 return Err(invalid("host command must be an executable name/path"));
+            }
+            // Cursive refuses unsafe destinations itself; refuse obvious
+            // option/shell shapes early so a config typo never reaches SSH.
+            if host.cursive.remote.as_ref().is_some_and(|r| {
+                !safe(r, 512)
+                    || r.starts_with('-')
+                    || r.chars()
+                        .any(|c| c.is_whitespace() || "'\"`$;&|<>()\\".contains(c))
+            }) {
+                return Err(invalid(
+                    "hosts[].cursive.remote must be a Cursive alias or SSH destination",
+                ));
             }
             for path in [
                 &host.paths.tts_feed,

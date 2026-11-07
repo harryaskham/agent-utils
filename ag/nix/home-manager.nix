@@ -26,6 +26,8 @@ let
     (toString cfg.refreshSeconds)
     "--image-refresh"
     (toString cfg.imageRefreshSeconds)
+    "--canvas-refresh"
+    (toString cfg.canvasRefreshSeconds)
     "--tts-lines"
     (toString cfg.ttsLines)
   ]
@@ -41,9 +43,14 @@ let
     "--audio-cache-dir"
     cfg.audioCacheDirectory
   ]
+  ++ lib.optionals (cfg.canvasCacheDirectory != null) [
+    "--canvas-cache-dir"
+    cfg.canvasCacheDirectory
+  ]
   ++ lib.optional (!cfg.images) "--no-images"
   ++ lib.optional (!cfg.audio) "--no-audio"
-  ++ lib.optional (!cfg.tts) "--no-tts";
+  ++ lib.optional (!cfg.tts) "--no-tts"
+  ++ lib.optional (!cfg.canvases) "--no-canvases";
   # Use a store-owned launcher so systemd does not reinterpret %, $, quotes or
   # whitespace in user-specified arguments/environment. Never shell-eval config.
   launcher = pkgs.writeShellScript "ag-dash-start" ''
@@ -140,6 +147,21 @@ in
       type = lib.types.bool;
       default = true;
       description = "Periodically pull explicitly shared audio (same cadence as images) for the Audio tab; false serves only the existing audio cache. Playback happens in the browser, never on the server.";
+    };
+    canvases = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Poll every node's Cursive canvases for the Canvases tab: list each node with this machine's cursive (cursive --remote over SSH; it must be on the service PATH or set canvases.program) and export only changed canvases. False adds --no-canvases and serves only the existing canvas cache.";
+    };
+    canvasRefreshSeconds = lib.mkOption {
+      type = lib.types.ints.between 60 86400;
+      default = 300;
+      description = "Canvas poll cadence. Each poll is one cheap history listing per node; only changed canvases are exported.";
+    };
+    canvasCacheDirectory = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Optional canvas cache override; null uses canvases.cache_dir or ~/.cache/ag/canvases.";
     };
     tts = lib.mkOption {
       type = lib.types.bool;

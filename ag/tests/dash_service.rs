@@ -74,6 +74,7 @@ fn persistent_token_public_hostname_and_service_sigterm() {
                     "dash",
                     "--no-images",
                     "--no-audio",
+                    "--no-canvases",
                     "--no-open",
                     "--bind",
                     "127.0.0.1:0",
@@ -195,6 +196,7 @@ fn token_symlinks_are_preserved_and_unsafe_files_fail_without_disclosure() {
                 "--no-open",
                 "--no-images",
                 "--no-audio",
+                "--no-canvases",
                 "--bind",
                 "127.0.0.1:0",
                 "--access",
@@ -240,4 +242,93 @@ fn token_symlinks_are_preserved_and_unsafe_files_fail_without_disclosure() {
             .is_symlink()
     );
     assert!(!target.exists());
+}
+
+#[test]
+fn canvas_route_serves_only_the_viewer_and_inert_renders() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.yaml");
+    fs::write(&config, "version: 1\nparatenic:\n  enabled: false\n").unwrap();
+    let cache = dir.path().join("canvases");
+    let host = cache.join("hosts/0123abcd");
+    fs::create_dir_all(&host).unwrap();
+    fs::write(
+        cache.join("index.html"),
+        "<!doctype html><title>viewer</title>",
+    )
+    .unwrap();
+    fs::write(
+        host.join("plan.svg"),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><text>plan</text></svg>",
+    )
+    .unwrap();
+    // Served by name and type; the route never sniffs bytes (ASCII keeps the
+    // UTF-8 test client simple).
+    fs::write(host.join("board.png"), "png fixture").unwrap();
+    fs::write(host.join("manifest.json"), "{}").unwrap();
+    fs::write(host.join("notes.txt"), "private").unwrap();
+    fs::write(dir.path().join("outside.svg"), "<svg/>").unwrap();
+    symlink(dir.path().join("outside.svg"), host.join("escape.svg")).unwrap();
+    let mut server = Running(
+        Command::new(BIN)
+            .env("HOME", dir.path())
+            .env("XDG_STATE_HOME", dir.path().join("state"))
+            .env("XDG_CONFIG_HOME", dir.path().join("config"))
+            .env("XDG_CACHE_HOME", dir.path().join("cache"))
+            .env_remove("PI_AGENT_UTILS_STATE_DIR")
+            .args(["--json", "--config"])
+            .arg(&config)
+            .args([
+                "dash",
+                "--no-open",
+                "--no-images",
+                "--no-audio",
+                "--no-tts",
+                "--no-canvases",
+                "--bind",
+                "127.0.0.1:0",
+                "--canvas-cache-dir",
+            ])
+            .arg(&cache)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let mut line = String::new();
+    BufReader::new(server.0.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let ready: Value = serde_json::from_str(&line).unwrap();
+    let address = ready["data"]["address"].as_str().unwrap().to_owned();
+    let host_header = address.clone();
+    let fetch = |path: &str| get(&address, path, &host_header, "");
+    let index = fetch("/canvases/index.html");
+    assert!(index.starts_with("HTTP/1.1 200"), "{index}");
+    assert!(index.to_lowercase().contains("frame-ancestors 'self'"));
+    let svg = fetch("/canvases/hosts/0123abcd/plan.svg?v=3");
+    assert!(svg.starts_with("HTTP/1.1 200"), "{svg}");
+    let lower = svg.to_lowercase();
+    assert!(lower.contains("content-type: image/svg+xml"));
+    assert!(lower.contains("sandbox") && lower.contains("x-content-type-options: nosniff"));
+    assert!(fetch("/canvases/hosts/0123abcd/board.png").starts_with("HTTP/1.1 200"));
+    for refused in [
+        "/canvases/hosts/0123abcd/manifest.json",
+        "/canvases/hosts/0123abcd/notes.txt",
+        "/canvases/hosts/0123abcd/escape.svg",
+        "/canvases/hosts/../index.html",
+        "/canvases/canvas.lock",
+        "/canvases/hosts/0123abcd/..%2F..%2Fconfig.yaml",
+    ] {
+        let response = fetch(refused);
+        assert!(
+            !response.starts_with("HTTP/1.1 200"),
+            "{refused}: {response}"
+        );
+    }
+    let state = fetch("/api/state");
+    let body: Value = serde_json::from_str(state.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(body["canvases"]["enabled"], false);
+    assert_eq!(body["canvases"]["available"], true);
+    stop(&mut server);
 }

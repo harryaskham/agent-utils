@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audio_play;
+pub mod canvas;
 pub mod choices_tui;
 pub mod config;
 pub mod dash;

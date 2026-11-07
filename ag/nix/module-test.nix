@@ -81,6 +81,9 @@ let
       audio = false;
       tts = false;
       ttsLines = 7;
+      canvases = false;
+      canvasRefreshSeconds = 900;
+      canvasCacheDirectory = "/home/test user/canvas cache";
     };
   };
   customScript = builtins.readFile custom.systemd.user.services.ag-dash.Service.ExecStart;
@@ -118,7 +121,9 @@ assert service.Service.KillSignal == "SIGTERM";
 assert service.Service.UMask == "0077";
 assert lib.hasInfix "--no-open --bind 127.0.0.1:7795" script;
 assert lib.hasInfix "--access auto --token-file '/home/test user/.local/state/ag/dash/token'" script;
-assert lib.hasInfix "--refresh 300 --image-refresh 300 --tts-lines 20" script;
+assert lib.hasInfix "--refresh 300 --image-refresh 300 --canvas-refresh 300 --tts-lines 20" script;
+assert !(lib.hasInfix "--no-canvases" script);
+assert !(lib.hasInfix "--canvas-cache-dir" script);
 assert !(lib.hasInfix "--no-tts" script);
 assert lib.hasInfix "--no-tts" customScript;
 assert lib.hasInfix "--bind 100.64.1.2:7796" customScript;
@@ -151,6 +156,8 @@ pkgs.runCommand "ag-dash-home-manager-check" { nativeBuildInputs = [ package ]; 
   60
   --image-refresh
   600
+  --canvas-refresh
+  900
   --tts-lines
   7
   --public-origin
@@ -159,9 +166,12 @@ pkgs.runCommand "ag-dash-home-manager-check" { nativeBuildInputs = [ package ]; 
   /home/test user/gallery
   --audio-cache-dir
   /home/test user/audio cache
+  --canvas-cache-dir
+  /home/test user/canvas cache
   --no-images
   --no-audio
   --no-tts
+  --no-canvases
   EOF
     diff -u expected actual
     touch "$out"
