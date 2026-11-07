@@ -1,5 +1,5 @@
-//! `ag dash`: one live local web view of speech, choices, health, loops, images
-//! and shared audio.
+//! `ag dash`: one live local web view of speech, choices, health, loops, images,
+//! shared audio and the fleet's Cursive canvases.
 //!
 //! A real server, not a static generator: choices are re-read from Paratenic
 //! while the page is open (stale-while-revalidate), doctor and the merged media
@@ -71,6 +71,23 @@ pub struct DashOptions {
     pub tts_lines: usize,
     pub cache_dir: Option<String>,
     pub audio_cache_dir: Option<String>,
+    /// Poll every node's Cursive canvases and export changed ones.
+    pub canvases: bool,
+    pub canvas_refresh: Duration,
+    pub canvas_cache_dir: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct CanvasStatus {
+    pub enabled: bool,
+    pub running: bool,
+    pub available: bool,
+    pub canvases: usize,
+    /// Exported by the last pull (new or changed).
+    pub rendered: usize,
+    pub finished_ms: Option<u64>,
+    pub error: Option<String>,
+    pub hosts: Vec<crate::canvas::CanvasHost>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -109,9 +126,11 @@ pub struct Snapshot {
     pub loops_refreshing: bool,
     pub images: ImageStatus,
     pub audio: AudioStatus,
+    pub canvases: CanvasStatus,
     pub receipts: VecDeque<AnswerReceipt>,
     pub refresh_seconds: u64,
     pub image_refresh_seconds: u64,
+    pub canvas_refresh_seconds: u64,
     pub tts: Option<dash_tts::Summary>,
 }
 
@@ -134,6 +153,7 @@ struct Dash {
     loops_busy: AtomicBool,
     images_busy: Arc<AtomicBool>,
     audio_busy: Arc<AtomicBool>,
+    canvases_busy: AtomicBool,
     inflight: Mutex<HashSet<String>>,
     tts: Arc<Feed>,
     shutdown: tokio_util::sync::CancellationToken,
@@ -480,6 +500,45 @@ fn refresh_media(dash: &Shared, images: bool, audio: bool) {
     });
 }
 
+/// List every node's canvases and export only changed ones (the same path as
+/// `ag canvas pull`), on its own cadence and busy flag.
+fn refresh_canvases(dash: &Shared) {
+    if !dash.options.canvases || dash.canvases_busy.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    lock(dash).canvases.running = true;
+    let dash = dash.clone();
+    // The pull owns its runtime and cursive children: keep it off the server's.
+    std::thread::spawn(move || {
+        let result = Service::new(dash.config.clone(), None).and_then(|service| {
+            service.canvas_pull(crate::canvas::CanvasInput {
+                selection: dash.options.selection.clone(),
+                cache_dir: dash.options.canvas_cache_dir.clone(),
+                offline: false,
+                force: false,
+                confirmed: true,
+            })
+        });
+        {
+            let mut snapshot = lock(&dash);
+            let status = &mut snapshot.canvases;
+            status.running = false;
+            status.finished_ms = Some(now_ms());
+            match result {
+                Ok(receipt) => {
+                    status.available = true;
+                    status.canvases = receipt.canvases;
+                    status.rendered = receipt.rendered;
+                    status.hosts = receipt.hosts;
+                    status.error = None;
+                }
+                Err(error) => status.error = Some(error.to_string()),
+            }
+        }
+        dash.canvases_busy.store(false, Ordering::Release);
+    });
+}
+
 async fn index(
     State(dash): State<Shared>,
     headers: HeaderMap,
@@ -547,6 +606,10 @@ async fn state(State(dash): State<Shared>, headers: HeaderMap) -> Response {
     snapshot.audio.available = snapshot.audio.available
         || dash
             .media_root(MediaKind::Audio)
+            .is_some_and(|r| r.join("index.html").is_file());
+    snapshot.canvases.available = snapshot.canvases.available
+        || dash
+            .canvas_root()
             .is_some_and(|r| r.join("index.html").is_file());
     let mut response = Json(snapshot).into_response();
     response
@@ -694,6 +757,9 @@ async fn refresh(
     if all || request.what.iter().any(|w| w == "loops") {
         refresh_loops(&dash, true);
     }
+    if request.what.iter().any(|w| w == "canvases") {
+        refresh_canvases(&dash);
+    }
     let media = request.what.iter().any(|w| w == "media" || w == "sync");
     refresh_media(
         &dash,
@@ -785,6 +851,12 @@ async fn answer(
 }
 
 impl Dash {
+    fn canvas_root(&self) -> Option<PathBuf> {
+        crate::canvas::cache_path(&self.config, self.options.canvas_cache_dir.as_ref())
+            .ok()?
+            .canonicalize()
+            .ok()
+    }
     fn media_root(&self, kind: MediaKind) -> Option<PathBuf> {
         let cache_dir = match kind {
             MediaKind::Image => self.options.cache_dir.as_ref(),
@@ -999,6 +1071,81 @@ async fn media_file(dash: &Shared, kind: MediaKind, headers: &HeaderMap, path: &
     response
 }
 
+/// Serve the generated canvas viewer and the renders it references: only
+/// `index.html` and `hosts/<key>/<id>.svg|png` inside the cache (no
+/// manifests, traversal or symlink escape). Renders are inert: SVG is served
+/// sandboxed, without script, and the viewer shows it through `<img>`.
+async fn canvas_file(
+    State(dash): State<Shared>,
+    headers: HeaderMap,
+    UrlPath(path): UrlPath<String>,
+) -> Response {
+    if let Err(response) = dash.authorized(&headers) {
+        return *response;
+    }
+    let Some(root) = dash.canvas_root() else {
+        return (StatusCode::NOT_FOUND, "no canvases yet").into_response();
+    };
+    let relative = PathBuf::from(&path);
+    let parts: Vec<_> = relative.components().collect();
+    let index = path == "index.html";
+    let render = parts.len() == 3
+        && parts.iter().all(|c| matches!(c, Component::Normal(_)))
+        && parts[0].as_os_str() == "hosts"
+        && parts[2]
+            .as_os_str()
+            .to_str()
+            .and_then(|name| name.rsplit_once('.'))
+            .is_some_and(|(id, ext)| crate::canvas::valid_id(id) && matches!(ext, "svg" | "png"));
+    if !index && !render {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    let Ok(full) = root.join(&relative).canonicalize() else {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    };
+    if !full.starts_with(&root) {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    let Some(len) = tokio::fs::metadata(&full)
+        .await
+        .ok()
+        .filter(|m| m.is_file() && m.len() <= crate::canvas::MAX_RENDER_BYTES as u64)
+        .map(|m| m.len())
+    else {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    };
+    let Ok(bytes) = tokio::fs::read(&full).await else {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    };
+    let (kind, csp, cache) = if index {
+        (
+            "text/html; charset=utf-8",
+            "default-src 'none'; img-src 'self' data:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'self'",
+            "no-store",
+        )
+    } else {
+        (
+            mime(&full),
+            "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox",
+            // Render URLs carry ?v=<revision>: a new revision is a new URL.
+            "private, max-age=3600",
+        )
+    };
+    let mut response = ([(header::CONTENT_TYPE, kind)], bytes).into_response();
+    let h = response.headers_mut();
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(csp),
+    );
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+    h.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+    response
+}
+
 pub struct Started {
     /// With a persistent token or open access this is the bare public URL:
     /// never log the secret.
@@ -1137,6 +1284,11 @@ pub async fn run(
             enabled: options.audio,
             ..AudioStatus::default()
         },
+        canvases: CanvasStatus {
+            enabled: options.canvases,
+            ..CanvasStatus::default()
+        },
+        canvas_refresh_seconds: options.canvas_refresh.as_secs(),
         ..Snapshot::default()
     };
     crate::store::check_limit(options.tts_lines)?;
@@ -1165,6 +1317,7 @@ pub async fn run(
         loops_busy: AtomicBool::new(false),
         images_busy: Arc::new(AtomicBool::new(false)),
         audio_busy: Arc::new(AtomicBool::new(false)),
+        canvases_busy: AtomicBool::new(false),
         inflight: Mutex::new(HashSet::new()),
         tts,
         shutdown: shutdown.clone(),
@@ -1179,6 +1332,7 @@ pub async fn run(
         .route("/api/answer", post(answer))
         .route("/gallery/{*path}", get(gallery_file))
         .route("/audio/{*path}", get(audio_file))
+        .route("/canvases/{*path}", get(canvas_file))
         .with_state(dash.clone());
     ready(&Started {
         url: match &token {
@@ -1198,10 +1352,12 @@ pub async fn run(
         tokio::spawn(async move {
             let mut status = tokio::time::interval(options.refresh);
             let mut images = tokio::time::interval(options.image_refresh);
+            let mut canvases = tokio::time::interval(options.canvas_refresh);
             loop {
                 tokio::select! {
                     _ = status.tick() => { refresh_choices(&dash); refresh_doctor(&dash); refresh_loops(&dash, false); }
                     _ = images.tick() => refresh_media(&dash, true, true),
+                    _ = canvases.tick() => refresh_canvases(&dash),
                 }
             }
         })

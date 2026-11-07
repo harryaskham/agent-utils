@@ -16,7 +16,7 @@
     packages = each (system: let pkgs = nixpkgs.legacyPackages.${system}; in rec {
       ag = pkgs.rustPlatform.buildRustPackage {
         pname = "ag";
-        version = "0.7.0";
+        version = "0.8.0";
         src = source;
         cargoDeps = (pkgs.rustPlatform.importCargoLock.override {
           fetchurl = attrs: pkgs.fetchurl (attrs // {
@@ -40,7 +40,7 @@
             --fish <($out/bin/ag completions fish)
           wrapProgram $out/bin/ag --prefix PATH : ${pkgs.lib.makeBinPath ([ pkgs.openssh pkgs.rsync ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.xdg-utils ])}
           mkdir -p $out/share/doc/ag
-          cp README.md acceptance.json gallery-acceptance.json fleet-acceptance.json tts-dash-acceptance.json audio-acceptance.json $out/share/doc/ag/
+          cp README.md acceptance.json gallery-acceptance.json fleet-acceptance.json tts-dash-acceptance.json audio-acceptance.json canvas-acceptance.json $out/share/doc/ag/
         '';
         meta = {
           description = "Agent speech, images, audio, choices and health across your machines";

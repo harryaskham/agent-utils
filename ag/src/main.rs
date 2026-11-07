@@ -83,6 +83,13 @@ enum Commands {
         #[command(subcommand)]
         command: Option<AudioCommand>,
     },
+    /// Open what every node's Cursive canvases show (or pull/list/get them).
+    Canvas {
+        #[command(flatten)]
+        options: CanvasArgs,
+        #[command(subcommand)]
+        command: Option<CanvasCommand>,
+    },
     /// Sync every media pathway (images and shared audio) and regenerate both viewers.
     Sync {
         /// Only images (combine with --audio; neither selects all pathways).
@@ -116,7 +123,7 @@ enum Commands {
     Doctor,
     /// List the loops, schedules and goals (/loop, /after, /cron, /goal) live in pi-daemon sessions.
     Loops,
-    /// Serve a live local web dashboard of choices, health, speech, images and audio.
+    /// Serve a live local web dashboard of choices, health, speech, images, audio and canvases.
     Dash {
         /// Listener (default dash.bind, 127.0.0.1:7795). Loopback and Tailscale
         /// addresses need no token; wildcard and LAN binds do (see --access).
@@ -159,6 +166,15 @@ enum Commands {
         /// Media (image + audio) sync seconds (default dash.image_refresh_seconds).
         #[arg(long)]
         image_refresh: Option<u64>,
+        /// Skip polling Cursive canvases (serve the existing canvas cache only).
+        #[arg(long)]
+        no_canvases: bool,
+        /// Canvas poll seconds: list nodes, export changed canvases (default dash.canvas_refresh_seconds).
+        #[arg(long)]
+        canvas_refresh: Option<u64>,
+        /// Canvas cache directory (as for ag canvas).
+        #[arg(long)]
+        canvas_cache_dir: Option<String>,
     },
     /// Manage canonical YAML configuration (symlinks preserved).
     Config {
@@ -290,6 +306,45 @@ struct GalleryArgs {
     /// Ask rsync to checksum files too, repairing same-size/mtime cache corruption.
     #[arg(long)]
     checksum: bool,
+}
+#[derive(Args, Clone, Default)]
+struct CanvasArgs {
+    /// Local canvas cache; defaults to ~/.cache/ag/canvases (XDG_CACHE_HOME honored).
+    #[arg(long)]
+    cache_dir: Option<String>,
+    /// Rebuild the viewer from cached renders only; no SSH or cursive.
+    #[arg(long)]
+    offline: bool,
+    /// Generate the viewer without launching a browser (also implied by --json).
+    #[arg(long)]
+    no_open: bool,
+    /// Re-export every canvas, changed or not.
+    #[arg(long)]
+    force: bool,
+}
+#[derive(Subcommand)]
+enum CanvasCommand {
+    /// Pull changed canvases and open the viewer; same as ag canvas.
+    View(CanvasArgs),
+    /// Pull new and changed canvases and write the viewer, without opening it.
+    Pull(CanvasArgs),
+    /// List cached canvases (no network), newest first.
+    List {
+        /// Match canvas ids and the text drawn on them.
+        query: Option<String>,
+        #[arg(short = 'n', long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long)]
+        cache_dir: Option<String>,
+    },
+    /// Copy one cached render (select one node). Never overwrites a file.
+    Get {
+        id: String,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        cache_dir: Option<String>,
+    },
 }
 #[derive(Subcommand)]
 enum ImageCommand {
@@ -452,6 +507,165 @@ fn text(value: &str) -> Result<()> {
     writeln!(out, "{value}")?;
     out.flush()?;
     Ok(())
+}
+fn canvas_command(
+    service: &Service,
+    selection: Selection,
+    options: CanvasArgs,
+    command: Option<CanvasCommand>,
+    json_output: bool,
+) -> Result<u8> {
+    match command {
+        None | Some(CanvasCommand::View(_)) | Some(CanvasCommand::Pull(_)) => {
+            let pull_only = matches!(command, Some(CanvasCommand::Pull(_)));
+            let options = match command {
+                Some(CanvasCommand::View(inner) | CanvasCommand::Pull(inner)) => CanvasArgs {
+                    cache_dir: inner.cache_dir.or(options.cache_dir),
+                    offline: inner.offline || options.offline,
+                    no_open: inner.no_open || options.no_open,
+                    force: inner.force || options.force,
+                },
+                _ => options,
+            };
+            let result = service.canvas_pull(ag::canvas::CanvasInput {
+                selection,
+                cache_dir: options.cache_dir,
+                offline: options.offline,
+                force: options.force,
+                confirmed: true,
+            })?;
+            let partial = result
+                .hosts
+                .iter()
+                .any(|h| h.state == "unavailable" || !h.warnings.is_empty());
+            if json_output {
+                json(&result)?;
+            } else {
+                for host in &result.hosts {
+                    eprintln!(
+                        "{}",
+                        terminal_text(&format!(
+                            "[{}] {} · {} canvases{}{}",
+                            host.host,
+                            host.state,
+                            host.canvases,
+                            if host.rendered > 0 {
+                                format!(" · {} rendered", host.rendered)
+                            } else {
+                                String::new()
+                            },
+                            if host.warnings.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" · {}", host.warnings.join("; "))
+                            }
+                        ))
+                    );
+                }
+                text(&terminal_text(&format!(
+                    "{} canvases · {} rendered · {}",
+                    result.canvases,
+                    result.rendered,
+                    if options.offline {
+                        "cached / offline"
+                    } else {
+                        "local fleet snapshot"
+                    }
+                )))?;
+                text(&terminal_text(&result.index.display().to_string()))?;
+                if !pull_only && !options.no_open {
+                    ag::gallery::open_viewer(&result.index)?;
+                }
+            }
+            Ok(if partial { 3 } else { 0 })
+        }
+        Some(CanvasCommand::List {
+            query,
+            limit,
+            cache_dir,
+        }) => {
+            let result = service.canvas_list(ag::canvas::CanvasListInput {
+                selection,
+                cache_dir: cache_dir.or(options.cache_dir),
+                query,
+                limit: Some(limit),
+            })?;
+            if json_output {
+                json(&result)?;
+            } else {
+                for c in &result.canvases {
+                    let shown = match c.rendered_revision {
+                        Some(r) if r < c.revision => format!(" (render r{r})"),
+                        None => " (no render)".into(),
+                        _ => String::new(),
+                    };
+                    text(&terminal_text(&format!(
+                        "{} [{}] {}  r{}{}  {} objects",
+                        clock_ms(c.updated_ms),
+                        c.host,
+                        c.id,
+                        c.revision,
+                        shown,
+                        c.objects
+                    )))?;
+                }
+            }
+            Ok(0)
+        }
+        Some(CanvasCommand::Get {
+            id,
+            output,
+            cache_dir,
+        }) => {
+            let path = service.canvas_render_path(
+                &selection,
+                &id,
+                cache_dir.or(options.cache_dir).as_ref(),
+            )?;
+            let bytes = std::fs::read(&path)?;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&output)?;
+            if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+                drop(file);
+                let _ = std::fs::remove_file(&output);
+                return Err(error.into());
+            }
+            if json_output {
+                json(serde_json::json!({"path":output,"bytes":bytes.len()}))?;
+            } else {
+                text(&terminal_text(&format!(
+                    "{} ({} bytes)",
+                    output.display(),
+                    bytes.len()
+                )))?;
+            }
+            Ok(0)
+        }
+    }
+}
+/// UTC wall-clock time for a Unix millisecond timestamp.
+fn clock_ms(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60
+    )
 }
 fn speech_entry(output: &SpeechOutput, host: &str, record: &SpeechRecord) -> Result<()> {
     let mut stdout = io::stdout().lock();
@@ -1622,6 +1836,9 @@ fn execute(cli: Cli) -> Result<u8> {
         Commands::Audio { command, options } => {
             return audio_command(&service, selection, options, command, cli.json);
         }
+        Commands::Canvas { command, options } => {
+            return canvas_command(&service, selection, options, command, cli.json);
+        }
         Commands::Sync {
             images,
             audio,
@@ -1809,6 +2026,9 @@ fn execute(cli: Cli) -> Result<u8> {
             audio_cache_dir,
             refresh,
             image_refresh,
+            no_canvases,
+            canvas_refresh,
+            canvas_cache_dir,
         } => {
             let bind = match bind {
                 Some(bind) => bind,
@@ -1821,9 +2041,14 @@ fn execute(cli: Cli) -> Result<u8> {
             };
             let refresh = refresh.unwrap_or(service.config.dash.refresh_seconds);
             let image_refresh = image_refresh.unwrap_or(service.config.dash.image_refresh_seconds);
-            if !(10..=86_400).contains(&refresh) || !(30..=86_400).contains(&image_refresh) {
+            let canvas_refresh =
+                canvas_refresh.unwrap_or(service.config.dash.canvas_refresh_seconds);
+            if !(10..=86_400).contains(&refresh)
+                || !(30..=86_400).contains(&image_refresh)
+                || !(30..=86_400).contains(&canvas_refresh)
+            {
                 return Err(Error::Invalid(
-                    "refresh 10–86400s, image refresh 30–86400s".into(),
+                    "refresh 10–86400s, image and canvas refresh 30–86400s".into(),
                 ));
             }
             let targets = service.node_targets(&selection)?;
@@ -1846,6 +2071,11 @@ fn execute(cli: Cli) -> Result<u8> {
                 tts_lines,
                 cache_dir,
                 audio_cache_dir,
+                canvases: !no_canvases
+                    && service.config.dash.canvases
+                    && service.config.canvases.enabled,
+                canvas_refresh: std::time::Duration::from_secs(canvas_refresh),
+                canvas_cache_dir,
             };
             let as_json = cli.json;
             service.runtime.block_on(ag::dash::run(service.config.clone(), targets, options, |started| {

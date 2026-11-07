@@ -1,6 +1,6 @@
 # ag — agent feeds
 
-A Rust CLI for agent speech, shared images, explicitly shared audio, pending agent questions and node health across a configured fleet. `ag image` opens a local browser gallery and `ag audio` a local audio player; `ag sync` refreshes both; `ag dash` serves one live local page for all of it. No background daemon or automatic telemetry: `ag dash` listens only while it runs.
+A Rust CLI for agent speech, shared images, explicitly shared audio, Cursive canvases, pending agent questions and node health across a configured fleet. `ag image` opens a local browser gallery, `ag audio` a local audio player and `ag canvas` a wall of every node's canvases; `ag sync` refreshes images and audio; `ag dash` serves one live local page for all of it. No background daemon or automatic telemetry: `ag dash` listens only while it runs.
 
 ```sh
 ag tts tail                           # all configured nodes, live until Ctrl-C
@@ -27,13 +27,17 @@ ag audio pull                        # incremental audio cache, no browser
 ag audio list --limit 20
 ag audio play 'chirp-agent/aud-<id>.mp3' --sink studio
 ag sync                              # every media pathway: images + audio
+ag canvas                            # what every node's Cursive canvases show
+ag canvas pull                       # list nodes, export only changed canvases
+ag canvas list parity                # cached canvases whose id or text matches
+ag --host helsinki canvas get plan -o plan.svg
 ag sync --audio --offline            # one pathway, cache only
 ag hosts
 ag choices                           # answer pending agent questions (TUI)
 ag choices list                      # print them; --all adds unanswerable ones
 ag choices answer --node ms-dev --session ahp-session:/… --request choice-1 --option 2
 ag doctor                            # per-node SSH, pi-daemon, bridge, Paratenic, speech, media
-ag dash                              # live web view: choices, health, TTS, images, audio
+ag dash                              # live web view: choices, health, TTS, images, audio, canvases
 ```
 
 ## Fleet choices (`ag choices`)
@@ -169,19 +173,20 @@ A node that answers neither SSH nor any AHP host collapses to one `offline` line
 
 ## Live dashboard (`ag dash`)
 
-`ag dash` serves one page with **Choices**, **Health**, **Loops**, **TTS**, **Images** and **Audio** tabs and opens it in the browser (`--no-open` prints the URL; `--json` prints `{url, address}`). It is a live server, not a generated file:
+`ag dash` serves one page with **Choices**, **Health**, **Loops**, **TTS**, **Images**, **Audio** and **Canvases** tabs and opens it in the browser (`--no-open` prints the URL; `--json` prints `{url, address}`). It is a live server, not a generated file:
 
 - choices are re-read from each node's pi-daemon, bridge and Paratenic whenever the page is open and the cached view is older than 20 s, after every answer (that node only), and every `dash.refresh_seconds` (default 300);
 - health runs every `dash.refresh_seconds` and after each image pull;
 - loops (as `ag loops`) are read on the same tick but at most every two minutes, a rough overview; the Loops tab's **Refresh** (or `r` there) reads them now, and its countdowns tick between reads;
 - TTS starts **one shared collector per dashboard process**, reusing `ag tts`'s local file readers and remote SSH cursor/reconnect path. It starts with 20 recent lines per selected host and follows continuously, even with no browser open. Each browser reads the shared stream over authenticated SSE—not another set of SSH tails. This is the **speech-request text feed**, not an audio player or proof that a request played;
-- the merged media sync (`ag sync`: images and shared audio) runs in the background every `dash.image_refresh_seconds` (default 300) while the dash is running; `--no-images` / `--no-audio` (`dash.audio`) serve that pathway's existing cache only. The Images and Audio tabs embed the same viewers as `ag image` / `ag audio`; `/audio/*` streams with HTTP ranges so clips can seek, and a sync never reloads the player while a clip is playing. See [fleet audio](../docs/ag-audio.md).
+- the merged media sync (`ag sync`: images and shared audio) runs in the background every `dash.image_refresh_seconds` (default 300) while the dash is running; `--no-images` / `--no-audio` (`dash.audio`) serve that pathway's existing cache only. The Images and Audio tabs embed the same viewers as `ag image` / `ag audio`; `/audio/*` streams with HTTP ranges so clips can seek, and a sync never reloads the player while a clip is playing. See [fleet audio](../docs/ag-audio.md);
+- canvases (as `ag canvas pull`) are listed on every node every `dash.canvas_refresh_seconds` (default 300) and only changed ones are exported; `--no-canvases` (`dash.canvases`) serves the existing cache. The tab reloads its viewer only when a pull rendered something, and **Pull now** lists immediately.
 
-Each view has a bookmarkable link: `#choices`, `#health`, `#loops`, `#tts`, `#images`, `#audio`, and `#choices/<host>/<request id>` for one question (selected once it is listed; clicking or `j`/`k` updates it). Tab switches add browser history, so Back returns to the previous view.
+Each view has a bookmarkable link: `#choices`, `#health`, `#loops`, `#tts`, `#images`, `#audio`, `#canvases`, and `#choices/<host>/<request id>` for one question (selected once it is listed; clicking or `j`/`k` updates it). Tab switches add browser history, so Back returns to the previous view.
 
 The page answers questions through the same path as the TUI and CLI. Keys: `j`/`k` move, `1`–`9` answer, `i` reply, `d` decline (twice), `r` refresh. Every answer's outcome (including endpoint or connection failures) is kept in `/api/state`'s `receipts` and logged to the service journal as `ag dash: answer <host> <session> <request>: <state>` — never the answer itself.
 
-**Images and Audio** each have **Pause auto-refresh**: the framed gallery or player stays still (scroll, filters, an open preview) while newer syncs wait as "newer images/clips waiting" until **Load new …** or **Resume**; it lasts until the page reloads. Their per-node sync status starts collapsed and remembers being opened or closed (browser storage), and their search/node/agent filters survive the dashboard showing a newer sync.
+**Images, Audio and Canvases** each have **Pause auto-refresh**: the framed gallery or player stays still (scroll, filters, an open preview) while newer syncs wait as "newer images/clips waiting" until **Load new …** or **Resume**; it lasts until the page reloads. Their per-node sync status starts collapsed and remembers being opened or closed (browser storage), and their search/node/agent filters survive the dashboard showing a newer sync.
 
 ```yaml
 dash:
@@ -194,6 +199,8 @@ dash:
   audio: true                 # --no-audio disables audio pulls
   tts: true                  # --no-tts disables collection
   tts_lines: 20              # --tts-lines; 0–1000 per host on startup
+  canvases: true             # --no-canvases serves the cached canvases only
+  canvas_refresh_seconds: 300  # --canvas-refresh; one listing per node, changed exports only
 ```
 
 Access: `dash.access` / `--access` chooses the token policy. **`auto`** (the default) needs **no token** when the listener is a loopback or Tailscale address (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`): only this machine or the tailnet can reach it, and the network is the boundary. On a wildcard or LAN bind `auto` requires a token. `open` never asks for one (a wildcard bind then prints a warning); `token` always does. Whatever the mode, a bound address pins the `Host` header to its address, this machine's names (`helsinki`, `helsinki.<tailnet>.ts.net`) and the public origin, so DNS rebinding cannot reach it, and answers and refreshes still need the custom header and a same-origin `Origin`. An old `?token=` link to an open dashboard just redirects to `/`.
@@ -234,6 +241,9 @@ Both the root flake and `./ag` export `homeManagerModules.ag-dash` (also `defaul
     # images = true;
     # audio = true;                            # --no-audio when false
     # audioCacheDirectory = null;
+    # canvases = true;                         # --no-canvases when false
+    # canvasRefreshSeconds = 300;
+    # canvasCacheDirectory = null;
     # environment.SSH_AUTH_SOCK = "/run/user/1000/ssh-agent";
   };
 }
@@ -287,6 +297,48 @@ The generated page embeds only local metadata and image paths; it loads no CDN a
 `ag audio` mirrors `ag image` for clips agents deliberately shared with the Pi `audio_share` tool or operators added with `/audio-add` ([audio reel](../docs/audio-reel.md)); TTS/narration/read/choices speech is never part of it. It rsyncs each node's audio archive into `~/.cache/ag/audio` (`gallery.audio_cache_dir`, `--cache-dir`), validates sidecars, SHA-256 and `audio/*` types, and writes a private CSP-locked player (filters, search, keyboard, auto-advance, unsupported-format fallbacks). `list`, `info`, `get` and `play` work like their image counterparts; `ag audio play` prefers a verified cached copy, otherwise fetches from one `--host`, and plays through Pulse (default, honouring `PULSE_SERVER`/`PULSE_SINK` or `PI_AUDIO_*`), sox or ffplay with `--backend/--server/--sink/--volume/--start`. It needs `ffmpeg` on PATH and is CLI-only.
 
 `ag sync` pulls every media pathway at once under one `gallery.parallelism` budget; `--images`/`--audio` narrow it. A pathway that fails (for example a cache locked by another pull) is reported without hiding the other; exit 3 marks partial results. Details, configuration and visual evidence: [docs/ag-audio.md](../docs/ag-audio.md).
+
+## Fleet canvases (`ag canvas`)
+
+`ag canvas` shows what every node's [Cursive](https://github.com/harryaskham/tools/tree/main/cli/cursive) boards show. **This machine's `cursive` does all the work**, reaching each node with `cursive --remote` (the user's own SSH, with Cursive's ControlMaster reuse; no service, port or token):
+
+1. one cheap `cursive --json history --list` per node (13–55 ms on the fleet; paged at 200, the newest `canvases.max_per_host`);
+2. `cursive export ID --format svg` **only for canvases whose revision changed** (or whose render is missing or failed, or the theme changed; `--force` re-exports all);
+3. the renders, a manifest per node and one private viewer in `~/.cache/ag/canvases`.
+
+The node's own Cursive renders, so `ag` never interprets canvas objects and every board looks as Cursive draws it. SVG export needs **Cursive 0.5.0** on the node: the themed vector export keeps text real (searchable, any Unicode) and zooms crisply. A node with an older Cursive renders PNG instead (one refused SVG attempt, then PNG; SVG is tried again after six hours) and says so in its status. An unreachable node keeps its cached renders and is reported as `unavailable` (CLI exit 3). A failed export keeps the previous render, shown with the revision it drew, and is retried on the next pull.
+
+The viewer is a wall of boards at their true aspect, newest first: node and id, `r<revision> · objects · age`, and the text drawn on the board. A thin accent edge marks boards changed in the last pull, a warning edge stale renders. Search covers node, id, Cursive's cached OCR preview and the text on each canvas (from the SVG; PNG fallbacks only have id and OCR). Click a board for a full-viewport viewer: wheel zooms around the pointer, drag pans, `0` fits, `1` is actual size, ←/→ browse, and the footer shows the exact command to open that board (`cursive --remote=… canvas ID`). The page is private and static, like the gallery: strict CSP, escaped embedded manifest, text-only DOM, no network.
+
+```sh
+ag canvas                      # pull changed canvases, open the viewer
+ag canvas pull --json          # the receipt: per-node state, counts, warnings
+ag canvas --offline            # rebuild the viewer from the cache
+ag canvas list 'culture parity' -n 20
+ag --host helsinki canvas get yoneda-goal-yoneda-core -o board.svg
+```
+
+```yaml
+canvases:
+  enabled: true
+  program: cursive          # this machine's cursive (name or path)
+  format: svg               # svg (PNG fallback on old nodes) or png
+  # theme: nord             # nord, charcoal, paper, terminal; unset: each node's theme
+  include_notes: false      # also handwriting notes
+  # cache_dir: ~/.cache/ag/canvases
+  timeout_seconds: 60       # one cursive call, SSH included
+  parallelism: 4            # concurrent cursive processes
+  max_per_host: 200
+hosts:
+  - name: ms-mac
+    address: ms-mac
+    username: harryaskham
+    cursive:
+      # remote: mac         # a Cursive remote.hosts alias (other program/data dir)
+      # enabled: false      # skip this node's canvases
+```
+
+The default destination is `[username@]address`, or `ssh://[username@]address:port` off port 22. Cursive runs the remote `cursive` through the node's non-interactive shell PATH; if it lives elsewhere, define a Cursive `remote.hosts` alias with `program:` and set `hosts[].cursive.remote` to it. `ag dash` (and its Home Manager service) needs `cursive` on its own PATH or `canvases.program`. Each call is bounded (4 MiB listing, 80 MiB render) with a deadline, killed on cancellation. `canvas-acceptance.json` maps the contract to tests.
 
 ## Runtime speech mute
 
@@ -381,6 +433,8 @@ ag completions zsh
 
 `ag_audio_pull` and `ag_sync` (all pathways, `kinds` narrows) work the same way and also require `confirmed=true`; neither plays or returns audio bytes.
 
+`ag_canvas_pull` (requires `confirmed=true`; `offline`, `force`) runs the canvas pull and returns per-node state, counts and the viewer path; `ag_canvas_list` reads the cache only (`query` matches ids and canvas text) and returns each canvas's revision, render path, OCR preview and bounded text.
+
 `ag mcp stdio` exposes `ag_hosts_list`, `ag_tts_list`, `ag_tts_status`, `ag_image_list`, `ag_image_info`, `ag_audio_list`, `ag_audio_info`, `ag_choices_list`, `ag_loops_list`, `ag_doctor`, plus `ag_tts_mute` / `ag_tts_unmute` / `ag_choices_answer` (require `confirmed=true` after operator approval) and house `config_status`, `config_validate`, `config_schema`, and confirmation-gated `config_init` tools. `ag tools` lists schemas; `ag call TOOL '{...}'` invokes the exact same typed handler. Unending tails and binary downloads are CLI-only. Read operations never mutate archives. Remote peers use a private typed `ag node ...` protocol that ignores fleet config, preventing recursion. Speech-control writes use the same policy implementation as the local CLI and MCP.
 
 Exit codes: `0` success/normal Ctrl-C or closed pipe; `1` command/config/I/O failure; `2` clap usage error; `3` finite fleet result with one or more failed nodes (healthy data is still returned), or an answer that was not accepted. Offline nodes in `choices`/`doctor` are reported but do not set 3. Configured paths/errors are local private diagnostic data. Human output escapes terminal control characters. Limits: 128 nodes, 1000 records per node/request, 8 MiB per speech line, 64 MiB image/response, 256 MiB audio clip, 64 KiB sidecar and a 200000-file archive scan. Incomplete appended lines are held until newline; malformed/oversized records are reported, not interpreted as commands. Images are checksum-verified before download; downloads refuse traversal, symlink escapes and overwrite of existing destinations.
@@ -400,4 +454,4 @@ nix run .#ag -- --help
 
 Root `agent-utils` packages/bundle include `bin/ag`; the root overlay exposes `pkgs.ag`. Collective owns permanent installation. After its input pin is updated, `cltv-run ag -- --help` tests the configured package before the next operator-run switch. Do not install a competing Cargo/profile binary. This Nix-only lane deliberately has no self-updater that could overwrite immutable store files, and no feedback submission of private transcripts/images. `mcp-cli-core` and `configurable-cli` provide the shared typed contracts.
 
-`acceptance.json`, `fleet-acceptance.json`, `tts-dash-acceptance.json` and `audio-acceptance.json` map contracts to tests. `node ../scripts/ag-dash-audio-qa.mjs` (ffmpeg + Playwright; optional `PLAYWRIGHT_CHROMIUM`, `AG_AUDIO_QA_OUT`) validates the Audio tab in real Chromium with synthetic clips, including ranged seeking and playback surviving a background sync. `cargo test --test dash_tts` exercises real HTTP/SSE, multi-browser fan-out, replay/reset, rotation, slow consumers, auth, limits and shutdown with isolated real peer processes. `node ../scripts/ag-dash-tts-qa.mjs` (from `ag/`, Playwright installed; optional `AG_TEST_BIN`, `PLAYWRIGHT_MODULE`, `AG_TTS_QA_OUT`) validates actual Chromium rendering, filters, pause, tab/offline reconnect, plain-text safety, keyboard/narrow layouts and event-to-visible latency. It never visits live fleet data. `tests/fleet.rs` runs the real binary against an in-process fake Paratenic AHP host (`tests/support/fake_ahp.rs`) for listing, answering, rejection/staleness fences, offline nodes, the dash's auth/CSRF/gallery rules and a real pseudo-terminal TUI session. `cargo run --example fake_paratenic -- 2` starts demo hosts for visual QA. The process-boundary suite uses isolated state and a fake SSH executable to run real peer processes, test disconnection/cursor recovery, and prove child cleanup; it never connects to the operator's fleet. The current optional AHP bridge exposes input providers only, not attachment/resource registration; this package does not advertise unsupported AHP capabilities.
+`acceptance.json`, `fleet-acceptance.json`, `tts-dash-acceptance.json`, `audio-acceptance.json` and `canvas-acceptance.json` map contracts to tests. `cargo test --test canvas` runs the canvas pull against a fake `cursive` speaking the real CLI contract. `node ../scripts/ag-dash-audio-qa.mjs` (ffmpeg + Playwright; optional `PLAYWRIGHT_CHROMIUM`, `AG_AUDIO_QA_OUT`) validates the Audio tab in real Chromium with synthetic clips, including ranged seeking and playback surviving a background sync. `cargo test --test dash_tts` exercises real HTTP/SSE, multi-browser fan-out, replay/reset, rotation, slow consumers, auth, limits and shutdown with isolated real peer processes. `node ../scripts/ag-dash-tts-qa.mjs` (from `ag/`, Playwright installed; optional `AG_TEST_BIN`, `PLAYWRIGHT_MODULE`, `AG_TTS_QA_OUT`) validates actual Chromium rendering, filters, pause, tab/offline reconnect, plain-text safety, keyboard/narrow layouts and event-to-visible latency. It never visits live fleet data. `tests/fleet.rs` runs the real binary against an in-process fake Paratenic AHP host (`tests/support/fake_ahp.rs`) for listing, answering, rejection/staleness fences, offline nodes, the dash's auth/CSRF/gallery rules and a real pseudo-terminal TUI session. `cargo run --example fake_paratenic -- 2` starts demo hosts for visual QA. The process-boundary suite uses isolated state and a fake SSH executable to run real peer processes, test disconnection/cursor recovery, and prove child cleanup; it never connects to the operator's fleet. The current optional AHP bridge exposes input providers only, not attachment/resource registration; this package does not advertise unsupported AHP capabilities.

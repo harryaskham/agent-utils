@@ -79,7 +79,7 @@ h2{font-size:21px;line-height:1.3;margin:22px 0 6px;max-width:72ch;white-space:p
 .lrow .prompt{overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere;color:var(--text)}
 .loff{margin-top:18px;font:12px ui-monospace,monospace;color:var(--faint)}
 @media(max-width:640px){.lrow{grid-template-columns:30px minmax(0,1fr) auto}.lrow .prompt{grid-column:1/-1}}
-#images,#audio{display:grid;grid-template-rows:auto minmax(0,1fr);grid-template-columns:minmax(0,1fr);min-height:0}
+#images,#audio,#canvases{display:grid;grid-template-rows:auto minmax(0,1fr);grid-template-columns:minmax(0,1fr);min-height:0}
 .imgbar{display:flex;gap:14px;align-items:center;padding:8px 16px;border-bottom:1px solid var(--line);font:12px ui-monospace,monospace;color:var(--muted)}.imgbar span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.imgbar span.paused{color:var(--warn,#efc384)}
 .imgbar button{flex:none}@media(max-width:560px){.imgbar{flex-wrap:wrap;gap:6px 8px}.imgbar span{flex-basis:100%}}.imgbar button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
 iframe{border:0;width:100%;height:100%;background:var(--bg)}
@@ -112,6 +112,7 @@ iframe{border:0;width:100%;height:100%;background:var(--bg)}
     <button class="tab" role="tab" id="tab-tts" aria-controls="tts" aria-selected="false">TTS<span class="badge" id="b-tts">live</span></button>
     <button class="tab" role="tab" id="tab-images" aria-controls="images" aria-selected="false">Images<span class="badge" id="b-images">·</span></button>
     <button class="tab" role="tab" id="tab-audio" aria-controls="audio" aria-selected="false">Audio<span class="badge" id="b-audio">·</span></button>
+    <button class="tab" role="tab" id="tab-canvases" aria-controls="canvases" aria-selected="false">Canvases<span class="badge" id="b-canvases">·</span></button>
   </nav>
   <span id="live" role="status"></span>
   <button id="refresh" title="Refresh choices and health, and loops on the Loops tab (r)">Refresh</button>
@@ -130,6 +131,10 @@ iframe{border:0;width:100%;height:100%;background:var(--bg)}
 <section id="audio" role="tabpanel" aria-labelledby="tab-audio" hidden>
   <div class="imgbar"><span id="audstatus" role="status"></span><button id="audreload" hidden title="Load newly synced clips (deferred while a clip plays or auto-refresh is paused)">Load new clips</button><button id="audpause" aria-pressed="false" title="Keep this player still; newer syncs wait until you resume">Pause auto-refresh</button><button id="audpull">Pull now</button></div>
   <div id="audframe"></div>
+</section>
+<section id="canvases" role="tabpanel" aria-labelledby="tab-canvases" hidden>
+  <div class="imgbar"><span id="canstatus" role="status"></span><button id="canreload" hidden title="Show the newest canvas renders now">Load new canvases</button><button id="canpause" aria-pressed="false" title="Keep this view still while you browse; newer pulls wait until you resume">Pause auto-refresh</button><button id="canpull">Pull now</button></div>
+  <div id="canframe"></div>
 </section>
 <section id="tts" role="tabpanel" aria-labelledby="tab-tts" hidden>
   <div class="feedbar">
@@ -194,11 +199,12 @@ function render(){
   const lp=data?.loops;$('b-loops').textContent=lp?(lp.loops+lp.goals||'·'):'·';
   $('b-images').textContent=data?.images?.images||'·';
   $('b-audio').textContent=data?.audio?.clips||'·';
+  $('b-canvases').textContent=data?.canvases?.canvases||'·';
   window.agTts?.status(data.tts);
   document.title=(waiting?`(${waiting}) `:'')+'ag · fleet';
   if(wanted){const hit=items.find(i=>i.choice.host===wanted.host&&i.choice.request_id===wanted.request);if(hit){selected=keyOf(hit.choice);wanted=null}}
   if(!items.some(i=>keyOf(i.choice)===selected))selected=items.find(i=>i.choice.actionable)?.choice?keyOf(items.find(i=>i.choice.actionable).choice):items[0]?keyOf(items[0].choice):null;
-  renderRail(items);renderDetail(items);renderHealth();renderLoops();renderImages();renderAudio();live();
+  renderRail(items);renderDetail(items);renderHealth();renderLoops();renderImages();renderAudio();renderCanvases();live();
 }
 function renderRail(items){
   const rail=$('rail');rail.replaceChildren();
@@ -376,9 +382,32 @@ function renderAudio(){
   if(audioFramed&&want&&(audioPaused||audioPlaying())){audioPending=want;renderAudioStatus();return}
   frameAudio(want);
 }
-const views=['choices','health','loops','tts','images','audio'];
+// Canvases: one pull lists every node and re-exports only changed boards; the
+// framed viewer is reloaded only when a pull rendered something new.
+let canvasFramed=null,canvasPending=null,canvasPaused=false;
+function renderCanvasStatus(){
+  const c=data?.canvases;if(!c)return;
+  const bad=(c.hosts||[]).filter(h=>h.state==='unavailable').length;
+  const s=!c.enabled?'canvas polling disabled':c.running?'listing canvases…':c.error?'last pull failed: '+c.error:c.finished_ms?`${c.canvases.toLocaleString()} canvases · ${c.rendered} changed · pulled ${ago(c.finished_ms)} · every ${Math.round(data.canvas_refresh_seconds/60)} min`+(bad?` · ${bad} nodes unreachable`:''):c.available?'cached canvases':'first pull pending';
+  const note=canvasPaused?(canvasPending?'auto-refresh paused · newer canvases waiting · ':'auto-refresh paused · '):'';
+  $('canstatus').textContent=note+s;$('canstatus').classList.toggle('paused',canvasPaused);
+  $('canpull').disabled=!c.enabled||c.running;$('canreload').hidden=!canvasPending;pauseButton('canpause',canvasPaused);
+}
+function frameCanvases(want){canvasFramed=want;canvasPending=null;const c=data?.canvases;
+  $('canframe').replaceChildren(want?el('iframe',{src:want,title:'Fleet canvases'}):el('div',{class:'empty'},el('strong',{text:c?.enabled?'No canvases yet':'Canvas polling is disabled'}),c?.enabled?'The first pull is running in the background.':''));renderCanvasStatus()}
+let canvasVersion=0;
+function renderCanvases(){
+  const c=data?.canvases;if(!c)return;renderCanvasStatus();
+  // A new viewer only when a pull changed something (or on first load).
+  if(c.finished_ms&&(c.rendered>0||!canvasVersion))canvasVersion=c.finished_ms;
+  const want=c.available?'/canvases/index.html?v='+canvasVersion:null;
+  if(want===canvasFramed||want===canvasPending)return;
+  if(canvasPaused&&canvasFramed&&want){canvasPending=want;renderCanvasStatus();return}
+  frameCanvases(want);
+}
+const views=['choices','health','loops','tts','images','audio','canvases'];
 function show(name){tab=name;for(const t of views){$('tab-'+t).setAttribute('aria-selected',String(t===name));$(t).hidden=t!==name}window.agTts?.visibility(name==='tts')}
-// Deep links: #choices, #health, #loops, #tts, #images, #audio, and
+// Deep links: #choices, #health, #loops, #tts, #images, #audio, #canvases, and
 // #choices/<host>/<request id> for one question (selected once it is listed).
 function parseHash(){const parts=location.hash.slice(1).split('/').map(p=>{try{return decodeURIComponent(p)}catch{return p}});return{view:views.includes(parts[0])?parts[0]:'choices',host:parts[1],request:parts.slice(2).join('/')}}
 function go(name){if(location.hash.split('/')[0]!=='#'+name)history.pushState(null,'','#'+name);show(name)}
@@ -390,6 +419,9 @@ $('refresh').onclick=()=>api('/api/refresh',{what:tab==='loops'?['choices','doct
 $('pull').onclick=()=>api('/api/refresh',{what:['images']}).then(()=>setTimeout(poll,300)).catch(()=>{});
 $('audpull').onclick=()=>api('/api/refresh',{what:['audio']}).then(()=>setTimeout(poll,300)).catch(()=>{});
 $('audreload').onclick=()=>{if(audioPending)frameAudio(audioPending)};
+$('canpull').onclick=()=>api('/api/refresh',{what:['canvases']}).then(()=>setTimeout(poll,300)).catch(()=>{});
+$('canreload').onclick=()=>{if(canvasPending)frameCanvases(canvasPending)};
+$('canpause').onclick=()=>{canvasPaused=!canvasPaused;if(!canvasPaused&&canvasPending)frameCanvases(canvasPending);else renderCanvasStatus()};
 $('imgreload').onclick=()=>{if(imagesPending)frameImages(imagesPending)};
 $('imgpause').onclick=()=>{imagesPaused=!imagesPaused;if(!imagesPaused&&imagesPending)frameImages(imagesPending);else renderImagesStatus()};
 $('audpause').onclick=()=>{audioPaused=!audioPaused;applyPendingAudio();renderAudioStatus()};
