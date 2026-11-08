@@ -8,6 +8,12 @@
 // and the answers survive restarts. async_choice_status and async_choice_cancel read and settle
 // the session's record of async questions. Plain objects only: no pi-durable import.
 //
+// Answers in words: the choices are suggestions, and the user may answer in their own words (the
+// agent gets "answered: …", as from Cacophony). pi-daemon's answerQuestion only takes one of the
+// choices, so these questions say `freeText: true` in their document, and the module's /answer
+// command (ID TEXT) records a free-text answer on one; pi-client's /choices sends "✎ Your own
+// answer" through it.
+//
 // Cacophony: each async question is also filed as an operator decision (`caco decision`), as the
 // TUI's async choices are, from its task in the worker, so it needs no client open. `caco` runs
 // through the session's execution environment, with the session's Cacophony identity (a managed
@@ -28,6 +34,8 @@ export const ASYNC_DOC = {
 };
 
 export const ASYNC_TASK = "agent-utils.async-choice";
+/** The longest answer in words (pi-daemon's own limit). */
+export const MAX_ANSWER_CHARS = 16_000;
 export const MAX_CHOICES = 9;
 export const MAX_ASYNC_PENDING = 64;
 export const MAX_ASYNC_PER_CALL = 8;
@@ -88,6 +96,8 @@ async function recordQuestion(tx, taskId, { question, choices, context, blocking
   if (doc.question === "") {
     doc.question = clip(question, MAX_TEXT);
     doc.choices = choices.map((choice) => choice.shown);
+    // The choices are suggestions: /answer may answer in words.
+    doc.freeText = true;
     if (context) doc.context = context;
     if (blocking === false) doc.blocking = false;
   }
@@ -357,6 +367,52 @@ const text = (value, details) => {
   const output = [{ type: "text", text: value }];
   return { output, content: output, ...(details === undefined ? {} : { details }) };
 };
+
+/**
+ * Answer one of this module's questions in words: `{ status: "answered" }`, or why not
+ * (`missing`, `settled`, `strict`: a question that takes only its choices, such as ask_user's).
+ * A question from before `freeText` was recorded counts as one of ours when its task is an
+ * async choice's.
+ */
+export async function answerInWords(harness, id, answer, context) {
+  const doc = typeof harness.snapshot === "function" ? await harness.snapshot(INPUT_DOC, id, context) : undefined;
+  // Never create a question document: only answer one a question recorded.
+  if (doc === undefined || doc === null || doc.question === "") return { status: "missing" };
+  if (doc.status !== "pending") return { status: "settled" };
+  let ours = doc.freeText === true;
+  if (!ours && typeof harness.inspect === "function") {
+    const tasks = (await harness.inspect(context)).tasks ?? [];
+    ours = tasks.some((entry) => String(entry.record?.id) === String(id) && entry.record?.kind === ASYNC_TASK);
+  }
+  if (!ours) return { status: "strict" };
+  return harness.commit(async (tx) => {
+    const draft = await tx.doc(INPUT_DOC, id);
+    if (draft.status !== "pending" || draft.question === "") return { status: "settled" };
+    Object.assign(draft, { status: "answered", answer });
+    return { status: "answered" };
+  }, context);
+}
+
+/** /answer ID TEXT: answer a question (interactive_choice, async_choice) in your own words. */
+export function createChoiceCommands() {
+  return {
+    answer: {
+      description: "Answer an agent's question (interactive_choice, async_choice) in your own words: /answer ID TEXT, ID as /choices lists it. pi-client's /choices sends '✎ Your own answer' through it.",
+      async run(args, ctx) {
+        if (typeof ctx.harness?.commit !== "function") throw new Error("it needs pi-daemon 1.10 or later (module commands with the Durable harness)");
+        const match = /^\s*#?(\d+)\s+([\s\S]*\S)\s*$/.exec(String(args ?? ""));
+        if (!match) throw new Error("usage: /answer ID TEXT (the question's id, as /choices lists it)");
+        const answer = match[2].trim();
+        if (answer.length > MAX_ANSWER_CHARS) throw new Error(`an answer is at most ${MAX_ANSWER_CHARS} characters`);
+        const result = await answerInWords(ctx.harness, Number(match[1]), answer, ctx.context);
+        if (result.status === "missing") throw new Error(`no question ${match[1]} in this session`);
+        if (result.status === "settled") throw new Error(`question ${match[1]} was already answered or withdrawn`);
+        if (result.status === "strict") throw new Error(`question ${match[1]} takes one of its choices only`);
+        ctx.notify(`Answered question ${match[1]}: ${answer.length > 80 ? `${answer.slice(0, 79)}…` : answer}`);
+      },
+    },
+  };
+}
 
 /** The tools: interactive_choice, async_choice, async_choice_status, async_choice_cancel. */
 export function createChoiceTools({ asyncTask = createAsyncChoiceTask(), now = () => Date.now() } = {}) {

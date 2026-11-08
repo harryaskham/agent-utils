@@ -8,6 +8,10 @@
 // questions pending. Answers from elsewhere (another client, Cacophony) are
 // picked up as the session works, and now and then while questions wait.
 //
+// A question with choices can be answered in words ("✎ Your own answer"), where the session runs
+// choice.mjs's /answer: pi-daemon's session.answerQuestion takes one of the choices only, so an
+// answer in words goes as `/answer ID TEXT` (a module command, run even while the agent works).
+//
 // It reaches the session through pi-client's ctx.chord (pi-daemon 1.14); in TUI Pi, where
 // choice.js has its own inbox, it does nothing. List it in pi-client's client.extensions.
 
@@ -85,9 +89,30 @@ export default function choiceClient(pi, { pollMs = CHOICES_POLL_MS, setTimer = 
         ctx?.ui?.notify?.("/choices here lists pi-daemon sessions' questions: it needs pi-client.", "warning");
         return;
       }
+      // Whether the session's daemon runs choice.mjs's /answer (answers in words).
+      let answersInWords;
+      const takesWords = async () => {
+        if (answersInWords === undefined) {
+          try {
+            const listed = await ctx.chord.call("session.commands");
+            answersInWords = (listed?.items ?? []).some((command) => command?.name === "answer" && command.kind === "extension");
+          } catch {
+            answersInWords = false;
+          }
+        }
+        return answersInWords;
+      };
+      const inWords = (question, answer) => Array.isArray(question.choices) && question.choices.length > 0 && !question.choices.includes(answer);
       const send = async (question, answer) => {
         try {
-          await ctx.chord.call("session.answerQuestion", { questionId: question.id, answer });
+          if (inWords(question, answer)) {
+            if (!(await takesWords())) throw new Error("this session takes one of the question's choices only (answers in words need agent-utils' choice.mjs with /answer)");
+            const result = await ctx.chord.call("conversation.submit", { requestId: `choices-answer:${question.id}:${Date.now()}`, content: `/answer ${question.id} ${answer}`, wait: true });
+            const failed = (result?.notices ?? []).map(String).find((notice) => /^\/answer failed:/.test(notice));
+            if (failed !== undefined) throw new Error(failed.replace(/^\/answer failed:\s*/, ""));
+          } else {
+            await ctx.chord.call("session.answerQuestion", { questionId: question.id, answer });
+          }
           drafts.delete(draftKey(ctx, question.id));
           return true;
         } catch (error) {
@@ -128,7 +153,9 @@ export default function choiceClient(pi, { pollMs = CHOICES_POLL_MS, setTimer = 
         if (question === undefined) continue;
         const prompt = question.context ? `${question.question}\n\n${question.context}` : question.question;
         const choices = Array.isArray(question.choices) && question.choices.length > 0 ? question.choices : undefined;
-        let answer = choices === undefined ? await ctx.ui.input(prompt, "Your answer") : await ctx.ui.select(prompt, [...choices, OWN_ANSWER]);
+        // Answers in words only where the session takes them (choice.mjs's /answer).
+        const options = choices === undefined ? undefined : (await takesWords()) ? [...choices, OWN_ANSWER] : choices;
+        let answer = options === undefined ? await ctx.ui.input(prompt, "Your answer") : await ctx.ui.select(prompt, options);
         if (answer === OWN_ANSWER) answer = await ctx.ui.input(prompt, "Your answer");
         // Escaping goes back to the list; the question stays pending.
         if (answer === undefined || answer === "") continue;

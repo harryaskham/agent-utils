@@ -4,7 +4,12 @@ import assert from "node:assert/strict";
 
 import choiceClient, { OWN_ANSWER, choicesLine, orderQuestions, sendLabel } from "../extensions/durable/choice-client.js";
 
-function harness({ questions, selects = [], inputs = [] } = {}) {
+/**
+ * A pi-client ctx over a fake daemon session. Like pi-daemon, session.answerQuestion takes one of a
+ * question's choices only; `/answer ID TEXT` (choice.mjs, listed by session.commands when
+ * `answerCommand`) answers in words.
+ */
+function harness({ questions, selects = [], inputs = [], answerCommand = true, answerFails } = {}) {
   const handlers = new Map();
   const commands = new Map();
   const timers = [];
@@ -18,8 +23,18 @@ function harness({ questions, selects = [], inputs = [] } = {}) {
         calls.push([method, params]);
         if (method === "session.questions") return pending;
         if (method === "session.answerQuestion") {
-          pending = pending.filter((question) => question.id !== params.questionId);
+          const question = pending.find((candidate) => candidate.id === params.questionId);
+          if (question?.choices && !question.choices.includes(params.answer)) throw new Error("answer is not one of the question's choices");
+          pending = pending.filter((candidate) => candidate.id !== params.questionId);
           return null;
+        }
+        if (method === "session.commands") return { items: answerCommand ? [{ name: "answer", kind: "extension", description: "" }] : [{ name: "compact", kind: "builtin", description: "" }] };
+        if (method === "conversation.submit") {
+          const match = /^\/answer (\d+) ([\s\S]+)$/.exec(params.content);
+          assert.ok(match, `a module command, not a prompt: ${params.content}`);
+          if (answerFails) return { command: "answer", status: "done", notices: [`/answer failed: ${answerFails}`] };
+          pending = pending.filter((candidate) => candidate.id !== Number(match[1]));
+          return { command: "answer", status: "done", notices: [`Answered question ${match[1]}: ${match[2]}`] };
         }
         throw new Error(`unexpected ${method}`);
       },
@@ -85,8 +100,11 @@ test("/choices stays open: a blocking answer goes at once, others are drafts sen
     inputs: ["Bella"],
   });
   await h.run("choices");
-  const answers = () => h.calls.filter(([method]) => method === "session.answerQuestion").map(([, params]) => [params.questionId, params.answer]);
-  assert.deepEqual(answers(), [[3, "yes"], [7, "green"], [8, "Bella"]], "the blocking answer first; the drafts together at the end");
+  const answers = () =>
+    h.calls
+      .filter(([method]) => method === "session.answerQuestion" || method === "conversation.submit")
+      .map(([method, params]) => (method === "session.answerQuestion" ? [params.questionId, params.answer] : ["words", params.content]));
+  assert.deepEqual(answers(), [[3, "yes"], [7, "green"], ["words", "/answer 8 Bella"]], "the blocking answer first; the drafts together at the end; words through /answer");
   assert.deepEqual(lists[0], ["Questions for you", ["1. ? Proceed?", "2. ◇ Favourite colour?", "3. ◇ Pet's name?"]]);
   assert.deepEqual(asked[0], ["Proceed?", ["yes", "no", OWN_ANSWER]]);
   assert.equal(asked[1][0], "Favourite colour?\n\nNo hurry.");
@@ -137,4 +155,26 @@ test("without pi-client's ctx.chord (TUI Pi) it does nothing, and /choices says 
   assert.equal(h.widgets.length, 0);
   await h.run("choices");
   assert.match(h.notices.at(-1)[0], /needs pi-client/);
+});
+
+test("an answer in words goes through /answer; where the session has none, only the choices are offered", async () => {
+  const words = { id: 8, question: "Pet's name?", choices: ["Rex", "Tom"], blocking: true };
+  const h = harness({ questions: [words], selects: [(_title, options) => options[0], OWN_ANSWER], inputs: ["Bella"] });
+  await h.run("choices");
+  assert.deepEqual(h.calls.filter(([method]) => method === "conversation.submit").map(([, params]) => params.content), ["/answer 8 Bella"]);
+  assert.equal(h.calls.some(([method, params]) => method === "session.answerQuestion" && params.answer === "Bella"), false, "never as a choice it is not");
+  assert.equal(h.pending.length, 0);
+
+  // The daemon refuses (a question that takes its choices only): the error shows, the question stays.
+  const strict = harness({ questions: [words], selects: [(_title, options) => options[0], OWN_ANSWER, undefined], inputs: ["Bella"], answerFails: "question 8 takes one of its choices only" });
+  await strict.run("choices");
+  assert.ok(strict.notices.some(([text]) => text === "Answer failed: question 8 takes one of its choices only"), JSON.stringify(strict.notices));
+  assert.equal(strict.pending.length, 1);
+
+  // No /answer on the session (an older agent-utils): only the choices.
+  let offered;
+  const old = harness({ questions: [words], answerCommand: false, selects: [(_title, options) => options[0], (_title, options) => ((offered = options), "Rex")] });
+  await old.run("choices");
+  assert.deepEqual(offered, ["Rex", "Tom"]);
+  assert.equal(old.calls.some(([method]) => method === "conversation.submit"), false);
 });

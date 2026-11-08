@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { ASYNC_DOC, ASYNC_TASK, INPUT_DOC, choiceResult, createAsyncChoiceTask, createChoiceTools, normalizeChoices, questionContext, resultText } from "../extensions/lib/durable-choice.js";
+import { ASYNC_DOC, ASYNC_TASK, INPUT_DOC, choiceResult, createAsyncChoiceTask, createChoiceCommands, createChoiceTools, normalizeChoices, questionContext, resultText } from "../extensions/lib/durable-choice.js";
 
 test("choices get ids and distinct shown labels; a settled question maps back to the choice", () => {
   const choices = normalizeChoices([{ label: "yes", headline: "Ship", summary: "go now", value: 1 }, { label: "no" }, { label: "maybe", headline: "Ship" }]);
@@ -51,7 +51,7 @@ test("async_choice posts non-blocking questions on background tasks; status and 
     [ASYNC_TASK, true, undefined],
   ]);
   const [first, second] = posted.details.ids;
-  assert.deepEqual(store.question(Number(first)), { status: "pending", question: "Ship it?", choices: ["yes", "no"], blocking: false });
+  assert.deepEqual(store.question(Number(first)), { status: "pending", question: "Ship it?", choices: ["yes", "no"], freeText: true, blocking: false });
 
   const status = await tools.async_choice_status.execute({ ids: ["ship"] }, api, {});
   assert.match(status.content[0].text, new RegExp(`^- ${first} \\[key=ship\\]: pending`));
@@ -156,4 +156,44 @@ test("the Cacophony mirror takes the session's identity and caco, never the work
   const run = (command, args) => new Promise((resolve) => execFileVia(execEnvWith({ GREETING: "hi" }), {})(command, args, {}, (error, stdout) => resolve({ error: error?.message, stdout })));
   assert.deepEqual(await run("sh", ["-c", "printf %s \"$GREETING\""]), { error: undefined, stdout: "hi" });
   assert.match((await run("sh", ["-c", "echo nope >&2; exit 3"])).error, /nope/);
+});
+
+test("/answer ID TEXT answers a choice question in words; one that takes its choices only, or is settled, is refused", async () => {
+  const store = durable();
+  const tools = Object.fromEntries(createChoiceTools({ now: () => 5 }).map((tool) => [tool.name, tool]));
+  const api = { conversationId: 1, commit: (change) => store.commit(change) };
+  await tools.async_choice.execute({ question: "Pet's name?", choices: [{ label: "Rex" }, { label: "Tom" }] }, api, {});
+  const [{ id }] = store.tasks;
+  assert.equal(store.question(id).freeText, true, "its choices are suggestions");
+  const { answer } = createChoiceCommands();
+  const notices = [];
+  const ctx = (extra = {}) => ({
+    context: {},
+    notify: (text) => notices.push(text),
+    harness: {
+      commit: (change) => store.commit(change),
+      snapshot: async (token, owner) => store.docs.get(`${token.definition.kind}:${owner}`),
+      inspect: async () => ({ tasks: store.tasks.map((task) => ({ record: { id: task.id, kind: task.name } })) }),
+      ...extra,
+    },
+  });
+  await answer.run(`${id} Bella the cat`, ctx());
+  assert.deepEqual(store.question(id), { ...store.question(id), status: "answered", answer: "Bella the cat" });
+  assert.equal(notices.at(-1), `Answered question ${id}: Bella the cat`);
+  // The async task then reports it as an answer in words.
+  assert.deepEqual(choiceResult(normalizeChoices([{ label: "Rex" }, { label: "Tom" }]), store.question(id)), { status: "freeform", text: "Bella the cat" });
+
+  await assert.rejects(answer.run(`${id} again`, ctx()), /already answered or withdrawn/);
+  await assert.rejects(answer.run("999 hello", ctx()), /no question 999/);
+  await assert.rejects(answer.run("hello", ctx()), /usage: \/answer ID TEXT/);
+
+  // ask_user's question (no freeText, not an async choice's task) takes its choices only.
+  Object.assign(await store.tx.doc(INPUT_DOC, 50), { question: "Proceed?", choices: ["yes", "no"], status: "pending" });
+  await assert.rejects(answer.run("50 maybe", ctx()), /takes one of its choices only/);
+  assert.equal(store.question(50).status, "pending");
+  // An async choice asked before freeText was recorded is still ours.
+  Object.assign(await store.tx.doc(INPUT_DOC, 51), { question: "Old?", choices: ["a", "b"], status: "pending" });
+  store.tasks.push({ id: 51, name: ASYNC_TASK, input: {}, options: {} });
+  await answer.run("51 neither", ctx());
+  assert.equal(store.question(51).answer, "neither");
 });
