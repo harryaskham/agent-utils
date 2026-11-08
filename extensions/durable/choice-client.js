@@ -8,9 +8,11 @@
 // questions pending. Answers from elsewhere (another client, Cacophony) are
 // picked up as the session works, and now and then while questions wait.
 //
-// A question with choices can be answered in words ("✎ Your own answer"), where the session runs
-// choice.mjs's /answer: pi-daemon's session.answerQuestion takes one of the choices only, so an
-// answer in words goes as `/answer ID TEXT` (a module command, run even while the agent works).
+// A question with choices can be answered in words ("✎ Your own answer") when it says so: a
+// pi-daemon that honours `freeText` (bb1863d4, bd-dab67b) lists it on the question and takes the
+// words through session.answerQuestion. Older hosts take only the choices there, so where the
+// session runs choice.mjs's /answer, words go as `/answer ID TEXT` (a module command, run even
+// while the agent works).
 //
 // It reaches the session through pi-client's ctx.chord (pi-daemon 1.14); in TUI Pi, where
 // choice.js has its own inbox, it does nothing. List it in pi-client's client.extensions.
@@ -105,7 +107,7 @@ export default function choiceClient(pi, { pollMs = CHOICES_POLL_MS, setTimer = 
       const inWords = (question, answer) => Array.isArray(question.choices) && question.choices.length > 0 && !question.choices.includes(answer);
       const send = async (question, answer) => {
         try {
-          if (inWords(question, answer)) {
+          if (inWords(question, answer) && question.freeText !== true) {
             if (!(await takesWords())) throw new Error("this session takes one of the question's choices only (answers in words need agent-utils' choice.mjs with /answer)");
             const result = await ctx.chord.call("conversation.submit", { requestId: `choices-answer:${question.id}:${Date.now()}`, content: `/answer ${question.id} ${answer}`, wait: true });
             const failed = (result?.notices ?? []).map(String).find((notice) => /^\/answer failed:/.test(notice));
@@ -154,7 +156,7 @@ export default function choiceClient(pi, { pollMs = CHOICES_POLL_MS, setTimer = 
         const prompt = question.context ? `${question.question}\n\n${question.context}` : question.question;
         const choices = Array.isArray(question.choices) && question.choices.length > 0 ? question.choices : undefined;
         // Answers in words only where the session takes them (choice.mjs's /answer).
-        const options = choices === undefined ? undefined : (await takesWords()) ? [...choices, OWN_ANSWER] : choices;
+        const options = choices === undefined ? undefined : question.freeText === true || (await takesWords()) ? [...choices, OWN_ANSWER] : choices;
         let answer = options === undefined ? await ctx.ui.input(prompt, "Your answer") : await ctx.ui.select(prompt, options);
         if (answer === OWN_ANSWER) answer = await ctx.ui.input(prompt, "Your answer");
         // Escaping goes back to the list; the question stays pending.

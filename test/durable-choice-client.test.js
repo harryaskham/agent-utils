@@ -24,7 +24,7 @@ function harness({ questions, selects = [], inputs = [], answerCommand = true, a
         if (method === "session.questions") return pending;
         if (method === "session.answerQuestion") {
           const question = pending.find((candidate) => candidate.id === params.questionId);
-          if (question?.choices && !question.choices.includes(params.answer)) throw new Error("answer is not one of the question's choices");
+          if (question?.choices && question.freeText !== true && !question.choices.includes(params.answer)) throw new Error("answer is not one of the question's choices");
           pending = pending.filter((candidate) => candidate.id !== params.questionId);
           return null;
         }
@@ -177,4 +177,15 @@ test("an answer in words goes through /answer; where the session has none, only 
   await old.run("choices");
   assert.deepEqual(offered, ["Rex", "Tom"]);
   assert.equal(old.calls.some(([method]) => method === "conversation.submit"), false);
+});
+
+test("a question that says freeText (pi-daemon bb1863d4) takes words through session.answerQuestion itself", async () => {
+  const words = { id: 8, question: "Pet's name?", choices: ["Rex", "Tom"], blocking: true, freeText: true };
+  let offered;
+  const h = harness({ questions: [words], answerCommand: false, selects: [(_title, options) => options[0], (_title, options) => ((offered = options), OWN_ANSWER)], inputs: ["Bella"] });
+  await h.run("choices");
+  assert.deepEqual(offered, ["Rex", "Tom", OWN_ANSWER], "offered without /answer: the host takes words");
+  assert.deepEqual(h.calls.filter(([method]) => method === "session.answerQuestion").map(([, params]) => params), [{ questionId: 8, answer: "Bella" }]);
+  assert.equal(h.calls.some(([method]) => method === "conversation.submit"), false);
+  assert.equal(h.pending.length, 0);
 });
