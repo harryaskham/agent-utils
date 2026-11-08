@@ -341,7 +341,9 @@ export function loopOperations({ task, now = () => Date.now() }) {
           which === "all" ? (kind === undefined ? loop.kind !== "goal" : (loop.kind ?? "loop") === kind) : loop.number === which,
         );
         for (const loop of targets) doc.loops[String(loop.number)].stopped = true;
-        return targets.map((loop) => ({ number: loop.number, taskId: loop.taskId }));
+        // Goals share their conversation's task: it is aborted only once none of its goals is open.
+        const open = new Set(live(doc).map((loop) => String(loop.taskId)));
+        return targets.map((loop) => ({ number: loop.number, taskId: loop.taskId, ...(open.has(String(loop.taskId)) ? { shared: true } : {}) }));
       });
     },
     /**
@@ -408,7 +410,10 @@ export function createLoopCommands({ task, now = () => Date.now(), minSecs = DEF
   // Abort stopped schedules' tasks: a sleeping one ends now rather than at its next tick.
   const abort = async (ctx, stopped) => {
     if (typeof ctx.harness.abortTask !== "function") return;
-    for (const loop of stopped) await Promise.resolve(ctx.harness.abortTask(Number(loop.taskId), ctx.context)).catch(() => undefined);
+    for (const loop of stopped) {
+      if (loop.shared) continue;
+      await Promise.resolve(ctx.harness.abortTask(Number(loop.taskId), ctx.context)).catch(() => undefined);
+    }
   };
   // A command can see the live tasks: the registry is matched to them first, and tasks of
   // schedules the agent's stop_loop stopped (a tool cannot abort them) end now.
@@ -419,7 +424,9 @@ export function createLoopCommands({ task, now = () => Date.now(), minSecs = DEF
       .map((entry) => ({ id: entry.record.id, kind: entry.record.kind, input: entry.record.input, conversationId: entry.record.conversationId }));
     await ops.reconcile(commitOf(ctx), tasks);
     const doc = typeof ctx.harness.snapshot === "function" ? await Promise.resolve(ctx.harness.snapshot(LOOPS_DOC, ctx.context)).catch(() => undefined) : undefined;
-    const stopped = new Set(Object.values(doc?.loops ?? {}).filter((entry) => entry?.stopped === true).map((entry) => String(entry.taskId)));
+    // A goal's task is shared by its conversation's goals: it ends only once none is open.
+    const open = new Set(Object.values(doc?.loops ?? {}).filter((entry) => entry && entry.stopped !== true).map((entry) => String(entry.taskId)));
+    const stopped = new Set(Object.values(doc?.loops ?? {}).filter((entry) => entry?.stopped === true && !open.has(String(entry.taskId))).map((entry) => String(entry.taskId)));
     await abort(ctx, tasks.filter((entry) => stopped.has(String(entry.id))).map((entry) => ({ taskId: entry.id })));
   };
   const list = async (ctx) => {
