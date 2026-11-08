@@ -528,7 +528,10 @@ fn multibyte_text_anywhere_in_a_render_is_safe() {
     assert_eq!(receipt.rendered, 3);
     for entry in manifest(&receipt.index)["canvases"].as_array().unwrap() {
         assert_eq!(entry["rendered_revision"], 2);
-        assert!(entry["text"].as_str().unwrap().ends_with('…'), "bounded on a char boundary");
+        assert!(
+            entry["text"].as_str().unwrap().ends_with('…'),
+            "bounded on a char boundary"
+        );
     }
 }
 
