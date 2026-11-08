@@ -17,6 +17,8 @@ List it in a pi-daemon profile's `extensions:` beside `tts.mjs`. A session's spe
 | Command | What it does |
 | --- | --- |
 | `/call [vad\|ptt] [key=value …]` | Start a voice call, or change the live one. With settings and no verb, a live call takes them; with none live, one starts, as TUI `/stt key=value` does. |
+| `/call ALIAS [key=value …]` | Start a call with an alias's settings (below), for this call only. On a live call, switch it to them. |
+| `/call aliases` | The aliases from settings.json. |
 | `/call talk` | Push-to-talk: open the microphone (starting a call if none is live), then send what was said. Any client can press it. |
 | `/call send`, `/call cancel` | End a push-to-talk turn, sending it or dropping it. |
 | `/call mute`, `/call unmute` | Drop the microphone's audio while the call stays up. |
@@ -37,12 +39,44 @@ restart:
 - **STT, as TUI `/stt`:** `provider=`, `model=`, `language=`, `endpoint=`, `daemon_url=`,
   `energy=`, `insert=`, `commit=`, `min_speech=`, `timeout=` and the Azure auth keys.
 - **Call:** `mode=vad|ptt` (what `/call` starts in), `deliver=followup|steer`, and
-  `hangup_after=5m|off` (silence before a call hangs up).
+  `hangup_after=5m|off`: how long a call stays up with no speech from either side. Your speech
+  and the agent's (from `tts.mjs`) both count, and a reply that is still playing keeps it up.
 
 An empty value (`server=`) removes a session's own setting. A value is checked before it is kept.
 A `device=` the session's Pulse server does not have is refused, with the names it has; when the
 server cannot be asked (`pactl` fails), the name is kept as given. The Nix package records
 `pactl` beside `pacat`.
+
+## Aliases: settings for one call
+
+Aliases in settings.json `agentUtils.call.aliases` name a whole call setup:
+
+```json
+"call": {
+  "aliases": {
+    "bt": "source=source.bluetooth sink=vsink_agent_call pan=0",
+    "phone": "source=source.phone sink=vsink_agent_call pan=0"
+  }
+}
+```
+
+`/call bt` starts a call with them. An alias's settings last only while the call does. After a
+hang-up (by you, by `end_call`, or on silence), the session is as it was: its own `/call`
+settings and its own `/tts` settings, nothing to reset by hand. Settings typed after the alias go
+over it (`/call bt pan=0.3`). An alias may also set `mode=`, `deliver=`, `hangup_after=`, `model=`
+and any other `/call` setting. An alias cannot be named after a `/call` word, such as `status`.
+
+Three settings are for the agent's speech during the call. `tts.mjs` reads them for the session
+while the call is live:
+- `sink=`: the Pulse sink the agent's replies, narration and spoken choices play on. It takes
+  precedence over `/tts focus` and `/tts solo` for the call.
+- `pan=`: -1 (left) to 1 (right). Use `0` (centre) when you are talking to one agent.
+- `tts=on|off`: speak the agent's replies during the call even if `/tts` is off. It is on by
+  default once `sink=` or `pan=` is given, as `/tts sink=` turns `/tts` on.
+
+`sink=` and `pan=` can also be typed on a plain `/call`, or on a live call to change them. They
+always last for that call only. Other settings typed without an alias are kept for the session, as
+before. `/call status` and `/tts status` show the call's own settings while it lasts.
 
 Defaults come in order:
 1. settings.json `agentUtils.stt`, including the Azure auth it shares with `tts`;

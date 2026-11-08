@@ -12,9 +12,16 @@
 // environment, then the session's own `key=value` (an overlay, never process.env). Each session
 // has its own; any number of sessions may hold calls at once.
 //
-// A call (/call) hangs up after `hangup_after` without speech (5 minutes by default), and the
-// agent can end it with end_call. Dictation (/stt, /ptt) stays on until stopped. Input is muted
-// while this session's speech plays (tts.mjs), as TUI /stt is.
+// A call (/call) hangs up after `hangup_after` without activity (5 minutes by default): the
+// operator's speech or the agent's (tts.mjs), whichever was last. The agent can end it with
+// end_call. Dictation (/stt, /ptt) stays on until stopped. Input is muted while this session's
+// speech plays (tts.mjs), as TUI /stt is.
+//
+// Call aliases (settings.json `agentUtils.call.aliases`, e.g. `bt: "source=source.bluetooth
+// sink=vsink_agent_call pan=0"`) start a call with settings of its own: `/call bt`. An alias's
+// microphone settings (source=, mode=, …) and its speech output (sink=, pan=, tts=, see
+// call-audio.js) last only while the call does, so hanging up returns the session to its own
+// /call and /tts settings. sink= and pan= on /call itself are for the call only too.
 import { spawn } from "node:child_process";
 import { createAudioProviders, rejectSurfaceAuthKeys } from "./audio-providers.js";
 import { parseEnvStyleArgs } from "./env-args.js";
@@ -25,6 +32,7 @@ import { resolveSttSettings, transcribeSpeech } from "./stt-provider.js";
 import { sttEnvUpdates } from "./stt-session-values.js";
 import { labelUntrustedTranscript } from "./untrusted-transcript.js";
 import { VOICE_DOC } from "./voice-doc.js";
+import { callOutputFrom, describeCallOutput, lastSpeechActivity, setCallOutput as publishCallOutput, splitCallValues } from "./call-audio.js";
 
 export { VOICE_DOC };
 export const VOICE_TASK = "agent-utils.voice";
@@ -172,13 +180,17 @@ class VoiceCall {
       this.finish(call?.taskId === this.taskId ? call.end?.reason ?? "ended" : "replaced");
       return;
     }
-    const settingsKey = JSON.stringify(doc.settings ?? {});
+    // The call's own settings (an alias's) over the session's, for this call only.
+    const values = withCallSettings(doc.settings ?? {}, call.overlay?.voice ?? {});
+    const settingsKey = JSON.stringify(values);
     const before = this.seen;
     this.seen = { kind: call.kind, mode: call.mode, talking: call.mode === "ptt" && call.talking === true, muted: call.muted === true, settingsKey, discard: call.discard === true };
+    // Its speech output (sink, pan) while it lasts: tts.mjs reads it for this session.
+    if (call.kind === "call") this.publishOutput(call.overlay?.output ?? null);
     // New settings or another mode: the microphone reopens with them.
     const restart = before.settingsKey !== settingsKey || before.mode !== call.mode;
     if (restart) {
-      try { this.settings = voiceSettings(doc.settings ?? {}, this.deps); }
+      try { this.settings = voiceSettings(values, this.deps); }
       catch (error) {
         this.fail(error);
         await this.stopCapture({ flush: false });
@@ -200,6 +212,13 @@ class VoiceCall {
     if (this.done) return;
     this.setPhase(this.idlePhase());
     this.armTimer();
+  }
+
+  publishOutput(output) {
+    const key = JSON.stringify(output);
+    if (key === this.outputKey) return;
+    this.outputKey = key;
+    this.deps.setCallOutput(this.sessionId, output);
   }
 
   idlePhase() {
@@ -309,12 +328,19 @@ class VoiceCall {
     }
   }
 
+  /** When the call last had activity: the operator's speech, or the agent's (tts.mjs). */
+  lastActivity() {
+    const now = this.deps.now();
+    if (this.deps.speaking(this.sessionId)) return now;
+    return Math.max(this.lastHeardAt, Number(this.deps.lastSpeech(this.sessionId)) || 0);
+  }
+
   armTimer() {
     if (this.timer || this.done) return;
     this.timer = this.deps.setInterval(() => {
       if (this.done || this.seen.kind !== "call" || this.seen.talking) return;
       const after = this.settings?.hangupAfterMs ?? DEFAULT_HANGUP_AFTER_MS;
-      if (after > 0 && this.deps.now() - this.lastHeardAt >= after) this.requestEnd({ reason: "silence" });
+      if (after > 0 && this.deps.now() - this.lastActivity() >= after) this.requestEnd({ reason: "silence" });
     }, this.deps.tickMs);
     this.timer?.unref?.();
   }
@@ -324,6 +350,9 @@ class VoiceCall {
     this.done = true;
     if (this.timer) this.deps.clearInterval(this.timer);
     this.timer = null;
+    // The call's speech output goes with it: speech is as the session's /tts says again.
+    if (this.outputKey !== undefined && this.outputKey !== "null") this.deps.setCallOutput(this.sessionId, null);
+    this.outputKey = undefined;
     if (this.seen.mode === "ptt" && this.seen.talking) await this.release({ discard });
     else await this.stopCapture({ flush: !discard });
   }
@@ -413,6 +442,38 @@ export function createVoiceTask(options = {}) {
   return token;
 }
 
+/** The call aliases from settings: name → its `key=value …` (a string, or an object of values). */
+export function callAliases(raw) {
+  const aliases = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return aliases;
+  for (const [name, value] of Object.entries(raw)) {
+    const key = String(name).trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9_.-]{0,31}$/.test(key) || CALL_VERBS.has(key)) continue;
+    if (typeof value === "string") aliases[key] = parseEnvStyleArgs(value).values;
+    else if (value && typeof value === "object" && !Array.isArray(value)) {
+      aliases[key] = Object.fromEntries(Object.entries(value).filter(([, v]) => v !== null && v !== undefined).map(([k, v]) => [k, String(v)]));
+    }
+  }
+  return aliases;
+}
+
+/** /call's own words: never alias names. */
+const CALL_VERBS = new Set(["help", "usage", "?", "status", "devices", "sources", "talk", "send", "cancel", "mute", "unmute", "hangup", "end", "stop", "off", "on", "start", "vad", "ptt", "aliases"]);
+
+/** The session's settings with a call's own over them (`source=` and `device=` are one setting). */
+export function withCallSettings(settings = {}, own = {}) {
+  const merged = { ...settings };
+  if (Object.hasOwn(own, "device") || Object.hasOwn(own, "source")) {
+    delete merged.device;
+    delete merged.source;
+  }
+  return { ...merged, ...own };
+}
+
+function describeValues(values) {
+  return Object.entries(values).map(([key, value]) => `${key}=${value}`).join(" ");
+}
+
 function voiceDeps({
   env = process.env,
   persisted = {},
@@ -428,9 +489,13 @@ function voiceDeps({
   tickMs = 1000,
   listSources,
   log = (line) => { try { process.stderr.write(`${line}\n`); } catch {} },
+  aliases = {},
+  setCallOutput = publishCallOutput,
+  lastSpeech = lastSpeechActivity,
 } = {}) {
   return {
     env, persisted, audioProviders, executables, transcribe, speaking, now, tickMs, log,
+    aliases: callAliases(aliases), setCallOutput, lastSpeech,
     capture: capture ?? ((options) => defaultCapture({ ...options, ...(spawnImpl ? { spawnImpl } : {}) })),
     listSources: listSources ?? ((options) => defaultListSources({ executables, ...options, ...(spawnImpl ? { spawnImpl } : {}) })),
     setInterval: setTimer,
@@ -459,12 +524,13 @@ export function voiceOperations({ task, now = () => Date.now() }) {
       });
     },
     /** Start voice input, or change the live one to this kind and mode. */
-    async start(commit, { sessionId, conversationId, kind, mode, talking = false }) {
+    async start(commit, { sessionId, conversationId, kind, mode, talking = false, overlay }) {
       return commit(async (tx) => {
         const doc = await tx.doc(VOICE_DOC);
         const at = now();
         if (isLive(doc.call)) {
           Object.assign(doc.call, { kind, mode, talking: mode === "ptt" && talking, discard: false });
+          if (overlay !== undefined) doc.call.overlay = overlay;
           return { started: false, call: doc.call };
         }
         const taskId = await tx.createTask(task, { sessionId, startedAt: at }, { ownership: { kind: "conversation" }, conversationId, background: true });
@@ -472,6 +538,7 @@ export function voiceOperations({ task, now = () => Date.now() }) {
         doc.call = {
           number: doc.seq, taskId: String(taskId), kind, mode, startedAt: at, phase: mode === "ptt" && !talking ? "armed" : "listening",
           talking: mode === "ptt" && talking, muted: false, discard: false, partial: null, lastHeardAt: at, sent: 0, error: null, end: null,
+          overlay: overlay ?? null,
         };
         return { started: true, call: doc.call };
       });
@@ -520,7 +587,8 @@ function formatAgo(ms) {
 /** One line: the call, where it records from and how it transcribes. */
 export function voiceStatus(state, deps, now = Date.now()) {
   let resolved;
-  try { resolved = voiceSettings(state.settings, deps); } catch (error) { return `voice: settings invalid: ${error.message}`; }
+  const overlay = state.call?.overlay ?? null;
+  try { resolved = voiceSettings(withCallSettings(state.settings, overlay?.voice ?? {}), deps); } catch (error) { return `voice: settings invalid: ${error.message}`; }
   const where = `device:${resolved.device ?? "default"} · server:${resolved.server ?? "default"}`;
   const stt = `provider:${resolved.stt.providerName && resolved.stt.providerName !== resolved.stt.provider ? `${resolved.stt.providerName}(${resolved.stt.provider})` : resolved.stt.provider} · model:${resolved.stt.model ?? "default"}`;
   const call = state.call;
@@ -528,12 +596,13 @@ export function voiceStatus(state, deps, now = Date.now()) {
     const last = state.last ? ` · last ${state.last.kind} ended (${state.last.reason}) ${formatAgo(now - state.last.endedAt)} ago, ${state.last.sent} sent` : "";
     return `voice:off · ${where} · ${stt}${last}`;
   }
-  const hangup = call.kind === "call" ? ` · hangup_after:${resolved.hangupAfterMs ? formatAgo(resolved.hangupAfterMs) : "off"}` : "";
-  return `${call.kind}:on · ${call.mode} · ${call.end ? `ending (${call.end.reason})` : call.phase}${call.muted ? " · muted" : ""} · ${where} · ${stt} · ${call.sent ?? 0} sent · ${formatAgo(now - call.startedAt)}${hangup}${call.error ? ` · error: ${call.error}` : ""} · ${describeLocalVadConfig(resolved.vad)}`;
+  const hangup = call.kind === "call" ? ` · hangup_after:${resolved.hangupAfterMs ? formatAgo(resolved.hangupAfterMs) : "off"} (since the last speech, either side)` : "";
+  const own = overlay ? ` · ${overlay.alias ? `alias:${overlay.alias}` : "this call"}${overlay.output ? ` · speech ${describeCallOutput(overlay.output)}` : ""} (until hang-up)` : "";
+  return `${call.kind}:on${own} · ${call.mode} · ${call.end ? `ending (${call.end.reason})` : call.phase}${call.muted ? " · muted" : ""} · ${where} · ${stt} · ${call.sent ?? 0} sent · ${formatAgo(now - call.startedAt)}${hangup}${call.error ? ` · error: ${call.error}` : ""} · ${describeLocalVadConfig(resolved.vad)}`;
 }
 
 const USAGE = {
-  call: "/call [vad|ptt] [key=value …] starts a voice call (or changes the live one); /call talk (PTT: start, then send), send, cancel, mute, unmute, hangup, status; /call devices lists the microphones (Pulse sources). Settings: device= server= provider= model= language= energy= … mode= deliver=followup|steer hangup_after=5m|off.",
+  call: "/call [ALIAS] [vad|ptt] [key=value …] starts a voice call (or changes the live one); /call ALIAS uses an alias from settings (agentUtils.call.aliases; /call aliases lists them), whose settings last until hang-up; /call talk (PTT: start, then send), send, cancel, mute, unmute, hangup, status; /call devices lists the microphones (Pulse sources). Settings: device= (source=) server= provider= model= language= energy= … mode= deliver=followup|steer hangup_after=5m|off (after the last speech, either side); for this call only: sink= pan= tts=on|off (the agent's speech).",
   stt: "/stt [on|ptt|off|cancel|status|key=value …]: dictation run by the daemon, each turn sent as your message. Settings as /call (device=, server=, provider=, model=, …).",
   ptt: "/ptt [on|talk|send|cancel|off|status|key=value …]: push-to-talk run by the daemon. /ptt talk starts recording; /ptt talk (or send) sends.",
 };
@@ -554,16 +623,16 @@ export function createVoiceCommands({ task, now = () => Date.now() } = {}) {
     await ops.reconcile(commitOf(ctx), new Set(tasks.map((entry) => String(entry.record.id))));
   };
   const status = async (ctx) => voiceStatus(await ops.read(commitOf(ctx)), deps, now());
-  const startOf = (ctx, kind, mode, talking) => ops.start(commitOf(ctx), { sessionId: ctx.sessionId, conversationId: ctx.conversationId, kind, mode, talking });
+  const startOf = (ctx, kind, mode, talking, overlay) => ops.start(commitOf(ctx), { sessionId: ctx.sessionId, conversationId: ctx.conversationId, kind, mode, talking, overlay });
   const settingsMode = async (ctx) => {
     const { settings } = await ops.read(commitOf(ctx));
     return String(settings.mode ?? "vad").toLowerCase() === "ptt" ? "ptt" : "vad";
   };
   // /call talk and /ptt talk: start PTT (a call if none), or send what was said.
-  const talk = async (ctx, kind) => {
+  const talk = async (ctx, kind, overlay) => {
     const { call } = await ops.read(commitOf(ctx));
     if (!isLive(call)) {
-      await startOf(ctx, kind, "ptt", true);
+      await startOf(ctx, kind, "ptt", true, overlay);
       return "🎙 talking: /" + (kind === "call" ? "call" : "ptt") + " talk again to send";
     }
     if (call.mode !== "ptt" || !call.talking) {
@@ -574,32 +643,66 @@ export function createVoiceCommands({ task, now = () => Date.now() } = {}) {
     return "sent";
   };
 
+  const aliasesText = () => {
+    const names = Object.keys(deps.aliases);
+    return names.length === 0
+      ? "No call aliases: add them to settings.json agentUtils.call.aliases (bt: \"source=… sink=… pan=0\")."
+      : `Call aliases (their settings last until hang-up):\n${names.map((alias) => `· ${alias}: ${describeValues(deps.aliases[alias])}`).join("\n")}`;
+  };
+
   const run = (name, kind) => async (args, ctx) => {
     if (!ready(ctx, name)) return;
     const surface = `/${name}`;
     try {
       await prune(ctx);
       const parsed = parseEnvStyleArgs(String(args ?? ""));
-      const values = parsed.values;
-      if (Object.keys(values).length) {
-        rejectSurfaceAuthKeys(values, surface, { providerName: values.provider || deps.env.PI_STT_PROVIDER || deps.persisted.provider || "azure", audioProviders: deps.audioProviders });
+      let positionals = [...parsed.positionals];
+      // /call ALIAS: an alias's settings, with any typed after it over them, for this call only.
+      let alias;
+      if (kind === "call" && positionals.length && !CALL_VERBS.has(String(positionals[0]).toLowerCase())) {
+        const named = String(positionals[0]).toLowerCase();
+        if (!Object.hasOwn(deps.aliases, named)) throw new Error(`${surface}: unknown '${positionals[0]}'. ${aliasesText()}\n${USAGE[name]}`);
+        alias = named;
+        positionals = positionals.slice(1);
+      }
+      const typed = splitCallValues(parsed.values);
+      if (kind !== "call" && Object.keys(typed.output).length) throw new Error(`${surface}: sink=, pan= and tts= are for /call (the agent's speech during a call)`);
+      const named = alias ? splitCallValues(deps.aliases[alias]) : { voice: {}, output: {} };
+      // Typed microphone settings are the session's, kept for later calls (as before); with an
+      // alias they are this call's, like the alias's own. Speech output is always this call's.
+      const kept = alias ? {} : typed.voice;
+      const ownVoice = alias ? { ...named.voice, ...typed.voice } : {};
+      const output = callOutputFrom({ ...named.output, ...typed.output }, surface);
+      const providerName = (values) => values.provider || deps.env.PI_STT_PROVIDER || deps.persisted.provider || "azure";
+      for (const values of [kept, ownVoice]) {
+        if (Object.keys(values).length) rejectSurfaceAuthKeys(values, surface, { providerName: providerName(values), audioProviders: deps.audioProviders });
+      }
+      const state = await ops.read(commitOf(ctx));
+      const next = { ...state.settings, ...kept };
+      for (const key of Object.keys(kept)) if (String(kept[key]).trim() === "") delete next[key];
+      const effective = withCallSettings(next, ownVoice);
+      if (Object.keys(kept).length || Object.keys(ownVoice).length) {
+        validateCallValues(effective, surface);
+        const resolved = voiceSettings(effective, { ...deps, surface });
         // A device the session's Pulse server does not have is refused, with the ones it has.
-        if (["device", "source", "server"].some((key) => Object.hasOwn(values, key) && String(values[key]).trim() !== "")) {
-          const next = { ...(await ops.read(commitOf(ctx))).settings, ...values };
-          for (const key of Object.keys(values)) if (String(values[key]).trim() === "") delete next[key];
-          validateCallValues(next, surface);
-          const resolved = voiceSettings(next, { ...deps, surface });
-          if (resolved.device !== null) {
-            const listed = await deps.listSources({ env: resolved.env });
-            if (listed.ok && !listed.sources.some((source) => source.name === resolved.device)) {
-              throw new Error(`${surface}: no Pulse source '${resolved.device}'. ${sourcesText(listed, null)}`);
-            }
+        const choosesDevice = [kept, ownVoice].some((values) => ["device", "source", "server"].some((key) => Object.hasOwn(values, key) && String(values[key]).trim() !== ""));
+        if (choosesDevice && resolved.device !== null) {
+          const listed = await deps.listSources({ env: resolved.env });
+          if (listed.ok && !listed.sources.some((source) => source.name === resolved.device)) {
+            throw new Error(`${surface}: no Pulse source '${resolved.device}'. ${sourcesText(listed, null)}`);
           }
         }
-        await ops.configure(commitOf(ctx), values, surface);
       }
-      if (parsed.positionals.length > 1) throw new Error(`${surface}: unexpected '${parsed.positionals[1]}'`);
-      const verb = String(parsed.positionals[0] ?? "").toLowerCase();
+      if (Object.keys(kept).length) await ops.configure(commitOf(ctx), kept, surface);
+      // This call's own settings: an alias replaces the live call's; sink=/pan= alone join them.
+      const current = isLive(state.call) ? state.call.overlay ?? null : null;
+      const overlay = alias
+        ? { alias, voice: ownVoice, output }
+        : output
+          ? { ...(current ?? { voice: {} }), output: { ...(current?.output ?? {}), ...output } }
+          : undefined;
+      if (positionals.length > 1) throw new Error(`${surface}: unexpected '${positionals[1]}'`);
+      const verb = String(positionals[0] ?? "").toLowerCase();
       const commit = commitOf(ctx);
       const live = isLive((await ops.read(commit)).call);
       switch (verb) {
@@ -615,7 +718,10 @@ export function createVoiceCommands({ task, now = () => Date.now() } = {}) {
           return;
         }
         case "talk":
-          ctx.notify(await talk(ctx, kind));
+          ctx.notify(await talk(ctx, kind, overlay));
+          return;
+        case "aliases":
+          ctx.notify(aliasesText());
           return;
         case "send":
           ctx.notify((await ops.update(commit, (call) => Object.assign(call, { talking: false, discard: false }))) ? "sent" : `${surface}: nothing live`);
@@ -633,12 +739,13 @@ export function createVoiceCommands({ task, now = () => Date.now() } = {}) {
           return;
         case "": case "on": case "start": case "vad": case "ptt": {
           // Settings alone change a live call; with none live they start one, as TUI /stt does.
-          if (verb === "" && live && Object.keys(values).length) {
+          if (verb === "" && live && overlay === undefined && Object.keys(kept).length) {
             ctx.notify(`${surface}: settings applied · ${await status(ctx)}`);
             return;
           }
-          const mode = verb === "vad" || verb === "ptt" ? verb : name === "ptt" ? "ptt" : name === "stt" ? "vad" : await settingsMode(ctx);
-          const { started } = await startOf(ctx, kind, mode, false);
+          const ownMode = String(ownVoice.mode ?? "").toLowerCase();
+          const mode = verb === "vad" || verb === "ptt" ? verb : name === "ptt" ? "ptt" : name === "stt" ? "vad" : ownMode === "ptt" || ownMode === "vad" ? ownMode : await settingsMode(ctx);
+          const { started } = await startOf(ctx, kind, mode, false, overlay);
           ctx.notify(`${started ? "started" : "changed"} · ${await status(ctx)}`);
           return;
         }
@@ -673,7 +780,7 @@ export function createVoiceCommands({ task, now = () => Date.now() } = {}) {
     return [...verbs, "devices"].filter((verb) => verb.startsWith(text)).map((verb) => ({ value: verb, label: verb }));
   };
   return {
-    call: { description: `Voice call with this agent, run by the daemon. ${USAGE.call}`, run: run("call", "call"), getArgumentCompletions: completions(["vad", "ptt", "talk", "send", "cancel", "mute", "unmute", "hangup", "status"]) },
+    call: { description: `Voice call with this agent, run by the daemon. ${USAGE.call}`, run: run("call", "call"), getArgumentCompletions: completions([...Object.keys(deps.aliases), "vad", "ptt", "talk", "send", "cancel", "mute", "unmute", "hangup", "status", "aliases"]) },
     stt: { description: `Speech to text run by the daemon. ${USAGE.stt}`, run: run("stt", "stt"), getArgumentCompletions: completions(["on", "ptt", "off", "cancel", "status"]) },
     ptt: { description: `Push-to-talk run by the daemon. ${USAGE.ptt}`, run: run("ptt", "stt"), getArgumentCompletions: completions(["on", "talk", "send", "cancel", "off", "status"]) },
   };

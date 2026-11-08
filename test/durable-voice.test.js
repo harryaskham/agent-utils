@@ -115,12 +115,16 @@ async function until(check, label) {
   assert.fail(`timed out waiting for ${label}`);
 }
 
-function setup({ env = {}, persisted = {}, speaking = () => false, listSources } = {}) {
+function setup({ env = {}, persisted = {}, speaking = () => false, listSources, aliases = {}, lastSpeech = () => 0 } = {}) {
   let clock = 1_000_000;
   const mics = microphones();
   const heard = [];
   const timers = new Set();
+  const outputs = [];
   const task = createVoiceTask({
+    aliases,
+    setCallOutput: (sessionId, output) => outputs.push([sessionId, output]),
+    lastSpeech,
     env: { PATH: "/bin", ...env },
     persisted,
     capture: mics.capture,
@@ -138,7 +142,8 @@ function setup({ env = {}, persisted = {}, speaking = () => false, listSources }
   const commands = createVoiceCommands({ task, now: () => clock });
   const tools = createVoiceTools({ task, now: () => clock });
   return {
-    task, commands, tools, mics, heard, timers,
+    task, commands, tools, mics, heard, timers, outputs,
+    now: () => clock,
     advance(ms) { clock += ms; for (const timer of [...timers]) timer.fn(); },
     /** Run a session's voice task, as the worker does: until the call ends. */
     run(store) {
@@ -480,4 +485,89 @@ test("/call devices lists the session's Pulse sources; an unknown device is refu
   assert.deepEqual(items, [{ value: "vad device=bluez_input.headset", label: "bluez_input.headset", description: "running" }]);
   assert.ok(asked.length >= 4);
   await voice.commands.call.run("hangup", ctx);
+});
+
+test("/call ALIAS starts a call with the alias's microphone and speech settings, which go with hang-up", async () => {
+  const aliases = {
+    bt: "source=source.bluetooth sink=vsink_agent_call pan=0",
+    phone: { source: "source.phone", sink: "vsink_agent_call", pan: 0, mode: "ptt" },
+    status: "source=shadowed",
+  };
+  const voice = setup({
+    aliases,
+    listSources: async () => ({ ok: true, server: null, sources: [{ name: "source.bluetooth" }, { name: "source.phone" }, { name: "source.desk" }] }),
+  });
+  const store = durable("s");
+  const { ctx, notices } = commandContext(store, "s");
+
+  await voice.commands.call.run("aliases", ctx);
+  assert.equal(notices.at(-1), "Call aliases (their settings last until hang-up):\n· bt: source=source.bluetooth sink=vsink_agent_call pan=0\n· phone: source=source.phone sink=vsink_agent_call pan=0 mode=ptt", "a verb is never an alias");
+  await voice.commands.call.run("nope", ctx);
+  assert.match(notices.at(-1), /^\/call: unknown 'nope'\. Call aliases/);
+
+  // The session's own microphone setting, kept for later calls as before.
+  await voice.commands.call.run("device=source.desk", ctx);
+  await voice.commands.call.run("hangup", ctx);
+  assert.deepEqual(store.doc().settings, { device: "source.desk" });
+
+  await voice.commands.call.run("bt", ctx);
+  assert.match(notices.at(-1), /^started · call:on · alias:bt · speech sink:vsink_agent_call · pan:0\.00 · tts:on \(until hang-up\) · vad · listening · device:source\.bluetooth/);
+  assert.deepEqual(store.doc().settings, { device: "source.desk" }, "the alias's source is not kept");
+  assert.deepEqual(store.doc().call.overlay, { alias: "bt", voice: { source: "source.bluetooth" }, output: { sink: "vsink_agent_call", pan: 0, tts: true } });
+  const ended = voice.run(store);
+  await until(() => voice.mics.opened.length === 1, "the microphone");
+  assert.equal(voice.mics.opened[0].env.PULSE_SOURCE, "source.bluetooth");
+  await until(() => voice.outputs.length === 1, "the call's speech output");
+  assert.deepEqual(voice.outputs[0], ["s", { sink: "vsink_agent_call", pan: 0, tts: true }]);
+
+  // sink=/pan= on the live call join its own settings.
+  await voice.commands.call.run("pan=0.5", ctx);
+  assert.deepEqual(store.doc().call.overlay.output, { sink: "vsink_agent_call", pan: 0.5, tts: true });
+  await until(() => voice.outputs.length === 2, "the new output");
+  assert.equal(voice.outputs[1][1].pan, 0.5);
+
+  await voice.commands.call.run("hangup", ctx);
+  await ended;
+  assert.deepEqual(voice.outputs.at(-1), ["s", null], "hang-up returns speech to the session's /tts settings");
+
+  // The next plain /call is the session's own again; an alias with typed values over it.
+  await voice.commands.call.run("phone pan=-0.2", ctx);
+  assert.equal(store.doc().call.mode, "ptt", "the alias's mode");
+  assert.deepEqual(store.doc().call.overlay.output, { sink: "vsink_agent_call", pan: -0.2, tts: true });
+  await voice.commands.call.run("hangup", ctx);
+  await voice.commands.call.run("", ctx);
+  assert.equal(store.doc().call.overlay, null);
+  assert.match(notices.at(-1), /device:source\.desk/);
+  await voice.commands.call.run("hangup", ctx);
+
+  // Speech settings are /call's, and refused when invalid.
+  await voice.commands.stt.run("sink=vsink_x", ctx);
+  assert.match(notices.at(-1), /^\/stt: sink=, pan= and tts= are for \/call/);
+  await voice.commands.call.run("pan=3", ctx);
+  assert.match(notices.at(-1), /^\/call: pan must be a number from -1 to 1/);
+});
+
+test("a call's hang-up timer counts the agent's speech as activity, as it counts the operator's", async () => {
+  let spoke = 0;
+  let talking = false;
+  const voice = setup({ lastSpeech: () => spoke, speaking: () => talking });
+  const store = durable("s");
+  const { ctx } = commandContext(store, "s");
+  await voice.commands.call.run("hangup_after=1m", ctx);
+  const ended = voice.run(store);
+  await until(() => voice.mics.opened.length === 1, "the microphone");
+  voice.advance(50_000);
+  spoke = voice.now();
+  voice.advance(50_000);
+  assert.ok(store.doc().call, "the agent spoke 50 s ago");
+  talking = true;
+  voice.advance(120_000);
+  assert.ok(store.doc().call, "the agent is speaking now");
+  talking = false;
+  spoke = voice.now();
+  voice.advance(59_000);
+  assert.ok(store.doc().call);
+  voice.advance(1_000);
+  await ended;
+  assert.equal(store.doc().last.reason, "silence");
 });

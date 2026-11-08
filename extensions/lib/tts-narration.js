@@ -236,18 +236,21 @@ export function createAgentSpeechController({
   const speak = async (text, overrides = {}) => {
     const body = String(text ?? "");
     if (!body.trim()) return { skipped: true };
-    const effective = { ...config, ...overrides };
+    const { bypassRouting, ...rest } = overrides;
+    const effective = { ...config, ...rest };
     if (Object.hasOwn(overrides, "pan") && !Object.hasOwn(overrides, "panSource")) effective.panSource = "explicit";
-    routing?.assertPlayable(effective);
+    // A /call's own sink (bypassRouting) plays there, not on /tts focus's or solo's.
+    const route = bypassRouting === true ? null : routing;
+    route?.assertPlayable(effective);
     const request = requests.start({ ...effective, speechKind: speechKind(effective) || "tts" });
     try {
       return await withSpeechControl({ ...effective, speechKind: speechKind(effective) || "tts", signal: request.signal, env }, async (controlled) => {
-        if (["command", "local"].includes(effective.provider)) return withSpeechOutputRouting(routing, controlled, output => playTtsCommand(body, output));
+        if (["command", "local"].includes(effective.provider)) return withSpeechOutputRouting(route, controlled, output => playTtsCommand(body, output));
         const options = ttsSynthesisOptions(effective, { signal: controlled.signal, env });
-        if (usesDaemonPlayback(effective)) { routing?.assertPlayable(effective); return playDaemonSpeech(body, options); }
+        if (usesDaemonPlayback(effective)) { route?.assertPlayable(effective); return playDaemonSpeech(body, options); }
         const pcm = await synthesize(body, options);
         if (controlled.signal.aborted) return { interrupted: true };
-        return withSpeechOutputRouting(routing, {
+        return withSpeechOutputRouting(route, {
           backend: effective.backend,
           pan: effective.pan,
           server: effective.server,

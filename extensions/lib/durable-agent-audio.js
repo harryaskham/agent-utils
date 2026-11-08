@@ -45,6 +45,7 @@ import { createAudioProviders, rejectSurfaceAuthKeys } from "./audio-providers.j
 import { appendTtsFeed } from "./tts-feed.js";
 import { ttsFeedEnabled } from "./privacy.js";
 import { artifactIdentity } from "./artifact-state.js";
+import { callOutput, callSpeechOverrides, describeCallOutput, noteSpeechActivity } from "./call-audio.js";
 
 export const DURABLE_AUDIO_SETTINGS_KEY = "settings";
 export const DURABLE_AUDIO_LEDGER_KEY = "spoken";
@@ -487,11 +488,16 @@ export function createDurableAgentAudio({
   const whileSpeaking = (session, promise) => {
     const id = session.sessionId;
     speaking.set(id, (speaking.get(id) ?? 0) + 1);
+    // A call's hang-up timer counts the agent's speech as activity (voice.mjs reads it).
+    noteSpeechActivity(id, now());
     return Promise.resolve(promise).finally(() => {
+      noteSpeechActivity(id, now());
       const left = (speaking.get(id) ?? 1) - 1;
       if (left > 0) speaking.set(id, left); else speaking.delete(id);
     });
   };
+  /** Speech while a /call asks for it: its sink and pan, and on even if /tts is off. */
+  const callSpeaks = (session) => callOutput(session.sessionId)?.tts === true;
 
   // The node's speech feed (~/.local/state/agent-utils/tts/speech.jsonl), as
   // interactive Pi writes it: `ag tts` and ag dash's TTS panel read it. One
@@ -515,7 +521,7 @@ export function createDurableAgentAudio({
     if (disposed || !body.trim()) return;
     recordFeed(session, kind === "tts" ? "tts" : "narrate", body);
     track(whileSpeaking(session, Promise.resolve()
-      .then(() => session.speech.speak(body, { ...overrides, speechKind: kind, streamName: `/${kind}` })))
+      .then(() => session.speech.speak(body, { ...overrides, ...callSpeechOverrides(callOutput(session.sessionId)), speechKind: kind, streamName: `/${kind}` })))
       .then((result) => { for (const warning of result?.warnings || []) report(session, `${kind} daemon`, new Error(warning)); })
       .catch((error) => report(session, kind, error)));
   };
@@ -556,7 +562,7 @@ export function createDurableAgentAudio({
     recordFeed(session, "choices", String(text));
     session.choices ||= choiceFactory({ sessionId: session.sessionId, env: session.env, persisted: session.persisted, routing: session.routing });
     try { session.choices.assignSession?.({ sessionManager: { getSessionId: () => session.sessionId } }); } catch {}
-    track(whileSpeaking(session, Promise.resolve().then(() => session.choices.speak(text))).catch((error) => report(session, "choices", error)));
+    track(whileSpeaking(session, Promise.resolve().then(() => session.choices.speak(text, callSpeechOverrides(callOutput(session.sessionId))))).catch((error) => report(session, "choices", error)));
   };
 
   const narrateOverrides = (session) => ({
@@ -587,7 +593,7 @@ export function createDurableAgentAudio({
     } else if (session.narrate.enabled && text) {
       supersedeNarration(session); // the final answer wins over stale narration
     }
-    const speakTts = session.tts.enabled && text && !(session.narrate.enabled && narratedCalls.length);
+    const speakTts = (session.tts.enabled || callSpeaks(session)) && text && !(session.narrate.enabled && narratedCalls.length);
     const narrateBefore = session.narrate.enabled && narratedCalls.length && phaseEnabled(session.narrate.phases, "before");
     if (!speakTts && !narrateBefore) return;
     // Tool starts covered by this message's line are marked with the same write.
@@ -665,7 +671,7 @@ export function createDurableAgentAudio({
     if (!["message_end", "tool_execution_start", "tool_execution_end"].includes(type)) return;
     let session;
     try { session = await loadSession(ctx); } catch (error) { log(`agent-utils durable audio: session load failed: ${error?.message || error}`); return; }
-    if (!session.tts.enabled && !session.narrate.enabled && !(type === "tool_execution_start" && event.toolName === ASK_USER_TOOL && session.tts.choices)) return;
+    if (!session.tts.enabled && !callSpeaks(session) && !session.narrate.enabled && !(type === "tool_execution_start" && event.toolName === ASK_USER_TOOL && session.tts.choices)) return;
     if (type === "message_end") return onMessageEnd(session, event, ctx);
     if (type === "tool_execution_start") return onToolStart(session, event, ctx);
     return onToolEnd(session, event, ctx);
@@ -694,6 +700,8 @@ export function createDurableAgentAudio({
       credentials,
       `output:${usesDaemonPlayback(config) ? `daemon/${config.daemonSink || "server-default"}` : `${config.backend}/${optional(config.device)}`}`,
       `choices:${session.tts.choices ? "on" : "off"}`,
+      // A live /call's output wins over the settings above until the call ends.
+      callOutput(session.sessionId) ? `call:${describeCallOutput(callOutput(session.sessionId))} (until the call ends)` : "",
       `prefix:${session.tts.prefix ? "set" : "none"}`,
       `suffix:${session.tts.suffix ? "set" : "none"}`,
       scopeNote(session),

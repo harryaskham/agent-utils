@@ -705,3 +705,55 @@ test("the module factory evaluates settings special forms with a session environ
   assert.equal(result.managed, false);
   assert.match(result.status, /^tts:off/);
 });
+
+test("a live /call's output: speech plays on its sink and pan past focus/solo, speaks with /tts off, and goes with the call", async () => {
+  const { setCallOutput, lastSpeechActivity } = await import("../extensions/lib/call-audio.js");
+  const host = fakeHost();
+  const session = "call-session";
+  try {
+    // /tts is off: a call that asks for speech speaks anyway, on its sink and pan.
+    setCallOutput(session, { sink: "vsink_agent_call", pan: 0, tts: true });
+    const before = Date.now();
+    await host.emit(session, assistantEnd([text("On the call.")]));
+    assert.equal(host.spoken.length, 1);
+    assert.equal(host.spoken[0].text, "On the call.");
+    assert.equal(host.spoken[0].overrides.device, "vsink_agent_call");
+    assert.equal(host.spoken[0].overrides.bypassRouting, true);
+    assert.equal(host.spoken[0].overrides.pan, 0);
+    assert.ok(lastSpeechActivity(session) >= before, "the call's hang-up timer sees the speech");
+    await host.command(session, "/tts status");
+    assert.match(host.notifications.at(-1).text, / · call:sink:vsink_agent_call · pan:0\.00 · tts:on \(until the call ends\) · /);
+
+    // The call ends: speech is as /tts says (off).
+    setCallOutput(session, null);
+    await host.emit(session, assistantEnd([text("After the call.")]));
+    assert.equal(host.spoken.length, 1);
+    await host.command(session, "/tts on");
+    await host.emit(session, assistantEnd([text("Back to normal.")]));
+    assert.equal(host.spoken.at(-1).overrides.device, undefined);
+    assert.equal(host.spoken.at(-1).overrides.pan, undefined);
+  } finally {
+    setCallOutput(session, null);
+  }
+});
+
+test("the speech controller plays a call's sink without focus/solo routing", async () => {
+  const env = baseEnv();
+  const played = [];
+  let routed = 0;
+  const routing = {
+    assertPlayable() {},
+    async acquire(options) { routed += 1; return { options: { ...options, device: "vsink_focus" }, mode: "focus", release() {} }; },
+  };
+  const controller = createAgentSpeechController({
+    env,
+    initialConfig: { provider: "azure", voice: "v", backend: "pulse", device: "default_sink" },
+    routing,
+    synthesize: async () => Buffer.alloc(4),
+    player: { async play(pcm, output) { played.push({ device: output.device, pan: output.pan }); return { interrupted: false }; }, interrupt() {}, isPlaying: () => false },
+  });
+  await controller.speak("focused");
+  await controller.speak("on the call", { device: "vsink_agent_call", bypassRouting: true, pan: 0 });
+  assert.deepEqual(played, [{ device: "vsink_focus", pan: undefined }, { device: "vsink_agent_call", pan: 0 }]);
+  assert.equal(routed, 1, "the call's utterance skipped focus routing");
+});
