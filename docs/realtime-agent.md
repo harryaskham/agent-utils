@@ -727,28 +727,15 @@ When full-history mode is active, realtime estimates the outgoing system prompt,
 
 The extension also exposes a unified control object at `pi.realtime` and emits it on `pi.events` as `realtime:controls` for future UI/extensions that should not reach into realtime session internals directly.
 
-## Agent tool workflow
+## Operator control only
 
-When the extension is loaded in a Pi runtime that supports dynamic tools, it registers `realtime_agent_control`. Agents can use this instead of asking the operator to type `/rt` commands. The tool accepts the same normalized fields as the env-style command parser:
+Realtime calls, STT and Pulse routing are operator controls: use `/rt`, `/rt-listen`, `/rt-status` and `/rt-off`. The extension registers no agent tool, so realtime adds nothing to the model's tool list. `/rt key=value ...` accepts the same fields an agent tool once took, for example `/rt backend=pulse server=sgu24:4713 source=source.bluetooth summary=true chime=false start=vad`.
 
-- lifecycle: `action`, `start`, `stt`, `mic`, `listen`, `status`
-- audio/config: `audio`, `backend`, `pulseServer`, `pulseSource`, `pulseSink`, `voice`, `trans`, `speed`, `reasoning`, `summary`, `chime`, `fork`, `widget`
-
-Examples:
-
-```json
-{ "backend": "pulse", "pulseServer": "sgu24:4713", "pulseSource": "source.bluetooth", "summary": true, "chime": false, "start": "vad" }
-{ "stt": "ptt", "pulseSource": "source.bluetooth", "trans": "gpt-realtime-whisper" }
-{ "start": "vad", "trans": "gpt-whisper-realtime", "speed": 1.15 }
-{ "action": "status", "status": "full" }
-{ "action": "stop" }
-```
-
-Tool output includes the same diagnostics/status lines as `/rt-status` and a structured snapshot with the resolved Pulse routing. API keys are not included in the structured output. Status includes `input:audio` after a full realtime microphone turn and `input:transcript` after STT-only injection so operators can distinguish `/rt start ...` from `/rt stt ...` behavior. Partial input transcription deltas are shown as pending `rt-transcript` UI status while speech is still in progress. Completed transcripts are shown as UI status/notification; full realtime never queues them as messages or forwards them as text input, while STT-only queues the completed transcript as a follow-up user message so it works even when the agent is busy.
+Status includes `input:audio` after a full realtime microphone turn and `input:transcript` after STT-only injection so operators can distinguish `/rt start ...` from `/rt stt ...` behavior. Partial input transcription deltas are shown as pending `rt-transcript` UI status while speech is still in progress. Completed transcripts are shown as UI status/notification; full realtime never queues them as messages or forwards them as text input, while STT-only queues the completed transcript as a follow-up user message so it works even when the agent is busy.
 
 ## Autoreconnect
 
-Realtime/STT sessions enable bounded automatic reconnect by default. If the WebSocket closes unexpectedly while realtime is active, the extension retries with exponential backoff and preserves the intended mode, audio/backend/voice/reasoning settings, Pulse routing, and previous-model restore target. Explicit `/rt-off`, `/rt stop`, or the tool equivalent disables reconnect. For VAD/continuous calls, the extension also watches the recorder process: if microphone capture exits unexpectedly while the realtime session is still connected, it clears stale mic state and restarts capture with bounded backoff. When a response contains a spoken preamble before a tool call, the extension flushes buffered audio before emitting the tool call so the preamble is heard before the tool result rather than after it.
+Realtime/STT sessions enable bounded automatic reconnect by default. If the WebSocket closes unexpectedly while realtime is active, the extension retries with exponential backoff and preserves the intended mode, audio/backend/voice/reasoning settings, Pulse routing, and previous-model restore target. Explicit `/rt-off` or `/rt stop` disables reconnect. For VAD/continuous calls, the extension also watches the recorder process: if microphone capture exits unexpectedly while the realtime session is still connected, it clears stale mic state and restarts capture with bounded backoff. When a response contains a spoken preamble before a tool call, the extension flushes buffered audio before emitting the tool call so the preamble is heard before the tool result rather than after it.
 
 Tuning knobs:
 

@@ -487,12 +487,12 @@ test("auto transfer uses inline transmission over SSH, tmux, and native kitty te
   assert.equal(shouldUseInMemoryTransfer({ KITTY_IMAGE_PREVIEW_TRANSFER_MODE: "memory" }), true);
 });
 
-test("firecracker VM extension is packaged and exposes lifecycle, screen, and Tendril manifest controls", async () => {
+test("firecracker VM extension is opt-in (not in the default package) and exposes lifecycle, screen, and Tendril manifest controls", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const source = await readFile(new URL("../extensions/firecracker-vm.js", import.meta.url), "utf8");
   const coreSource = await readFile(new URL("../extensions/lib/firecracker-vm-core.js", import.meta.url), "utf8");
 
-  assert.ok(packageJson.pi.extensions.includes("./extensions/firecracker-vm.js"));
+  assert.equal(packageJson.pi.extensions.includes("./extensions/firecracker-vm.js"), false, "rarely used; load it explicitly");
   assert.match(source, /name: "firecracker_vm_start"/);
   assert.match(source, /name: "firecracker_vm_status"/);
   assert.match(source, /name: "firecracker_vm_list"/);
