@@ -510,6 +510,29 @@ fn rendered_revisions_failures_and_escaping() {
 }
 
 #[test]
+fn multibyte_text_anywhere_in_a_render_is_safe() {
+    // Fleet regression: a fixed 4096-byte cut landed inside '─' and panicked
+    // the whole pull. Three bodies shifted by 0-2 bytes put a 3-byte glyph
+    // across every byte offset, whatever the header length.
+    let fleet = Fleet::new();
+    let boards: Vec<Value> = (0..3)
+        .map(|k| {
+            json!({"id":format!("boxes-{k}"),"kind":"canvas","revision":2,"objects":1,"updated_ms":5,
+                "body":format!("{}{}", "a".repeat(k), "─".repeat(5000))})
+        })
+        .collect();
+    fleet.state(json!({"eps": {"canvases": boards}}));
+    let service = fleet.service(fleet.config(vec![remote("eps", "eps", None)]));
+    let receipt = fleet.pull(&service, false);
+    assert_eq!(receipt.hosts[0].state, "synced", "{:?}", receipt.hosts);
+    assert_eq!(receipt.rendered, 3);
+    for entry in manifest(&receipt.index)["canvases"].as_array().unwrap() {
+        assert_eq!(entry["rendered_revision"], 2);
+        assert!(entry["text"].as_str().unwrap().ends_with('…'), "bounded on a char boundary");
+    }
+}
+
+#[test]
 fn ids_and_configuration_are_validated() {
     for id in ["plan", "a.b-c_d", "x".repeat(96).as_str()] {
         assert!(valid_id(id), "{id}");
