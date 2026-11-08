@@ -468,7 +468,9 @@ pub fn svg_text(svg: &str) -> String {
     bounded(&out, MAX_SEARCH_CHARS)
 }
 fn svg_revision(svg: &str) -> Option<u64> {
-    let head = &svg[..svg.len().min(4096)];
+    // Only the root element's attributes; '>' is ASCII, so this is a char
+    // boundary (a fixed byte cut can land inside a glyph like '─').
+    let head = &svg[..svg.find('>')?];
     let start = head.find("data-cursive-revision=\"")? + "data-cursive-revision=\"".len();
     let digits: String = head[start..]
         .chars()
@@ -806,14 +808,38 @@ async fn pull(config: Config, hosts: Vec<Host>, input: CanvasInput) -> Result<Ca
     let gate = Arc::new(Semaphore::new(config.canvases.parallelism));
     let mut jobs = JoinSet::new();
     for host in hosts.into_iter().filter(enabled) {
-        jobs.spawn(pull_host(
-            config.clone(),
-            host,
-            root.clone(),
-            input.offline,
-            input.force,
-            gate.clone(),
-        ));
+        let (config, root, gate) = (config.clone(), root.clone(), gate.clone());
+        let (offline, force) = (input.offline, input.force);
+        jobs.spawn(async move {
+            // A fault in one node's pull must not cost the fleet its view:
+            // that node keeps its cached renders and reports the fault.
+            let pulled = tokio::spawn(pull_host(
+                config.clone(),
+                host.clone(),
+                root.clone(),
+                offline,
+                force,
+                gate,
+            ))
+            .await;
+            match pulled {
+                Ok(result) => result,
+                Err(fault) => {
+                    let mut cached =
+                        pull_host(config, host, root, true, false, Arc::new(Semaphore::new(1)))
+                            .await?;
+                    cached.status.state = "unavailable".into();
+                    cached.status.warnings.insert(
+                        0,
+                        bounded(
+                            &format!("internal error while pulling: {fault}"),
+                            MAX_WARNING_CHARS,
+                        ),
+                    );
+                    Ok(cached)
+                }
+            }
+        });
     }
     let mut hosts = vec![];
     let mut canvases = vec![];
