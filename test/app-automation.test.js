@@ -1560,13 +1560,13 @@ test("personal org todo parser returns timely open items only", () => {
   assert.equal(items[1].todoState, "NEXT");
 });
 
-test("extension is packaged and exposes list, doctor, overview, plan, run, open bundle, refresh, bundle, one-shot, snapshot, status tools plus /tendril-app", async () => {
+test("extension is opt-in (not in the default package) and exposes list, doctor, overview, plan, run, open bundle, refresh, bundle, one-shot, snapshot, status tools plus /tendril-app", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   const source = await readFile(new URL("../extensions/app-automation.js", import.meta.url), "utf8");
   const doctorSource = await readFile(new URL("../extensions/app-automation/doctor.js", import.meta.url), "utf8");
   const combinedSource = `${source}\n${doctorSource}`;
 
-  assert.ok(packageJson.pi.extensions.includes("./extensions/app-automation.js"));
+  assert.equal(packageJson.pi.extensions.includes("./extensions/app-automation.js"), false, "superseded; load it explicitly");
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_list`/);
   assert.match(source, /name: `\$\{TOOL_PREFIX\}_doctor`/);
   assert.match(source, /DEFAULT_DOCTOR_ACTIONS/);

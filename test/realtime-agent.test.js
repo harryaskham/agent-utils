@@ -280,7 +280,7 @@ test("extension exposes unified realtime controls on pi and the event bus", () =
 
   assert.match(commands.get("rt").description, /mic\|listen\|audio/);
   assert.match(commands.get("rt-dev").description, /reload/);
-  assert.ok(tools.has("realtime_agent_control"));
+  assert.equal(tools.has("realtime_agent_control"), false, "realtime is operator-controlled through /rt only");
   assert.match(commands.get("rt-listen").description, /ptt\|vad\|continuous/);
   assert.equal(typeof pi.realtime.snapshot, "function");
   assert.equal(typeof pi.realtime.setAudio, "function");
@@ -1099,20 +1099,20 @@ test("/rt stt shows partial transcripts and queues completed transcripts as foll
   }
 });
 
-test("realtime_agent_control start with status still starts realtime", async () => {
+test("/rt start with status still starts realtime", async () => {
   const previousApiKey = process.env.PI_RT_API_KEY;
   process.env.PI_RT_API_KEY = "test-key";
   FakeWebSocket.instances = [];
   const previousModel = { provider: "litellm-openai", id: "gpt-5.5" };
-  const { pi, commands, tools, handlers, setModelCalls, ctx } = makeHarness({ initialModel: previousModel });
+  const { pi, commands, handlers, setModelCalls, ctx, notifications } = makeHarness({ initialModel: previousModel });
   realtimeAgentExtension(pi);
   handlers.get("session_start")?.({ reason: "startup" }, ctx);
 
   try {
-    const result = await tools.get("realtime_agent_control").execute("tool-1", { start: "nolisten", status: "full" }, null, null, ctx);
+    await commands.get("rt").handler("start=nolisten status=full", ctx);
     assert.equal(setModelCalls.at(-1)?.provider, "openai-realtime");
     assert.equal(FakeWebSocket.instances.length, 1);
-    assert.match(result.content[0].text, /Realtime doctor/);
+    assert.match(notifications.at(-1).message, /Realtime doctor/);
   } finally {
     await commands.get("rt-off").handler("", ctx);
     if (previousApiKey === undefined) delete process.env.PI_RT_API_KEY;
@@ -1193,7 +1193,7 @@ test("/rt fork=true forks current tree position and preserves other params", asy
 
 test("/rt env-style args configure Pulse routing, summary mode, and tool exposes same control", async () => {
   const previous = { server: process.env.PULSE_SERVER, source: process.env.PULSE_SOURCE, sink: process.env.PULSE_SINK };
-  const { pi, commands, tools, handlers, ctx } = makeHarness();
+  const { pi, commands, handlers, ctx } = makeHarness();
   realtimeAgentExtension(pi);
   handlers.get("session_start")?.({ reason: "startup" }, ctx);
 
@@ -1211,7 +1211,7 @@ test("/rt env-style args configure Pulse routing, summary mode, and tool exposes
     assert.equal(process.env.PI_RT_VAD_THRESHOLD, "0.85");
     assert.equal(pi.realtime.snapshot().chimeEnabled, false);
 
-    await tools.get("realtime_agent_control").execute("tool-1", { baseUrl: "https://api.openai.com/v1", pulseServer: "sgu24:4713", pulseSource: "source.bluetooth", summary: false, trans: "gpt-realtime-whisper", speed: 0.75, thresh: 0.6, chime: true, status: "full" }, null, null, ctx);
+    await commands.get("rt").handler("base_url=https://api.openai.com/v1 server=sgu24:4713 source=source.bluetooth summary=false trans=gpt-realtime-whisper speed=0.75 thresh=0.6 chime=true status=full", ctx);
     assert.equal(pi.realtime.snapshot().baseUrl, "https://api.openai.com");
     assert.match(pi.realtime.snapshot().realtimeUrl, /^wss:\/\/api\.openai\.com\/v1\/realtime/);
     assert.equal(process.env.PULSE_SERVER, "sgu24:4713");

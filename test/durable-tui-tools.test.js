@@ -79,9 +79,11 @@ test("without a session environment pi.exec runs locally in the session's direct
 test("the Durable tools module adapts agent-utils' TUI tools for pi-daemon sessions", async () => {
   const { extension } = await import("../extensions/durable/tools.mjs");
   const names = extension.tools.map((tool) => tool.name);
-  for (const name of ["search_web", "xvfb_status", "firecracker_vm_list", "app_automation_list", "android_cli_doctor"]) {
+  for (const name of ["search_web", "xvfb_status", "android_cli_doctor"]) {
     assert.ok(names.includes(name), `${name} adapted`);
   }
+  // Opt-in families stay out of every request's context unless selected.
+  assert.equal(names.filter((name) => /^(firecracker_vm_|app_automation_)/.test(name)).length, 0);
   // Slack's tools ship with Slick (its own pi-daemon module), so none here.
   assert.equal(names.filter((name) => name.startsWith("slack_")).length, 0);
   assert.equal(new Set(names).size, names.length, "no duplicate tool names");
@@ -89,4 +91,21 @@ test("the Durable tools module adapts agent-utils' TUI tools for pi-daemon sessi
   assert.match(search.description, /Search the live web/);
   assert.equal(search.parameters.type, "object");
   assert.ok(search.parameters.properties.query);
+});
+
+test("AGENT_UTILS_DURABLE_TOOLS adds and removes tool families, and every family adapts", async () => {
+  const { TOOL_FAMILIES, defaultToolFamilies, selectToolFamilies } = await import("../extensions/durable/tools.mjs");
+  assert.deepEqual(defaultToolFamilies("linux"), ["web-search", "xvfb", "android"]);
+  assert.deepEqual(defaultToolFamilies("darwin"), ["web-search", "xvfb", "android", "macos-native"]);
+  assert.deepEqual(selectToolFamilies("", "linux"), { families: ["web-search", "xvfb", "android"], unknown: [] });
+  assert.deepEqual(selectToolFamilies("+firecracker-vm, -android app-automation,nope", "linux"), {
+    families: ["web-search", "xvfb", "firecracker-vm", "app-automation"],
+    unknown: ["nope"],
+  });
+  const expected = { "firecracker-vm": "firecracker_vm_list", "app-automation": "app_automation_list" };
+  for (const [family, toolName] of Object.entries(expected)) {
+    const { default: factory } = await TOOL_FAMILIES[family]();
+    const names = (await adaptTuiToolExtension(factory)).map((tool) => tool.name);
+    assert.ok(names.includes(toolName), `${family} adapts ${toolName} when selected`);
+  }
 });

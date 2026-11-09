@@ -88,7 +88,6 @@ import { offerDaemonPtt } from "./lib/voice-ptt.js";
 import { isKeyRelease, isKeyRepeat } from "./lib/kitty-key-events.js";
 import { isAssistantSpeaking, markAssistantSpeaking } from "./lib/half-duplex-state.js";
 import { withSpeechControl } from "./lib/speech-control.js";
-import { ToolSchema } from "./lib/tool-schema.js";
 import {
   env,
   envBool,
@@ -4093,53 +4092,7 @@ export default function realtimeAgentExtension(pi) {
     showRtUsage(ctx);
   }
 
-  if (typeof pi.registerTool === "function") {
-    pi.registerTool({
-      name: "realtime_agent_control",
-      label: "Realtime Agent Control",
-      description: "Control Pi realtime/STT lifecycle and runtime Pulse routing for the current session.",
-      promptSnippet: "Use realtime_agent_control to start/stop realtime calls or STT and to set Pulse server/source/sink at runtime.",
-      promptGuidelines: ["Use realtime_agent_control instead of asking the operator to type /rt when you need to manage realtime calls, STT, or Pulse routing."],
-      parameters: ToolSchema.object({
-        action: ToolSchema.optional(ToolSchema.string({ description: "Lifecycle action: start, stop, off, vad, ptt, nolisten, or status." })),
-        start: ToolSchema.optional(ToolSchema.string({ description: "Start full realtime with vad, ptt, or nolisten." })),
-        stt: ToolSchema.optional(ToolSchema.string({ description: "Start transcription-only mode with vad or ptt." })),
-        provider: ToolSchema.optional(ToolSchema.string({ description: "Standalone STT provider: auto, azure, openai or daemon. Not a full Realtime audio provider." })),
-        daemonUrl: ToolSchema.optional(ToolSchema.string({ description: "STT daemon HTTP(S) URL or host (default helsinki:7634)." })),
-        mic: ToolSchema.optional(ToolSchema.string({ description: "Start mic capture with vad or ptt." })),
-        listen: ToolSchema.optional(ToolSchema.string({ description: "Listen mode: vad, ptt, or continuous." })),
-        audio: ToolSchema.optional(ToolSchema.string({ description: "Audio output mode: on, off, or toggle." })),
-        backend: ToolSchema.optional(ToolSchema.string({ description: "Audio backend such as pulse, coreaudio, audiotoolbox, sox, ffplay, or auto." })),
-        pulseServer: ToolSchema.optional(ToolSchema.string({ description: "Runtime PULSE_SERVER for new Pulse record/playback processes. Empty string unsets." })),
-        pulseSource: ToolSchema.optional(ToolSchema.string({ description: "Runtime PULSE_SOURCE for new Pulse record processes. Empty string unsets." })),
-        pulseSink: ToolSchema.optional(ToolSchema.string({ description: "Runtime PULSE_SINK for new Pulse playback processes. Empty string unsets." })),
-        baseUrl: ToolSchema.optional(ToolSchema.string({ description: "Runtime realtime/OpenAI base URL. Use http://... for plaintext LiteLLM proxies so realtime uses ws:// instead of wss://." })),
-        voice: ToolSchema.optional(ToolSchema.string({ description: "Realtime output voice." })),
-        reasoning: ToolSchema.optional(ToolSchema.string({ description: "Reasoning effort: off, minimal, low, medium, or high." })),
-        summary: ToolSchema.optional(ToolSchema.boolean({ description: "Use compact summary context instead of replaying full conversation history. Default false." })),
-        trans: ToolSchema.optional(ToolSchema.string({ description: "Realtime input transcription model, e.g. gpt-realtime-whisper or gpt-whisper-realtime." })),
-        speed: ToolSchema.optional(ToolSchema.number({ description: "Realtime spoken response speed from 0.25 to 1.5. Default 1.0." })),
-        thresh: ToolSchema.optional(ToolSchema.number({ description: "Realtime server VAD threshold from 0 to 1. Raise it to reject ambient noise; lower it for quiet speech." })),
-        chime: ToolSchema.optional(ToolSchema.boolean({ description: "Play brief VAD/listening state chimes through the realtime playback backend. Default true." })),
-        fork: ToolSchema.optional(ToolSchema.boolean({ description: "Start realtime in a fork from the current tree/session position." })),
-        widget: ToolSchema.optional(ToolSchema.string({ description: "Widget mode: show or hide." })),
-        status: ToolSchema.optional(ToolSchema.string({ description: "Return status: compact or full." })),
-      }),
-      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-        const action = String(params.action || "").toLowerCase();
-        let result;
-        if (action === "status") result = { lines: controls.diagnostics(), snapshot: controls.snapshot() };
-        else result = await applyRealtimeParams(params, ctx);
-        const snapshot = result?.snapshot ? result.snapshot : controls.snapshot();
-        const lines = result?.lines || controls.statusLines({ full: params.status === "full" || action === "status" });
-        return {
-          content: [{ type: "text", text: Array.isArray(lines) ? lines.join("\n") : JSON.stringify(snapshot, null, 2) }],
-          details: { snapshot, pulse: { server: process.env.PULSE_SERVER || null, source: process.env.PULSE_SOURCE || null, sink: process.env.PULSE_SINK || null } },
-        };
-      },
-    });
-
-  }
+  // Realtime is operator-controlled through /rt; it registers no agent tool.
 
   pi.registerCommand("rt-dev", {
     description: "Realtime dev helper: /rt-dev link [agent-utils checkout], /rt-dev reload [agent-utils checkout], /rt-dev status, /rt-dev unlink.",
