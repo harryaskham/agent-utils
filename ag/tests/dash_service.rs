@@ -257,6 +257,7 @@ fn canvas_route_serves_only_the_viewer_and_inert_renders() {
         "<!doctype html><title>viewer</title>",
     )
     .unwrap();
+    fs::write(cache.join("index.json"), "{\"canvases\":[]}").unwrap();
     fs::write(
         host.join("plan.svg"),
         "<svg xmlns=\"http://www.w3.org/2000/svg\"><text>plan</text></svg>",
@@ -306,6 +307,14 @@ fn canvas_route_serves_only_the_viewer_and_inert_renders() {
     let index = fetch("/canvases/index.html");
     assert!(index.starts_with("HTTP/1.1 200"), "{index}");
     assert!(index.to_lowercase().contains("frame-ancestors 'self'"));
+    let manifest = fetch("/canvases/index.json?v=9");
+    assert!(manifest.starts_with("HTTP/1.1 200"), "{manifest}");
+    assert!(
+        manifest
+            .to_lowercase()
+            .contains("content-type: application/json")
+    );
+    assert!(manifest.ends_with("{\"canvases\":[]}"));
     let svg = fetch("/canvases/hosts/0123abcd/plan.svg?v=3");
     assert!(svg.starts_with("HTTP/1.1 200"), "{svg}");
     let lower = svg.to_lowercase();

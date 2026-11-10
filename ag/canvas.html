@@ -5,6 +5,7 @@
 <style>
 [hidden]{display:none!important}:root{color-scheme:dark;--bg:#131719;--surface:#1c2225;--sunk:#0f1214;--text:#edf1ee;--muted:#a5b3ae;--line:#34423e;--accent:#b9e584;--warn:#efc384;--veil:#0a0d0ef5}*{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,sans-serif}body.light{color-scheme:light;--bg:#f4f5ef;--surface:#fff;--sunk:#e8ede6;--text:#1c2b24;--muted:#52665a;--line:#c5d0c6;--accent:#315e20;--warn:#855600;--veil:#f4f5eff7}
+a.button{display:inline-block;text-decoration:none;font:inherit;color:inherit;background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:8px 10px}a.button:hover{border-color:var(--accent)}a.button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.host.offline{border-color:var(--line);opacity:.65}.host .via{color:var(--muted)}
 button,input,select{font:inherit;color:inherit;background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:8px 10px}button{cursor:pointer}button:hover{border-color:var(--accent)}button:focus-visible,input:focus-visible,select:focus-visible,.tile:focus-visible{outline:2px solid var(--accent);outline-offset:3px}button:disabled{opacity:.5;cursor:default}
 code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 header{position:sticky;top:0;z-index:1;background:var(--bg);border-bottom:1px solid var(--line);padding:18px 24px 14px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}h1{font-size:20px;letter-spacing:-.6px;margin:0;white-space:nowrap}h1 b{color:var(--accent);font:600 24px ui-monospace,monospace;margin-right:9px}#count{color:var(--muted);font:13px ui-monospace,monospace;margin-left:auto}
@@ -27,23 +28,29 @@ dialog{border:0;padding:0;max-width:none;max-height:none;width:100vw;height:100d
 <header><h1><b>ag</b>Fleet canvases</h1><span id="count" role="status"></span><button id="theme" aria-label="Switch color theme">Light</button>
 <div class="filters"><input id="search" type="search" placeholder="Search boards, nodes and their text" aria-label="Search canvases"><select id="host" aria-label="Filter node"><option value="">All nodes</option></select><select id="sort" aria-label="Sort"><option value="recent">Recent</option><option value="node">Node</option><option value="name">Name</option></select><label class="toggle"><input type="checkbox" id="fresh"> Changed in last pull</label></div></header>
 <main><details id="nodes"><summary id="health"></summary><div id="hosts" class="hosts"></div></details><div id="grid"></div><div id="empty" hidden></div></main>
-<dialog id="preview" aria-label="Canvas viewer"><div class="viewer"><div class="bar"><span id="identity"></span><button id="back" aria-label="Previous canvas">←</button><button id="forward" aria-label="Next canvas">→</button><button id="minus" aria-label="Zoom out">−</button><span id="zoomlevel"></span><button id="plus" aria-label="Zoom in">+</button><button id="fit">Fit</button><button id="actual">1:1</button><button id="close" aria-label="Close viewer">Close ✕</button><span id="keyhint">← → · + − 0 1 · drag · Esc</span></div>
+<dialog id="preview" aria-label="Canvas viewer"><div class="viewer"><div class="bar"><span id="identity"></span><button id="back" aria-label="Previous canvas">←</button><button id="forward" aria-label="Next canvas">→</button><button id="minus" aria-label="Zoom out">−</button><span id="zoomlevel"></span><button id="plus" aria-label="Zoom in">+</button><button id="fit">Fit</button><button id="actual">1:1</button><a id="live" class="button" target="_blank" rel="noopener noreferrer" hidden title="Open this board in Cursive's live web view">Live ↗</a><button id="close" aria-label="Close viewer">Close ✕</button><span id="keyhint">← → · + − 0 1 · drag · Esc</span></div>
 <div id="stage"><img id="full" alt="" draggable="false"><div id="full-missing" hidden>No render cached for this canvas yet.</div></div><dl id="metadata" class="meta"></dl></div></dialog>
 <script type="application/json" id="manifest">__MANIFEST__</script>
 <script>
 'use strict';
-const data=JSON.parse(document.getElementById('manifest').textContent),$=id=>document.getElementById(id);
+let data=JSON.parse(document.getElementById('manifest').textContent);const $=id=>document.getElementById(id);
 const el=(tag,props={},...kids)=>{const e=document.createElement(tag);for(const[k,v]of Object.entries(props)){if(k==='text')e.textContent=v;else if(k==='class')e.className=v;else e.setAttribute(k,v)}e.append(...kids);return e};
 const size=n=>n>=1048576?(n/1048576).toFixed(1)+' MiB':Math.max(1,Math.ceil(n/1024))+' KiB';
 const ago=ms=>{if(!ms)return'never';const s=Math.max(0,(Date.now()-ms)/1000);if(s<60)return'just now';if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';return Math.floor(s/86400)+'d ago'};
 const fresh=c=>c.rendered_ms&&c.rendered_ms>=data.pulled_ms;
 const stale=c=>!!c.error||(c.rendered_revision!=null&&c.rendered_revision<c.revision);
 let shown=[],current=0,returnFocus=null,view={scale:1,x:0,y:0,fit:true};
-for(const h of[...new Set(data.hosts.map(h=>h.host))].sort())$('host').append(el('option',{value:h,text:h}));
-{const bad=data.hosts.filter(h=>h.state==='unavailable'||h.warnings.length),count=s=>data.hosts.filter(h=>h.state===s).length;const changed=data.canvases.filter(fresh).length;
-$('health').textContent=[`${data.hosts.length} nodes`,count('synced')&&`${count('synced')} listed`,count('cached')&&`${count('cached')} cached`,`${changed} changed in last pull`,bad.length&&`${bad.length} need attention`].filter(Boolean).join(' · ');if(bad.length)$('health').classList.add('warning');
-const key='ag.canvas.nodes.open';try{$('nodes').open=localStorage.getItem(key)==='1'}catch{}$('nodes').addEventListener('toggle',()=>{try{localStorage.setItem(key,$('nodes').open?'1':'0')}catch{}});
-for(const h of data.hosts){const row=el('div',{class:'host'+(h.state!=='unavailable'&&!h.warnings.length?'':' stale')},el('strong',{text:h.host}),el('small',{text:`${h.canvases} canvases · ${h.state}${h.rendered?' · '+h.rendered+' rendered':''}`}),el('small',{text:h.last_sync_ms?'Listed '+new Date(h.last_sync_ms).toLocaleString():'Not pulled yet'}));for(const w of h.warnings)row.append(el('small',{class:'warning',text:w}));$('hosts').append(row)}}
+// The gateway's live web view: its own base, or this page's host on the
+// gateway's port when the gateway runs on the dashboard's machine.
+function liveUrl(c){const g=data.gateway;if(!c.live||!g||!g.web)return null;let base=g.web;try{const u=new URL(g.web);if(g.loopback&&location.protocol.startsWith('http')&&!['localhost','127.0.0.1','[::1]'].includes(location.hostname))base=`http://${location.hostname}:${u.port||80}`}catch{return null}return base+'/'+c.live}
+function renderHosts(){const keep=$('host').value;$('host').replaceChildren(el('option',{value:'',text:'All nodes'}));for(const h of[...new Set(data.hosts.map(h=>h.host))].sort())$('host').append(el('option',{value:h,text:h}));if([...$('host').options].some(o=>o.value===keep))$('host').value=keep;
+const bad=data.hosts.filter(h=>h.state==='unavailable'||h.warnings.length),count=s=>data.hosts.filter(h=>h.state===s).length,changed=data.canvases.filter(fresh).length,g=data.gateway;
+const gateway=!g||g.state==='off'?null:g.state==='live'?`gateway ${g.name||''} · ${g.hosts_online}/${g.hosts} online`:g.state==='unreachable'?'gateway unreachable · SSH':null;
+$('health').textContent=[gateway,`${data.hosts.length} nodes`,count('synced')&&`${count('synced')} listed`,count('offline')&&`${count('offline')} offline`,count('cached')&&`${count('cached')} cached`,`${changed} changed in last pull`,bad.length&&`${bad.length} need attention`].filter(Boolean).join(' · ');$('health').classList.toggle('warning',bad.length>0||g?.state==='unreachable');
+$('hosts').replaceChildren();if(g&&g.state==='unreachable'&&g.error)$('hosts').append(el('div',{class:'host stale'},el('strong',{text:'gateway'}),el('small',{class:'warning',text:g.error})));
+for(const h of data.hosts){const ok=h.state!=='unavailable'&&!h.warnings.length;const row=el('div',{class:'host'+(h.state==='offline'?' offline':ok?'':' stale')},el('strong',{},h.host,' ',el('span',{class:'via',text:h.via&&h.via!=='none'?'· '+h.via:''})),el('small',{text:`${h.canvases} canvases · ${h.state}${h.rendered?' · '+h.rendered+' rendered':''}`}),el('small',{text:h.last_sync_ms?'Listed '+new Date(h.last_sync_ms).toLocaleString():'Not listed yet'}));for(const w of h.warnings)row.append(el('small',{class:'warning',text:w}));$('hosts').append(row)}}
+{const key='ag.canvas.nodes.open';try{$('nodes').open=localStorage.getItem(key)==='1'}catch{}$('nodes').addEventListener('toggle',()=>{try{localStorage.setItem(key,$('nodes').open?'1':'0')}catch{}})}
+renderHosts();
 function filter(){const q=$('search').value.toLocaleLowerCase(),host=$('host').value,onlyFresh=$('fresh').checked;
 shown=data.canvases.filter(c=>(!host||c.host===host)&&(!onlyFresh||fresh(c))&&(!q||[c.id,c.host,c.text,c.ocr||''].some(v=>v.toLocaleLowerCase().includes(q))));
 const sort=$('sort').value;if(sort==='node')shown.sort((a,b)=>a.host.localeCompare(b.host)||b.updated_ms-a.updated_ms);else if(sort==='name')shown.sort((a,b)=>a.id.localeCompare(b.id)||a.host.localeCompare(b.host));else shown.sort((a,b)=>b.updated_ms-a.updated_ms||a.host.localeCompare(b.host));render()}
@@ -60,8 +67,9 @@ function zoom(factor,cx,cy){const s=$('stage'),r=s.getBoundingClientRect();cx??=
 function actual(){const s=$('stage'),r=s.getBoundingClientRect();zoom(1/view.scale,r.width/2,r.height/2)}
 function open(i,source){current=i;if(source)returnFocus=source;const c=shown[current];if(!c)return;
 $('identity').replaceChildren(el('span',{class:'node',text:c.host}),c.id);const img=$('full');img.hidden=!c.src;$('full-missing').hidden=!!c.src;img.onload=fit;img.onerror=()=>{img.hidden=true;$('full-missing').hidden=false};if(c.src)img.src=c.src;
+const live=liveUrl(c);$('live').hidden=!live;if(live)$('live').href=live;
 const rows=[['revision',`r${c.revision}`+(c.rendered_revision!=null&&c.rendered_revision!==c.revision?` · showing r${c.rendered_revision}`:'')],['updated',c.updated_ms?new Date(c.updated_ms).toLocaleString()+` (${ago(c.updated_ms)})`:'—'],['objects',String(c.objects)],['render',c.format?`${c.format} · ${size(c.bytes)} · ${c.rendered_ms?ago(c.rendered_ms):''}`:'none']];
-const meta=$('metadata');meta.replaceChildren();for(const[k,v]of rows)meta.append(el('dt',{text:k}),el('dd',{text:v}));meta.append(el('dt',{text:'open'}),el('dd',{},el('code',{text:c.open})));if(c.ocr)meta.append(el('dt',{text:'ocr'}),el('dd',{text:c.ocr}));if(c.error)meta.append(el('dt',{text:'error'}),el('dd',{class:'warning',text:c.error}));
+const meta=$('metadata');meta.replaceChildren();for(const[k,v]of rows)meta.append(el('dt',{text:k}),el('dd',{text:v}));meta.append(el('dt',{text:'open'}),el('dd',{},el('code',{text:c.open})));if(live)meta.append(el('dt',{text:'live'}),el('dd',{},el('code',{text:live})));if(c.ocr)meta.append(el('dt',{text:'ocr'}),el('dd',{text:c.ocr}));if(c.error)meta.append(el('dt',{text:'error'}),el('dd',{class:'warning',text:c.error}));
 $('back').disabled=current===0;$('forward').disabled=current>=shown.length-1;if(!$('preview').open)$('preview').showModal();if(img.complete&&img.naturalWidth)fit()}
 let drag=null;const stage=$('stage');
 stage.addEventListener('wheel',e=>{e.preventDefault();const r=stage.getBoundingClientRect();zoom(Math.exp(-e.deltaY*(e.deltaMode?0.05:0.0015)),e.clientX-r.left,e.clientY-r.top)},{passive:false});
@@ -77,5 +85,10 @@ const filtersKey='ag.canvas.filters';const save=()=>{try{sessionStorage.setItem(
 try{const f=JSON.parse(sessionStorage.getItem(filtersKey)||'{}');if(typeof f.search==='string')$('search').value=f.search;for(const id of['host','sort'])if(typeof f[id]==='string'&&[...$(id).options].some(o=>o.value===f[id]))$(id).value=f[id];$('fresh').checked=!!f.fresh}catch{}
 for(const id of['search'])$(id).oninput=()=>{save();filter()};for(const id of['host','sort','fresh'])$(id).onchange=()=>{save();filter()};
 $('theme').onclick=()=>{document.body.classList.toggle('light');$('theme').textContent=document.body.classList.contains('light')?'Dark':'Light'};
+// The dashboard hands a newer pull to an open viewer: filters, scroll and an
+// open board stay put; that board's picture swaps in place, keeping its zoom.
+window.addEventListener('message',e=>{if(e.origin!==location.origin||e.data?.type!=='ag-canvases'||!e.data.manifest?.canvases)return;
+const wasOpen=$('preview').open?shown[current]:null,y=window.scrollY;data=e.data.manifest;renderHosts();filter();window.scrollTo(0,y);
+if(wasOpen){const i=shown.findIndex(c=>c.host===wasOpen.host&&c.id===wasOpen.id);if(i<0)return;current=i;const c=shown[i],img=$('full');if(c.src&&c.src!==wasOpen.src){const keep={...view};img.onload=()=>{Object.assign(view,keep);keep.fit?fit():apply()};img.src=c.src}$('back').disabled=current===0;$('forward').disabled=current>=shown.length-1}});
 filter();
 </script></body></html>

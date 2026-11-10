@@ -9,6 +9,7 @@ pub mod dash_tts;
 pub mod doctor;
 pub mod error;
 pub mod gallery;
+pub mod http;
 pub mod loops;
 pub mod model;
 pub mod paratenic;

@@ -16,7 +16,7 @@
     packages = each (system: let pkgs = nixpkgs.legacyPackages.${system}; in rec {
       ag = pkgs.rustPlatform.buildRustPackage {
         pname = "ag";
-        version = "0.8.1";
+        version = "0.9.0";
         src = source;
         cargoDeps = (pkgs.rustPlatform.importCargoLock.override {
           fetchurl = attrs: pkgs.fetchurl (attrs // {

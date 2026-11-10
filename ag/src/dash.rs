@@ -88,6 +88,20 @@ pub struct CanvasStatus {
     pub finished_ms: Option<u64>,
     pub error: Option<String>,
     pub hosts: Vec<crate::canvas::CanvasHost>,
+    /// The Cursive gateway as the last pull found it.
+    pub gateway: Option<crate::canvas::GatewayStatus>,
+    /// Following the gateway's change stream.
+    pub live: LiveStatus,
+}
+/// The dash's subscription to the gateway's `/v1/fleet/stream`.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct LiveStatus {
+    /// off, connecting, following or reconnecting.
+    pub state: String,
+    pub url: Option<String>,
+    pub changes: u64,
+    pub last_change_ms: Option<u64>,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -154,6 +168,8 @@ struct Dash {
     images_busy: Arc<AtomicBool>,
     audio_busy: Arc<AtomicBool>,
     canvases_busy: AtomicBool,
+    /// A change arrived while a pull ran: pull again when it finishes.
+    canvases_pending: AtomicBool,
     inflight: Mutex<HashSet<String>>,
     tts: Arc<Feed>,
     shutdown: tokio_util::sync::CancellationToken,
@@ -503,7 +519,11 @@ fn refresh_media(dash: &Shared, images: bool, audio: bool) {
 /// List every node's canvases and export only changed ones (the same path as
 /// `ag canvas pull`), on its own cadence and busy flag.
 fn refresh_canvases(dash: &Shared) {
-    if !dash.options.canvases || dash.canvases_busy.swap(true, Ordering::AcqRel) {
+    if !dash.options.canvases {
+        return;
+    }
+    if dash.canvases_busy.swap(true, Ordering::AcqRel) {
+        dash.canvases_pending.store(true, Ordering::Release);
         return;
     }
     lock(dash).canvases.running = true;
@@ -530,13 +550,92 @@ fn refresh_canvases(dash: &Shared) {
                     status.canvases = receipt.canvases;
                     status.rendered = receipt.rendered;
                     status.hosts = receipt.hosts;
+                    status.gateway = Some(receipt.gateway);
                     status.error = None;
                 }
                 Err(error) => status.error = Some(error.to_string()),
             }
         }
         dash.canvases_busy.store(false, Ordering::Release);
+        if dash.canvases_pending.swap(false, Ordering::AcqRel) {
+            refresh_canvases(&dash);
+        }
     });
+}
+
+fn set_live(dash: &Shared, state: &str, error: Option<String>) {
+    let mut snapshot = lock(dash);
+    snapshot.canvases.live.state = state.into();
+    if error.is_some() || state == "following" {
+        snapshot.canvases.live.error = error;
+    }
+}
+
+/// Follow the gateway's change stream for as long as the dash runs. Each burst
+/// of changes (until 3 s pass quietly, at most 15 s) becomes one pull, which
+/// re-exports only what changed; the interval pull stays as a backstop.
+async fn follow_canvases(dash: Shared) {
+    let gateway = dash
+        .config
+        .canvases
+        .gateway
+        .trim_end_matches('/')
+        .to_owned();
+    let url = format!("{gateway}/v1/fleet/stream");
+    lock(&dash).canvases.live.url = Some(url.clone());
+    let wake = Arc::new(tokio::sync::Notify::new());
+    let coalesce = {
+        let (dash, wake) = (dash.clone(), wake.clone());
+        tokio::spawn(async move {
+            loop {
+                wake.notified().await;
+                let start = tokio::time::Instant::now();
+                while start.elapsed() < Duration::from_secs(15) {
+                    if tokio::time::timeout(Duration::from_secs(3), wake.notified())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                refresh_canvases(&dash);
+            }
+        })
+    };
+    let mut backoff = Duration::from_secs(2);
+    loop {
+        set_live(&dash, "connecting", None);
+        match crate::http::Events::connect(&url, Duration::from_secs(10)).await {
+            Ok(mut events) => {
+                set_live(&dash, "following", None);
+                backoff = Duration::from_secs(2);
+                // The gateway sends a comment every 15 s.
+                let ended = loop {
+                    match events.next(Duration::from_secs(45)).await {
+                        Ok(Some((kind, _))) if kind == "change" => {
+                            {
+                                let mut snapshot = lock(&dash);
+                                snapshot.canvases.live.changes += 1;
+                                snapshot.canvases.live.last_change_ms = Some(now_ms());
+                            }
+                            wake.notify_one();
+                        }
+                        Ok(Some(_)) => {}
+                        Ok(None) => break "the gateway closed the stream".to_owned(),
+                        Err(error) => break error.to_string(),
+                    }
+                };
+                set_live(&dash, "reconnecting", Some(ended));
+            }
+            Err(error) => set_live(&dash, "reconnecting", Some(error.to_string())),
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(backoff) => {}
+            _ = dash.shutdown.cancelled() => break,
+        }
+        backoff = (backoff * 2).min(Duration::from_secs(30));
+    }
+    coalesce.abort();
 }
 
 async fn index(
@@ -1089,6 +1188,7 @@ async fn canvas_file(
     let relative = PathBuf::from(&path);
     let parts: Vec<_> = relative.components().collect();
     let index = path == "index.html";
+    let manifest = path == "index.json";
     let render = parts.len() == 3
         && parts.iter().all(|c| matches!(c, Component::Normal(_)))
         && parts[0].as_os_str() == "hosts"
@@ -1097,7 +1197,7 @@ async fn canvas_file(
             .to_str()
             .and_then(|name| name.rsplit_once('.'))
             .is_some_and(|(id, ext)| crate::canvas::valid_id(id) && matches!(ext, "svg" | "png"));
-    if !index && !render {
+    if !index && !manifest && !render {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
     let Ok(full) = root.join(&relative).canonicalize() else {
@@ -1117,7 +1217,13 @@ async fn canvas_file(
     let Ok(bytes) = tokio::fs::read(&full).await else {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     };
-    let (kind, csp, cache) = if index {
+    let (kind, csp, cache) = if manifest {
+        (
+            "application/json",
+            "default-src 'none'; sandbox",
+            "no-store",
+        )
+    } else if index {
         (
             "text/html; charset=utf-8",
             "default-src 'none'; img-src 'self' data:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'self'",
@@ -1286,6 +1392,10 @@ pub async fn run(
         },
         canvases: CanvasStatus {
             enabled: options.canvases,
+            live: LiveStatus {
+                state: "off".into(),
+                ..LiveStatus::default()
+            },
             ..CanvasStatus::default()
         },
         canvas_refresh_seconds: options.canvas_refresh.as_secs(),
@@ -1318,6 +1428,7 @@ pub async fn run(
         images_busy: Arc::new(AtomicBool::new(false)),
         audio_busy: Arc::new(AtomicBool::new(false)),
         canvases_busy: AtomicBool::new(false),
+        canvases_pending: AtomicBool::new(false),
         inflight: Mutex::new(HashSet::new()),
         tts,
         shutdown: shutdown.clone(),
@@ -1362,6 +1473,8 @@ pub async fn run(
             }
         })
     };
+    let follower = (dash.options.canvases && !dash.config.canvases.gateway.is_empty())
+        .then(|| tokio::spawn(follow_canvases(dash.clone())));
     let stopping = shutdown.clone();
     let serving = axum::serve(listener, router).with_graceful_shutdown(async move {
         tokio::select! {
@@ -1379,6 +1492,9 @@ pub async fn run(
         _ = async { shutdown.cancelled().await; tokio::time::sleep(Duration::from_secs(4)).await; } => Ok(()),
     };
     background.abort();
+    if let Some(follower) = follower {
+        follower.abort();
+    }
     shutdown.cancel();
     if tokio::time::timeout(Duration::from_secs(4), &mut collector)
         .await

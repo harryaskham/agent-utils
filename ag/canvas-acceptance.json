@@ -1,16 +1,87 @@
 {
   "version": 1,
-  "feature": "Fleet Cursive canvases: ag canvas, ag_canvas_* MCP tools and the dash Canvases tab",
+  "feature": "Fleet Cursive canvases: ag canvas, ag_canvas_* MCP tools and the dash Canvases tab, over the Cursive gateway with SSH fallback",
   "direction": "Same quiet ag theme: a wall of square board tiles at true aspect (node · id, then r<rev> · objects · age telemetry in mono), a thin accent edge on boards changed in the last pull and a warning edge on stale renders; a full-viewport pan/zoom viewer with metadata and the command to open the board.",
   "requirements": [
-    {"id":"CANVAS-LIST","contract":"Each pull runs this machine's cursive once per node and page: `cursive [--remote=DEST] --json history --list --limit 200 --offset N`, newest first, up to canvases.max_per_host canvases. Notes are skipped unless canvases.include_notes. Ids outside Cursive's rule (1–96 ASCII letters, digits, '.', '_', '-'; not '.'/'..') never become cache paths and are reported.","evidence":["tests/canvas.rs::only_new_or_changed_canvases_are_exported_and_removed_ones_pruned","tests/canvas.rs::ids_and_configuration_are_validated"]},
-    {"id":"CANVAS-INCREMENTAL","contract":"A canvas is exported only when its listed revision differs from the cached render's revision, the render file is missing, the format or theme changed, the previous export failed, or force=true. Unchanged polls run listings only. Canvases no longer listed are dropped and their renders deleted.","evidence":["tests/canvas.rs::only_new_or_changed_canvases_are_exported_and_removed_ones_pruned","tests/canvas.rs::rendered_revisions_failures_and_escaping"]},
-    {"id":"CANVAS-RENDER","contract":"Cursive renders; ag never interprets canvas objects. Default `export --format svg` (Cursive >= 0.5); a node whose cursive refuses svg (usage error, exit 2) renders PNG and is not re-probed for 6 hours. Output must be an SVG document (or PNG signature); the SVG's data-cursive-revision is recorded as the drawn revision. A failed export keeps the previous render, marked with its revision and error, and is retried next poll.","evidence":["tests/canvas.rs::nodes_without_svg_export_render_png_without_reprobing_every_poll","tests/canvas.rs::rendered_revisions_failures_and_escaping","tools PR #51 (Cursive 0.5.0 SVG export)"]},
-    {"id":"CANVAS-TRANSPORT","contract":"Nodes are reached with `cursive --remote=DEST` (SSH, Cursive's ControlMaster reuse): DEST is hosts[].cursive.remote, else [user@]address, else ssh://[user@]address:port (IPv6 bracketed) off port 22. Local hosts run cursive directly. hosts[].cursive.enabled=false skips a node. --theme is passed only to SVG exports. Every call is bounded (listing 4 MiB, render 80 MiB), has a deadline (canvases.timeout_seconds) and is killed on drop; canvases.parallelism caps concurrent cursive processes.","evidence":["tests/canvas.rs::destinations_themes_and_local_nodes","tests/canvas.rs::ids_and_configuration_are_validated"]},
-    {"id":"CANVAS-CACHE","contract":"~/.cache/ag/canvases (canvases.cache_dir) holds hosts/<key>/<id>.svg|png and a manifest per node, owner-private (0700/0600), atomically replaced, under a non-blocking per-cache lock. An unreachable node is reported as unavailable and keeps its cached renders; offline=true rebuilds the viewer without running cursive.","evidence":["tests/canvas.rs::an_unreachable_node_keeps_its_cached_renders","tests/canvas.rs::only_new_or_changed_canvases_are_exported_and_removed_ones_pruned"]},
-    {"id":"CANVAS-VIEWER","contract":"index.html is a private static page with an embedded escaped manifest, a strict CSP and text-only DOM construction; no network requests. Search covers node, id, Cursive's cached OCR preview and the text drawn on the canvas (from the SVG, 4096 characters). Tiles mark boards changed in the last pull and stale renders; the viewer pans, zooms around the pointer, fits and shows the open command.","evidence":["tests/canvas.rs::rendered_revisions_failures_and_escaping","screenshots: real Helsinki/ms-mac canvases, wide and narrow, grid/search/viewer (PR description)"]},
-    {"id":"CANVAS-DASH","contract":"ag dash polls canvases on its own cadence (dash.canvas_refresh_seconds / --canvas-refresh, default 300 s; --no-canvases or dash.canvases=false serve the cache only), with Pull now, pause and load-new controls, and reframes only when a pull rendered something. /canvases/ serves only index.html and hosts/<key>/<valid id>.svg|png inside the cache (no manifests, traversal or symlink escape), renders with a sandbox CSP and nosniff.","evidence":["tests/dash_service.rs::canvas_route_serves_only_the_viewer_and_inert_renders"]},
-    {"id":"CANVAS-MCP","contract":"ag_canvas_pull requires confirmed=true for cache writes and reports per-node state, counts and warnings; ag_canvas_list reads the cache only, filtered by query over ids and canvas text.","evidence":["tests/canvas.rs::only_new_or_changed_canvases_are_exported_and_removed_ones_pruned","tests/canvas.rs::rendered_revisions_failures_and_escaping"]},
-    {"id":"CANVAS-HM","contract":"services.ag-dash.canvases, canvasRefreshSeconds and canvasCacheDirectory map to --no-canvases, --canvas-refresh and --canvas-cache-dir. The service needs cursive on its PATH (Home Manager profile) or canvases.program.","evidence":["nix/module-test.nix"]}
+    {
+      "id": "CANVAS-LIST",
+      "contract": "With a gateway (canvases.gateway, a Cursive >= 0.6 daemon), each pull reads GET /v1/info and one GET /v1/fleet/canvases?limit=200 covering every fleet node (fleet-only nodes included when no --host narrows the selection); a possibly truncated listing (200 rows) pages each node via /v1/[hosts/NODE/]canvases. Without one, this machine's cursive lists each configured node: `cursive [--remote=DEST] --json history --list --limit 200 --offset N`. Notes are skipped unless canvases.include_notes; ids outside Cursive's rule never become cache paths.",
+      "evidence": [
+        "tests/canvas.rs::the_gateway_lists_the_fleet_and_serves_only_changes_over_http",
+        "tests/canvas.rs::a_truncated_fleet_listing_is_paged_per_node_and_a_local_host_is_the_gateways_node",
+        "tests/canvas.rs::only_new_or_changed_canvases_are_exported_and_removed_ones_pruned",
+        "tests/canvas.rs::ids_and_configuration_are_validated"
+      ]
+    },
+    {
+      "id": "CANVAS-INCREMENTAL",
+      "contract": "A canvas is exported only when its listed revision differs from the cached render's revision, the render file is missing, the format or theme changed, the previous export failed, or force=true. Unchanged polls run listings only. Canvases no longer listed are dropped and their renders deleted.",
+      "evidence": [
+        "tests/canvas.rs::only_new_or_changed_canvases_are_exported_and_removed_ones_pruned",
+        "tests/canvas.rs::rendered_revisions_failures_and_escaping",
+        "tests/canvas.rs::the_gateway_lists_the_fleet_and_serves_only_changes_over_http"
+      ]
+    },
+    {
+      "id": "CANVAS-RENDER",
+      "contract": "Cursive renders; ag never interprets canvas objects. Via the gateway: GET .../canvases/ID/export?format=svg[&theme=] (Cursive >= 0.7); a 0.6 daemon (404 'no such endpoint') answers through POST .../call/cursive_export (SVG up to 3 MiB); beyond that, or when the gateway cannot reach the node, a configured node is exported over SSH. Over SSH, a node whose cursive refuses svg renders PNG and is not re-probed for 6 hours. Output must be an SVG document (or PNG signature); the SVG's data-cursive-revision (else X-Cursive-Revision) is the drawn revision. A failed export keeps the previous render and is retried next poll.",
+      "evidence": [
+        "tests/canvas.rs::nodes_without_svg_export_render_png_without_reprobing_every_poll",
+        "tests/canvas.rs::rendered_revisions_failures_and_escaping",
+        "tools PR #51 (Cursive 0.5.0 SVG export)",
+        "tests/canvas.rs::old_daemons_use_their_tool_and_oversized_exports_fall_back_to_ssh",
+        "tools PR #52 (Cursive 0.7.0 /export)"
+      ]
+    },
+    {
+      "id": "CANVAS-TRANSPORT",
+      "contract": "Transport per node, reported as via: daemon (the gateway: its own node at /v1, others at /v1/hosts/NODE; a local host is the gateway's node when the gateway is loopback), ssh (configured nodes the gateway cannot reach, when canvases.ssh_fallback; also every configured node when the gateway is unreachable or off), local, cache (offline) or none (fleet-only and unreachable: state offline, quiet). SSH uses `cursive --remote=DEST`, DEST = hosts[].cursive.remote, else [user@]address, else ssh://[user@]address:port. HTTP is plain HTTP/1.0 with bounded bodies (4 MiB listing, 80 MiB render) and deadlines; canvases.parallelism caps concurrent exports. --theme only applies to SVG.",
+      "evidence": [
+        "tests/canvas.rs::offline_configured_nodes_use_ssh_and_an_unreachable_gateway_means_ssh_only",
+        "tests/canvas.rs::destinations_themes_and_local_nodes",
+        "tests/canvas.rs::a_truncated_fleet_listing_is_paged_per_node_and_a_local_host_is_the_gateways_node",
+        "tests/canvas.rs::ids_and_configuration_are_validated"
+      ]
+    },
+    {
+      "id": "CANVAS-CACHE",
+      "contract": "~/.cache/ag/canvases (canvases.cache_dir) holds hosts/<key>/<id>.svg|png and a manifest per node, owner-private (0700/0600), atomically replaced, under a non-blocking per-cache lock. An unreachable node is reported as unavailable and keeps its cached renders; offline=true rebuilds the viewer without running cursive.",
+      "evidence": [
+        "tests/canvas.rs::an_unreachable_node_keeps_its_cached_renders",
+        "tests/canvas.rs::only_new_or_changed_canvases_are_exported_and_removed_ones_pruned"
+      ]
+    },
+    {
+      "id": "CANVAS-VIEWER",
+      "contract": "index.html is a private static page with an embedded escaped manifest, a strict CSP and text-only DOM construction; no network requests. Search covers node, id, Cursive's cached OCR preview and the text drawn on the canvas (from the SVG, 4096 characters). Tiles mark boards changed in the last pull and stale renders; the viewer pans, zooms around the pointer, fits and shows the open command. Live opens the board in the gateway's Cursive web view (web_url, else the gateway; for a loopback gateway the serving page's host on the gateway's port). index.json mirrors the manifest; the viewer accepts a newer manifest by same-origin postMessage, keeping filters, scroll and an open board.",
+      "evidence": [
+        "tests/canvas.rs::rendered_revisions_failures_and_escaping",
+        "screenshots: real Helsinki/ms-mac canvases, wide and narrow, grid/search/viewer (PR description)"
+      ]
+    },
+    {
+      "id": "CANVAS-DASH",
+      "contract": "ag dash follows the gateway's /v1/fleet/stream: each burst of change events (3 s quiet, at most 15 s) becomes one pull (queued if one is running), with dash.canvas_refresh_seconds (default 300) as a backstop; the stream reconnects with backoff and reports off/connecting/following/reconnecting, change counts and errors in canvases.live. The tab frames the viewer once and posts each newer pull's index.json into it, honouring pause/load-new. /canvases/ serves only index.html, index.json and hosts/<key>/<valid id>.svg|png inside the cache (no manifests, traversal or symlink escape), renders with a sandbox CSP and nosniff.",
+      "evidence": [
+        "tests/canvas.rs::the_dash_follows_the_gateway_stream_and_pulls_on_change",
+        "tests/dash_service.rs::canvas_route_serves_only_the_viewer_and_inert_renders",
+        "screenshots: live dash against Helsinki's gateway (PR description)"
+      ]
+    },
+    {
+      "id": "CANVAS-MCP",
+      "contract": "ag_canvas_pull requires confirmed=true for cache writes and reports per-node state, counts and warnings; ag_canvas_list reads the cache only, filtered by query over ids and canvas text.",
+      "evidence": [
+        "tests/canvas.rs::only_new_or_changed_canvases_are_exported_and_removed_ones_pruned",
+        "tests/canvas.rs::rendered_revisions_failures_and_escaping"
+      ]
+    },
+    {
+      "id": "CANVAS-HM",
+      "contract": "services.ag-dash.canvases, canvasRefreshSeconds and canvasCacheDirectory map to --no-canvases, --canvas-refresh and --canvas-cache-dir. The service needs cursive on its PATH (Home Manager profile) or canvases.program.",
+      "evidence": [
+        "nix/module-test.nix"
+      ]
+    }
   ]
 }
