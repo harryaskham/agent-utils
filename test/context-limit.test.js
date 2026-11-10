@@ -174,6 +174,14 @@ test("a transcript measures like pi-daemon's footer: the newest good response, b
   assert.equal(transcriptContext(undefined), undefined);
 });
 
+test("by entry ids: after a compaction (which heads the older entries it keeps) the old size is not reported (pi-daemon bd-f0fa6b)", () => {
+  const withId = (id, entry) => ({ ...entry, id });
+  const compacted = [withId(100, { kind: "pi.compaction" }), withId(90, answer({ input: 515_000 })), withId(95, { kind: "pi.tool-result" })];
+  assert.equal(transcriptContext(compacted), undefined);
+  assert.equal(transcriptContext([...compacted, withId(101, answer({ input: 112_000 }))]), 112_000);
+  assert.equal(transcriptContext([withId(5, answer({ input: 10 })), withId(7, answer({ input: 20 })), withId(6, { kind: "pi.user" })]), 20);
+});
+
 test("pi-daemon (bd-da24a9): /context measures an idle session from its transcript, and a limit below it compacts at once", async () => {
   const { commands, observe } = await import("../extensions/durable/context-limit.mjs");
   const state = moduleState();

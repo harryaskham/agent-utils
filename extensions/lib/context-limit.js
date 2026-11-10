@@ -75,15 +75,34 @@ export function responseContext(usage) {
  */
 export function transcriptContext(entries) {
   const list = Array.isArray(entries) ? entries : [];
-  for (let index = list.length - 1; index >= 0; index -= 1) {
-    const entry = list[index];
-    if (entry?.kind === "pi.compaction" || entry?.kind === "pi.reset") return undefined;
-    if (entry?.kind !== "pi.assistant") continue;
+  const measures = (entry) => {
+    if (entry?.kind !== "pi.assistant") return undefined;
     const message = (Array.isArray(entry.model) ? entry.model : []).find((candidate) => candidate?.role === "assistant");
-    if (message?.usage === undefined || message.stopReason === "aborted" || message.stopReason === "error") continue;
+    if (message?.usage === undefined || message.stopReason === "aborted" || message.stopReason === "error") return undefined;
     const total = Number(message.usage.totalTokens);
     const tokens = Number.isFinite(total) && total > 0 ? total : responseContext(message.usage);
     return tokens > 0 ? tokens : undefined;
+  };
+  // By entry ids when there are (pi-daemon bd-f0fa6b): a compaction heads the context it starts, ahead
+  // of the older entries it keeps, so until a response follows it the newest response listed is
+  // from before it, and the context is unmeasured, not that old size.
+  if (list.length > 0 && list.every((entry) => typeof entry?.id === "number")) {
+    let cut = -Infinity;
+    let newest;
+    for (const entry of list) {
+      if (entry.kind === "pi.compaction" || entry.kind === "pi.reset") cut = Math.max(cut, entry.id);
+      else if (newest === undefined || entry.id > newest.id) {
+        const tokens = measures(entry);
+        if (tokens !== undefined) newest = { id: entry.id, tokens };
+      }
+    }
+    return newest !== undefined && newest.id > cut ? newest.tokens : undefined;
+  }
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const entry = list[index];
+    if (entry?.kind === "pi.compaction" || entry?.kind === "pi.reset") return undefined;
+    const tokens = measures(entry);
+    if (tokens !== undefined) return tokens;
   }
   return undefined;
 }
