@@ -113,13 +113,24 @@ pub struct HostCursive {
     pub remote: Option<String>,
 }
 
-/// Fleet Cursive canvases. This machine's `cursive` lists each node's
-/// canvases over `cursive --remote` (SSH, ControlMaster reuse) and exports
-/// only new or changed ones; the node's own `cursive` renders them.
+/// Fleet Cursive canvases. A Cursive daemon that knows the fleet (the
+/// gateway, by default this machine's) lists every node's canvases in one
+/// HTTP call, serves only new or changed ones as SVG, and streams changes;
+/// nodes it cannot reach fall back to this machine's `cursive --remote` over
+/// SSH. Each node's own Cursive renders.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct CanvasConfig {
     pub enabled: bool,
+    /// Cursive daemon with the fleet (Cursive >= 0.6), `http://host:port`.
+    /// Empty: no daemon, every node over SSH.
+    pub gateway: String,
+    /// Browser URL of the gateway's web view, for live links. Unset: the
+    /// gateway, or (for a loopback gateway) the viewing page's host on its port.
+    pub web_url: Option<String>,
+    /// Configured nodes the gateway cannot reach (or that need an export
+    /// beyond an old daemon) are tried with `cursive --remote` over SSH.
+    pub ssh_fallback: bool,
     /// Local cursive executable (name or path, not a shell snippet).
     pub program: String,
     /// svg (Cursive >= 0.5, falls back to png on older nodes) or png.
@@ -159,6 +170,9 @@ impl Default for CanvasConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            gateway: "http://127.0.0.1:7685".into(),
+            web_url: None,
+            ssh_fallback: true,
             program: "cursive".into(),
             format: CanvasFormat::Svg,
             theme: None,
@@ -477,6 +491,14 @@ impl AppConfig for Config {
             ));
         }
         let c = &self.canvases;
+        if !c.gateway.is_empty()
+            && let Err(error) = crate::http::base(&c.gateway)
+        {
+            return Err(invalid(&format!("canvases.gateway: {error}")));
+        }
+        if let Some(Err(error)) = c.web_url.as_deref().map(crate::http::web) {
+            return Err(invalid(&format!("canvases.web_url: {error}")));
+        }
         if !safe(&c.program, 4096)
             || c.program.starts_with('-')
             || c.cache_dir.as_ref().is_some_and(|p| !safe(p, 4096))

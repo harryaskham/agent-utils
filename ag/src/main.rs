@@ -541,13 +541,32 @@ fn canvas_command(
             if json_output {
                 json(&result)?;
             } else {
+                let g = &result.gateway;
+                let gateway = match g.state.as_str() {
+                    "live" => format!(
+                        "{} · {} {} · {}/{} nodes online",
+                        g.url,
+                        g.name.as_deref().unwrap_or("?"),
+                        g.version.as_deref().unwrap_or("?"),
+                        g.hosts_online,
+                        g.hosts
+                    ),
+                    "unreachable" => format!(
+                        "{} unreachable ({}); configured nodes over SSH",
+                        g.url,
+                        g.error.as_deref().unwrap_or("no reply")
+                    ),
+                    other => other.to_owned(),
+                };
+                eprintln!("{}", terminal_text(&format!("[gateway] {gateway}")));
                 for host in &result.hosts {
                     eprintln!(
                         "{}",
                         terminal_text(&format!(
-                            "[{}] {} · {} canvases{}{}",
+                            "[{}] {} via {} · {} canvases{}{}",
                             host.host,
                             host.state,
+                            host.via,
                             host.canvases,
                             if host.rendered > 0 {
                                 format!(" · {} rendered", host.rendered)

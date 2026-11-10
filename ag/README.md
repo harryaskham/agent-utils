@@ -180,7 +180,7 @@ A node that answers neither SSH nor any AHP host collapses to one `offline` line
 - loops (as `ag loops`) are read on the same tick but at most every two minutes, a rough overview; the Loops tab's **Refresh** (or `r` there) reads them now, and its countdowns tick between reads;
 - TTS starts **one shared collector per dashboard process**, reusing `ag tts`'s local file readers and remote SSH cursor/reconnect path. It starts with 20 recent lines per selected host and follows continuously, even with no browser open. Each browser reads the shared stream over authenticated SSE—not another set of SSH tails. This is the **speech-request text feed**, not an audio player or proof that a request played;
 - the merged media sync (`ag sync`: images and shared audio) runs in the background every `dash.image_refresh_seconds` (default 300) while the dash is running; `--no-images` / `--no-audio` (`dash.audio`) serve that pathway's existing cache only. The Images and Audio tabs embed the same viewers as `ag image` / `ag audio`; `/audio/*` streams with HTTP ranges so clips can seek, and a sync never reloads the player while a clip is playing. See [fleet audio](../docs/ag-audio.md);
-- canvases (as `ag canvas pull`) are listed on every node every `dash.canvas_refresh_seconds` (default 300) and only changed ones are exported; `--no-canvases` (`dash.canvases`) serves the existing cache. The tab reloads its viewer only when a pull rendered something, and **Pull now** lists immediately.
+- canvases (as `ag canvas pull`) **follow the gateway's change stream** (`/v1/fleet/stream`): a burst of edits anywhere in the fleet (until 3 s pass quietly, at most 15 s) becomes one pull that exports only what changed, so boards update within seconds. `dash.canvas_refresh_seconds` (default 300) remains a backstop; the stream reconnects with backoff, and its state shows in the status line (`live`) and `/api/state` (`canvases.live`). The open viewer is updated in place (filters, scroll and an open board keep their place). `--no-canvases` (`dash.canvases`) serves the existing cache; **Pull now** lists immediately.
 
 Each view has a bookmarkable link: `#choices`, `#health`, `#loops`, `#tts`, `#images`, `#audio`, `#canvases`, and `#choices/<host>/<request id>` for one question (selected once it is listed; clicking or `j`/`k` updates it). Tab switches add browser history, so Back returns to the previous view.
 
@@ -300,45 +300,51 @@ The generated page embeds only local metadata and image paths; it loads no CDN a
 
 ## Fleet canvases (`ag canvas`)
 
-`ag canvas` shows what every node's [Cursive](https://github.com/harryaskham/tools/tree/main/cli/cursive) boards show. **This machine's `cursive` does all the work**, reaching each node with `cursive --remote` (the user's own SSH, with Cursive's ControlMaster reuse; no service, port or token):
+`ag canvas` shows what every node's [Cursive](https://github.com/harryaskham/tools/tree/main/cli/cursive) boards show. **A Cursive daemon that knows the fleet does the work over HTTP** (the gateway, `canvases.gateway`; by default this machine's own daemon on `127.0.0.1:7685`, which Helsinki runs):
 
-1. one cheap `cursive --json history --list` per node (13–55 ms on the fleet; paged at 200, the newest `canvases.max_per_host`);
-2. `cursive export ID --format svg` **only for canvases whose revision changed** (or whose render is missing or failed, or the theme changed; `--force` re-exports all);
+1. `GET /v1/info` and one `GET /v1/fleet/canvases` per pull: every fleet node's canvases with their revisions, including nodes `ag` is not configured for (the gateway knows Collective's fleet). When that listing may be truncated (200 rows), each node is paged instead.
+2. `GET /v1/hosts/NODE/canvases/ID/export?format=svg` **only for canvases whose revision changed** (or whose render is missing or failed, or the theme changed; `--force` re-exports all).
 3. the renders, a manifest per node and one private viewer in `~/.cache/ag/canvases`.
 
-The node's own Cursive renders, so `ag` never interprets canvas objects and every board looks as Cursive draws it. SVG export needs **Cursive 0.5.0** on the node: the themed vector export keeps text real (searchable, any Unicode) and zooms crisply. A node with an older Cursive renders PNG instead (one refused SVG attempt, then PNG; SVG is tried again after six hours) and says so in its status. An unreachable node keeps its cached renders and is reported as `unavailable` (CLI exit 3). A failed export keeps the previous render, shown with the revision it drew, and is retried on the next pull.
+The node's own Cursive renders, so `ag` never interprets canvas objects and every board looks as Cursive draws it. `/export` is Cursive **0.7.0**; a daemon from 0.6 answers through its `cursive_export` tool, which carries SVG up to 3 MiB.
 
-The viewer is a wall of boards at their true aspect, newest first: node and id, `r<revision> · objects · age`, and the text drawn on the board. A thin accent edge marks boards changed in the last pull, a warning edge stale renders. Search covers node, id, Cursive's cached OCR preview and the text on each canvas (from the SVG; PNG fallbacks only have id and OCR). Click a board for a full-viewport viewer: wheel zooms around the pointer, drag pans, `0` fits, `1` is actual size, ←/→ browse, and the footer shows the exact command to open that board (`cursive --remote=… canvas ID`). The page is private and static, like the gallery: strict CSP, escaped embedded manifest, text-only DOM, no network.
+**SSH is the fallback, not the transport.** A configured node (`hosts[]`) that the gateway cannot reach, or whose old daemon cannot carry an export, is tried with this machine's `cursive --remote` over SSH (`canvases.ssh_fallback`, default on). Nodes known only from the fleet never use SSH; a sleeping one (a phone) is reported quietly as `offline`. When the gateway itself is unreachable, or `canvases.gateway: ""`, every configured node goes over SSH as before (a node whose Cursive predates SVG export renders PNG; SVG is re-probed after six hours). An unreachable configured node keeps its cached renders and is reported as `unavailable` (CLI exit 3). A failed export keeps the previous render, shown with the revision it drew, and is retried on the next pull. The receipt and the viewer say how each node was reached (`daemon`, `ssh`, `local`, `cache`).
+
+The viewer is a wall of boards at their true aspect, newest first: node and id, `r<revision> · objects · age`, and the text drawn on the board. A thin accent edge marks boards changed in the last pull, a warning edge stale renders. Search covers node, id, Cursive's cached OCR preview and the text on each canvas (from the SVG). Click a board for a full-viewport viewer: wheel zooms around the pointer, drag pans, `0` fits, `1` is actual size, ←/→ browse, **Live ↗** opens the board in the gateway's live, editable Cursive web view (`#/NODE/ID`), and the footer shows the command to open it in a terminal. The page is private and static, like the gallery: strict CSP, escaped embedded manifest, text-only DOM, no network.
 
 ```sh
 ag canvas                      # pull changed canvases, open the viewer
-ag canvas pull --json          # the receipt: per-node state, counts, warnings
+ag canvas pull --json          # the receipt: gateway, per-node state and transport
 ag canvas --offline            # rebuild the viewer from the cache
 ag canvas list 'culture parity' -n 20
 ag --host helsinki canvas get yoneda-goal-yoneda-core -o board.svg
+ag --host pocket4 canvas get hipfire -o hipfire.svg   # a fleet-only node, by fleet name
 ```
 
 ```yaml
 canvases:
   enabled: true
-  program: cursive          # this machine's cursive (name or path)
-  format: svg               # svg (PNG fallback on old nodes) or png
+  gateway: http://127.0.0.1:7685   # a Cursive >= 0.6 daemon with the fleet; "" for SSH only
+  # web_url: http://helsinki.miku-owl.ts.net:7685   # browser base for Live links
+  ssh_fallback: true        # configured nodes the gateway cannot serve
+  program: cursive          # this machine's cursive, for SSH
+  format: svg               # svg (PNG fallback on old nodes over SSH) or png
   # theme: nord             # nord, charcoal, paper, terminal; unset: each node's theme
   include_notes: false      # also handwriting notes
   # cache_dir: ~/.cache/ag/canvases
-  timeout_seconds: 60       # one cursive call, SSH included
-  parallelism: 4            # concurrent cursive processes
+  timeout_seconds: 60       # one request or cursive call
+  parallelism: 4            # concurrent exports
   max_per_host: 200
 hosts:
   - name: ms-mac
     address: ms-mac
     username: harryaskham
     cursive:
-      # remote: mac         # a Cursive remote.hosts alias (other program/data dir)
+      # remote: mac         # SSH: a Cursive remote.hosts alias (other program/data dir)
       # enabled: false      # skip this node's canvases
 ```
 
-The default destination is `[username@]address`, or `ssh://[username@]address:port` off port 22. Cursive runs the remote `cursive` through the node's non-interactive shell PATH; if it lives elsewhere, define a Cursive `remote.hosts` alias with `program:` and set `hosts[].cursive.remote` to it. `ag dash` (and its Home Manager service) needs `cursive` on its own PATH or `canvases.program`. Each call is bounded (4 MiB listing, 80 MiB render) with a deadline, killed on cancellation. `canvas-acceptance.json` maps the contract to tests.
+`web_url` defaults to the gateway; for a loopback gateway the viewer served by `ag dash` uses its own host name on the gateway's port, so links work from other tailnet machines. The daemon has no authentication: keep it (and `gateway`) on loopback and the tailnet, as Cursive's Home Manager module does. HTTP calls are plain HTTP/1.0, bounded (4 MiB listing, 80 MiB render) with a deadline. For SSH, the default destination is `[username@]address`, or `ssh://[username@]address:port` off port 22. `canvas-acceptance.json` maps the contract to tests.
 
 ## Runtime speech mute
 

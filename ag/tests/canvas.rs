@@ -118,6 +118,8 @@ impl Fleet {
         Config {
             hosts,
             canvases: CanvasConfig {
+                // SSH-path tests: never reach this machine's real daemon.
+                gateway: String::new(),
                 program: self.root.join("cursive").to_string_lossy().into(),
                 cache_dir: Some(self.root.join("cache").to_string_lossy().into()),
                 timeout_seconds: 10,
@@ -565,4 +567,709 @@ fn ids_and_configuration_are_validated() {
     assert!(config.validate().is_ok());
     config.dash.canvas_refresh_seconds = 5;
     assert!(config.validate().is_err());
+}
+
+// ---------------------------------------------------------------------------
+// The gateway: an in-process fake Cursive daemon speaking the real HTTP API
+// (`/v1/info`, `/v1/fleet/canvases`, `/v1/[hosts/NODE/]canvases`,
+// `…/canvases/ID/export`, `…/call/cursive_export`, `/v1/fleet/stream`).
+
+#[derive(Default)]
+struct Gateway {
+    name: String,
+    peers: Vec<String>,
+    /// Nodes whose daemon is down (the gateway cannot reach them).
+    offline: std::collections::HashSet<String>,
+    /// node → canvas summaries (`body`, `svg_revision` are fake-only).
+    canvases: std::collections::BTreeMap<String, Vec<Value>>,
+    /// Daemons before Cursive 0.7: no `/export`.
+    old: std::collections::HashSet<String>,
+    /// Canvas ids whose SVG exceeds the tool's 3 MiB.
+    big: std::collections::HashSet<String>,
+    log: Vec<String>,
+}
+type Shared = std::sync::Arc<std::sync::Mutex<Gateway>>;
+struct FakeGateway {
+    url: String,
+    state: Shared,
+    changes: tokio::sync::broadcast::Sender<String>,
+    _runtime: std::thread::JoinHandle<()>,
+}
+fn envelope_error(message: &str) -> Value {
+    json!({"status":"error","meta":{"schema_version":1},"error":{"category":"target_not_found","code":"not_found","message":message}})
+}
+fn svg_of(canvas: &Value, theme: Option<&str>) -> String {
+    let rev = canvas
+        .get("svg_revision")
+        .unwrap_or(&canvas["revision"])
+        .clone();
+    let body = canvas["body"]
+        .as_str()
+        .unwrap_or(canvas["id"].as_str().unwrap());
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" data-cursive-canvas=\"{}\" data-cursive-revision=\"{rev}\" data-theme=\"{}\"><text>{body}</text></svg>\n",
+        canvas["id"].as_str().unwrap(),
+        theme.unwrap_or("default")
+    )
+}
+async fn fake_daemon(
+    axum::extract::State((state, changes)): axum::extract::State<(
+        Shared,
+        tokio::sync::broadcast::Sender<String>,
+    )>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let path = uri.path().to_owned();
+    let query: std::collections::HashMap<String, String> = uri
+        .query()
+        .unwrap_or("")
+        .split('&')
+        .filter_map(|p| p.split_once('=').map(|(k, v)| (k.to_owned(), v.to_owned())))
+        .collect();
+    let json_reply = |status: u16, value: Value| {
+        (
+            axum::http::StatusCode::from_u16(status).unwrap(),
+            [("content-type", "application/json")],
+            value.to_string(),
+        )
+            .into_response()
+    };
+    if path == "/v1/fleet/stream" {
+        let rx = changes.subscribe();
+        let head = futures_util::stream::once(async {
+            Ok::<_, std::io::Error>(axum::body::Bytes::from(
+                "retry: 2000\n\nevent: hello\ndata: {\"fleet\":true}\n\n",
+            ))
+        });
+        let tail = futures_util::stream::unfold(rx, |mut rx| async move {
+            let data = rx.recv().await.ok()?;
+            Some((
+                Ok(axum::body::Bytes::from(format!(
+                    "event: change\ndata: {data}\n\n"
+                ))),
+                rx,
+            ))
+        });
+        use futures_util::StreamExt;
+        return (
+            [("content-type", "text/event-stream")],
+            axum::body::Body::from_stream(head.chain(tail)),
+        )
+            .into_response();
+    }
+    let mut g = state.lock().unwrap();
+    g.log.push(format!("{method} {}", uri));
+    let rest = path.strip_prefix("/v1/").unwrap_or("").to_owned();
+    if rest == "info" {
+        return json_reply(
+            200,
+            json!({"name":g.name,"version":"0.7.0","web":true,"peers":g.peers}),
+        );
+    }
+    if rest == "fleet/canvases" {
+        let limit: usize = query
+            .get("limit")
+            .and_then(|l| l.parse().ok())
+            .unwrap_or(100);
+        let mut all = vec![];
+        let mut hosts = serde_json::Map::new();
+        for node in std::iter::once(g.name.clone()).chain(g.peers.clone()) {
+            if g.offline.contains(&node) {
+                hosts.insert(node.clone(), json!({"online":false,"error":format!("cursive daemon at http://{node}:7685: Connection refused")}));
+                continue;
+            }
+            hosts.insert(node.clone(), json!({"online":true}));
+            for c in g.canvases.get(&node).cloned().unwrap_or_default() {
+                let mut row = c.clone();
+                row["host"] = node.clone().into();
+                all.push(row);
+            }
+        }
+        all.sort_by(|a, b| b["updated_ms"].as_u64().cmp(&a["updated_ms"].as_u64()));
+        all.truncate(limit);
+        return json_reply(200, json!({"name":g.name,"canvases":all,"hosts":hosts}));
+    }
+    let (node, rest) = match rest.strip_prefix("hosts/") {
+        Some(r) => {
+            let (node, rest) = r.split_once('/').unwrap_or((r, ""));
+            (node.to_owned(), rest.to_owned())
+        }
+        None => (g.name.clone(), rest),
+    };
+    if g.offline.contains(&node) {
+        return json_reply(
+            502,
+            envelope_error(&format!(
+                "cursive daemon at http://{node}:7685: Connection refused"
+            )),
+        );
+    }
+    let canvases = g.canvases.get(&node).cloned().unwrap_or_default();
+    let parts: Vec<&str> = rest.split('/').collect();
+    match (method.as_str(), parts.as_slice()) {
+        ("GET", ["canvases"]) => {
+            let limit: usize = query
+                .get("limit")
+                .and_then(|l| l.parse().ok())
+                .unwrap_or(50);
+            let offset: usize = query
+                .get("offset")
+                .and_then(|l| l.parse().ok())
+                .unwrap_or(0);
+            let mut rows = canvases.clone();
+            rows.sort_by(|a, b| b["updated_ms"].as_u64().cmp(&a["updated_ms"].as_u64()));
+            let page: Vec<Value> = rows.into_iter().skip(offset).take(limit).collect();
+            json_reply(200, Value::Array(page))
+        }
+        ("GET", ["canvases", id, "export"]) => {
+            if g.old.contains(&node) {
+                return json_reply(
+                    404,
+                    envelope_error(&format!("no such endpoint GET /v1/canvases/{id}/export")),
+                );
+            }
+            let Some(canvas) = canvases.iter().find(|c| c["id"] == *id) else {
+                return json_reply(404, envelope_error(&format!("canvas '{id}' not found")));
+            };
+            let rev = canvas
+                .get("svg_revision")
+                .unwrap_or(&canvas["revision"])
+                .to_string();
+            (
+                [
+                    ("content-type", "image/svg+xml"),
+                    ("x-cursive-revision", rev.as_str()),
+                ],
+                svg_of(canvas, query.get("theme").map(String::as_str)),
+            )
+                .into_response()
+        }
+        ("POST", ["call", "cursive_export"]) => {
+            let input: Value = serde_json::from_slice(&body).unwrap();
+            let id = input["canvas"].as_str().unwrap();
+            if g.big.contains(id) {
+                return json_reply(
+                    200,
+                    envelope_error(
+                        "MCP export exceeds 3 MiB; use a smaller region or CLI export to a file",
+                    ),
+                );
+            }
+            let canvas = canvases.iter().find(|c| c["id"] == id).unwrap();
+            json_reply(
+                200,
+                json!({"status":"success","meta":{"schema_version":1},"data":{
+                "canvas":id,"revision":canvas["revision"],"mime":"image/svg+xml","encoding":"utf-8",
+                "data":svg_of(canvas, input["theme"].as_str())}}),
+            )
+        }
+        _ => json_reply(
+            404,
+            envelope_error(&format!("no such endpoint {method} /v1/{rest}")),
+        ),
+    }
+}
+impl FakeGateway {
+    fn start(state: Gateway) -> Self {
+        let state: Shared = std::sync::Arc::new(std::sync::Mutex::new(state));
+        let (changes, _) = tokio::sync::broadcast::channel(64);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let shared = (state.clone(), changes.clone());
+        let runtime = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async move {
+                    let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                    let app = axum::Router::new().fallback(fake_daemon).with_state(shared);
+                    axum::serve(listener, app).await.unwrap();
+                });
+        });
+        Self {
+            url,
+            state,
+            changes,
+            _runtime: runtime,
+        }
+    }
+    fn log(&self) -> Vec<String> {
+        self.state.lock().unwrap().log.clone()
+    }
+    fn clear(&self) {
+        self.state.lock().unwrap().log.clear();
+    }
+    fn exports(&self) -> Vec<String> {
+        self.log()
+            .into_iter()
+            .filter(|l| l.contains("/export") || l.contains("cursive_export"))
+            .collect()
+    }
+    fn set(&self, node: &str, canvases: Vec<Value>) {
+        self.state
+            .lock()
+            .unwrap()
+            .canvases
+            .insert(node.into(), canvases);
+    }
+}
+fn with_gateway(fleet: &Fleet, gateway: &FakeGateway, hosts: Vec<Host>) -> Config {
+    let mut config = fleet.config(hosts);
+    config.canvases.gateway = gateway.url.clone();
+    config
+}
+fn board(id: &str, revision: u64, updated_ms: u64, body: &str) -> Value {
+    json!({"id":id,"kind":"canvas","revision":revision,"objects":2,"updated_ms":updated_ms,"text":null,"body":body})
+}
+
+#[test]
+fn the_gateway_lists_the_fleet_and_serves_only_changes_over_http() {
+    let fleet = Fleet::new();
+    let gateway = FakeGateway::start(Gateway {
+        name: "hub".into(),
+        peers: vec!["mac".into(), "phone".into()],
+        offline: ["phone".to_owned()].into(),
+        ..Gateway::default()
+    });
+    gateway.set("hub", vec![board("plan", 3, 300, "Hub plan")]);
+    gateway.set(
+        "mac",
+        vec![board("board", 5, 200, "Mac board"), {
+            let mut note = board("scratch", 1, 100, "note");
+            note["kind"] = "note".into();
+            note
+        }],
+    );
+    // Only mac is configured; hub and phone come from the fleet.
+    let mut config = with_gateway(&fleet, &gateway, vec![remote("mac", "ms-mac", Some("u"))]);
+    config.canvases.theme = Some("paper".into());
+    let service = fleet.service(config);
+    let receipt = fleet.pull(&service, false);
+    assert!(fleet.log().is_empty(), "no SSH: {:?}", fleet.log());
+    let g = &receipt.gateway;
+    assert_eq!(
+        (g.state.as_str(), g.name.as_deref(), g.hosts, g.hosts_online),
+        ("live", Some("hub"), 3, 2)
+    );
+    assert!(g.loopback && g.web.as_deref() == Some(gateway.url.as_str()));
+    let host = |name: &str| {
+        receipt
+            .hosts
+            .iter()
+            .find(|h| h.host == name)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        (host("hub").via.as_str(), host("hub").state.as_str()),
+        ("daemon", "synced")
+    );
+    assert_eq!(
+        (host("mac").via.as_str(), host("mac").canvases),
+        ("daemon", 1),
+        "notes skipped"
+    );
+    let phone = host("phone");
+    assert_eq!(
+        (phone.state.as_str(), phone.warnings.len()),
+        ("offline", 0),
+        "a sleeping fleet node is quiet"
+    );
+    assert_eq!(receipt.rendered, 2);
+    let mut exports = gateway.exports();
+    exports.sort();
+    assert_eq!(
+        exports,
+        [
+            "GET /v1/canvases/plan/export?format=svg&theme=paper",
+            "GET /v1/hosts/mac/canvases/board/export?format=svg&theme=paper",
+        ]
+    );
+    assert!(
+        !gateway
+            .log()
+            .iter()
+            .any(|l| l.contains("/canvases?") && !l.contains("/fleet/")),
+        "one fleet listing, no paging: {:?}",
+        gateway.log()
+    );
+    let index = manifest(&receipt.index);
+    assert_eq!(index["gateway"]["state"], "live");
+    let plan = index["canvases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "plan")
+        .unwrap()
+        .clone();
+    assert_eq!(plan["live"], "#/hub/plan");
+    assert_eq!(plan["text"], "Hub plan");
+    let file = receipt
+        .cache_dir
+        .join(plan["src"].as_str().unwrap().split('?').next().unwrap());
+    assert!(
+        fs::read_to_string(file)
+            .unwrap()
+            .contains("data-theme=\"paper\"")
+    );
+    let json_copy: Value =
+        serde_json::from_slice(&fs::read(receipt.cache_dir.join("index.json")).unwrap()).unwrap();
+    assert_eq!(
+        json_copy["canvases"].as_array().unwrap().len(),
+        2,
+        "the dash's in-place copy"
+    );
+
+    // Unchanged: one info + one listing, no exports. Changed: just that one.
+    gateway.clear();
+    assert_eq!(fleet.pull(&service, false).rendered, 0);
+    assert_eq!(
+        gateway.log(),
+        ["GET /v1/info", "GET /v1/fleet/canvases?limit=200"]
+    );
+    gateway.set("mac", vec![board("board", 6, 400, "Mac board v6")]);
+    gateway.clear();
+    assert_eq!(fleet.pull(&service, false).rendered, 1);
+    assert_eq!(
+        gateway.exports(),
+        ["GET /v1/hosts/mac/canvases/board/export?format=svg&theme=paper"]
+    );
+
+    // The cache lists fleet-only nodes too, and get works by fleet name.
+    let listed = service.canvas_list(CanvasListInput::default()).unwrap();
+    assert!(
+        listed
+            .canvases
+            .iter()
+            .any(|c| c.host == "hub" && c.live.as_deref() == Some("#/hub/plan"))
+    );
+    let path = service
+        .canvas_render_path(
+            &Selection {
+                hosts: vec!["hub".into()],
+                local: false,
+            },
+            "plan",
+            None,
+        )
+        .unwrap();
+    assert!(path.ends_with("plan.svg"));
+    // Offline rebuilds include the fleet-only nodes from the cache.
+    let offline = service
+        .canvas_pull(CanvasInput {
+            offline: true,
+            confirmed: true,
+            ..CanvasInput::default()
+        })
+        .unwrap();
+    assert!(
+        offline
+            .hosts
+            .iter()
+            .any(|h| h.host == "hub" && h.via == "cache")
+    );
+}
+
+#[test]
+fn old_daemons_use_their_tool_and_oversized_exports_fall_back_to_ssh() {
+    let fleet = Fleet::new();
+    let gateway = FakeGateway::start(Gateway {
+        name: "hub".into(),
+        peers: vec!["mac".into(), "pi".into()],
+        old: ["mac".to_owned(), "pi".to_owned()].into(),
+        big: ["huge".to_owned(), "vast".to_owned()].into(),
+        ..Gateway::default()
+    });
+    gateway.set(
+        "mac",
+        vec![board("small", 1, 30, "small"), board("huge", 2, 20, "huge")],
+    );
+    gateway.set("pi", vec![board("vast", 4, 10, "vast")]);
+    // mac is configured (SSH fallback); pi is fleet-only (no SSH).
+    fleet.state(json!({"u@ms-mac": {"canvases": [board("huge", 2, 20, "huge over ssh")]}}));
+    let service = fleet.service(with_gateway(
+        &fleet,
+        &gateway,
+        vec![remote("mac", "ms-mac", Some("u"))],
+    ));
+    let receipt = fleet.pull(&service, false);
+    let index = manifest(&receipt.index);
+    let find = |id: &str| {
+        index["canvases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert!(
+        gateway
+            .log()
+            .iter()
+            .any(|l| l == "POST /v1/hosts/mac/call/cursive_export"),
+        "old daemon: tool"
+    );
+    assert_eq!(find("small")["rendered_revision"], 1);
+    assert_eq!(find("small")["text"], "small");
+    assert_eq!(
+        find("huge")["text"],
+        "huge over ssh",
+        "beyond the tool: SSH"
+    );
+    assert_eq!(
+        fleet.exports(),
+        [("u@ms-mac".to_owned(), "huge".to_owned(), "svg".to_owned())]
+    );
+    let vast = find("vast");
+    assert!(vast["src"].is_null());
+    assert!(vast["error"].as_str().unwrap().contains("3 MiB"), "{vast}");
+    assert_eq!(
+        fleet.log().iter().filter(|e| e["dest"] == "pi").count(),
+        0,
+        "fleet-only nodes never SSH"
+    );
+}
+
+#[test]
+fn offline_configured_nodes_use_ssh_and_an_unreachable_gateway_means_ssh_only() {
+    let fleet = Fleet::new();
+    let gateway = FakeGateway::start(Gateway {
+        name: "hub".into(),
+        peers: vec!["mac".into()],
+        offline: ["mac".to_owned()].into(),
+        ..Gateway::default()
+    });
+    fleet.state(json!({"u@ms-mac": {"canvases": [board("plan", 2, 10, "over ssh")]}}));
+    let service = fleet.service(with_gateway(
+        &fleet,
+        &gateway,
+        vec![remote("mac", "ms-mac", Some("u"))],
+    ));
+    let receipt = fleet.pull(&service, false);
+    let mac = receipt.hosts.iter().find(|h| h.host == "mac").unwrap();
+    assert_eq!(
+        (mac.via.as_str(), mac.state.as_str(), mac.canvases),
+        ("ssh", "synced", 1)
+    );
+
+    let mut config = fleet.config(vec![remote("mac", "ms-mac", Some("u"))]);
+    config.canvases.gateway = "http://127.0.0.1:9".into();
+    let receipt = fleet.pull(&fleet.service(config), false);
+    assert_eq!(receipt.gateway.state, "unreachable");
+    assert!(receipt.gateway.error.is_some());
+    assert_eq!(
+        receipt.hosts.len(),
+        1,
+        "only configured nodes without a gateway"
+    );
+    assert_eq!(receipt.hosts[0].via, "ssh");
+}
+
+#[test]
+fn a_truncated_fleet_listing_is_paged_per_node_and_a_local_host_is_the_gateways_node() {
+    let fleet = Fleet::new();
+    let gateway = FakeGateway::start(Gateway {
+        name: "hub".into(),
+        peers: vec!["mac".into()],
+        ..Gateway::default()
+    });
+    gateway.set(
+        "hub",
+        (0..150)
+            .map(|i| board(&format!("h{i}"), 1, 1000 + i, "h"))
+            .collect(),
+    );
+    gateway.set(
+        "mac",
+        (0..100)
+            .map(|i| board(&format!("m{i}"), 1, 500 + i, "m"))
+            .collect(),
+    );
+    let local = Host {
+        name: "here".into(),
+        ..Host::local()
+    };
+    let service = fleet.service(with_gateway(&fleet, &gateway, vec![local]));
+    let receipt = fleet.pull(&service, false);
+    assert_eq!(
+        receipt.canvases, 250,
+        "both nodes complete beyond the 200-row fleet listing"
+    );
+    assert!(
+        gateway
+            .log()
+            .iter()
+            .any(|l| l == "GET /v1/canvases?limit=200&offset=0")
+    );
+    assert!(
+        gateway
+            .log()
+            .iter()
+            .any(|l| l == "GET /v1/hosts/mac/canvases?limit=200&offset=0")
+    );
+    let names: Vec<_> = receipt
+        .hosts
+        .iter()
+        .map(|h| (h.host.as_str(), h.via.as_str()))
+        .collect();
+    assert_eq!(
+        names,
+        [("here", "daemon"), ("mac", "daemon")],
+        "the loopback gateway's node is not listed twice"
+    );
+    let index = manifest(&receipt.index);
+    assert!(
+        index["canvases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["host"] == "here" && c["live"] == "#/hub/h0")
+    );
+    assert!(fleet.log().is_empty());
+}
+
+#[test]
+fn the_dash_follows_the_gateway_stream_and_pulls_on_change() {
+    let fleet = Fleet::new();
+    let gateway = FakeGateway::start(Gateway {
+        name: "hub".into(),
+        ..Gateway::default()
+    });
+    gateway.set("hub", vec![board("plan", 1, 10, "first")]);
+    let config = fleet.root.join("ag.yaml");
+    fs::write(
+        &config,
+        format!(
+            "version: 1\nparatenic: {{enabled: false}}\npi_daemon: {{enabled: false, bridge: false}}\ncanvases:\n  gateway: {}\n  cache_dir: {}\n  program: /nonexistent/cursive\nhosts:\n  - name: local\n    local: true\n",
+            gateway.url,
+            fleet.root.join("cache").display()
+        ),
+    )
+    .unwrap();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_ag"))
+        .env("HOME", &fleet.root)
+        .env("XDG_STATE_HOME", fleet.root.join("state"))
+        .args(["--json", "--config"])
+        .arg(&config)
+        .args([
+            "dash",
+            "--no-open",
+            "--no-images",
+            "--no-audio",
+            "--no-tts",
+            "--bind",
+            "127.0.0.1:0",
+            "--canvas-refresh",
+            "3600",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(child.stdout.take().unwrap()),
+        &mut line,
+    )
+    .unwrap();
+    let ready: Value = serde_json::from_str(&line).unwrap();
+    let address = ready["data"]["address"].as_str().unwrap().to_owned();
+    let state = || -> Value {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(&address).unwrap();
+        write!(
+            stream,
+            "GET /api/state HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut text = String::new();
+        stream.read_to_string(&mut text).unwrap();
+        serde_json::from_str(text.split("\r\n\r\n").nth(1).unwrap()).unwrap()
+    };
+    let wait = |what: &str, ok: &dyn Fn(&Value) -> bool| -> Value {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let s = state();
+            if ok(&s) {
+                return s;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{what}: {}",
+                s["canvases"]
+            );
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    };
+    // The startup pull, and the stream followed.
+    let first = wait("first pull", &|s| {
+        s["canvases"]["finished_ms"].is_u64() && s["canvases"]["live"]["state"] == "following"
+    });
+    assert_eq!(first["canvases"]["canvases"], 1);
+    assert_eq!(first["canvases"]["gateway"]["state"], "live");
+    // A change on the stream becomes a pull that renders just that board.
+    gateway.set("hub", vec![board("plan", 2, 20, "second")]);
+    gateway.clear();
+    gateway
+        .changes
+        .send(
+            json!({"host":"hub","canvas":"plan","revision":2,"time_ms":20,"actor":"t"}).to_string(),
+        )
+        .unwrap();
+    let after = wait("pull after a change", &|s| {
+        s["canvases"]["live"]["changes"] == 1
+            && s["canvases"]["finished_ms"].as_u64() > first["canvases"]["finished_ms"].as_u64()
+            && !s["canvases"]["running"].as_bool().unwrap()
+    });
+    assert_eq!(after["canvases"]["rendered"], 1);
+    assert_eq!(
+        gateway.exports(),
+        ["GET /v1/canvases/plan/export?format=svg"]
+    );
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(child.id() as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while child.try_wait().unwrap().is_none() {
+        assert!(std::time::Instant::now() < deadline, "dash did not stop");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_host_named_as_the_gateways_node_wins_over_a_local_host() {
+    let fleet = Fleet::new();
+    let gateway = FakeGateway::start(Gateway {
+        name: "hub".into(),
+        peers: vec!["mac".into()],
+        ..Gateway::default()
+    });
+    gateway.set("hub", vec![board("plan", 1, 10, "hub")]);
+    let local = Host {
+        name: "here".into(),
+        ..Host::local()
+    };
+    let service = fleet.service(with_gateway(
+        &fleet,
+        &gateway,
+        vec![local, remote("hub", "hub", None)],
+    ));
+    let receipt = fleet.pull(&service, false);
+    let names: Vec<_> = receipt
+        .hosts
+        .iter()
+        .map(|h| (h.host.as_str(), h.via.as_str()))
+        .collect();
+    assert_eq!(names, [("hub", "daemon"), ("mac", "daemon")]);
+    assert_eq!(receipt.canvases, 1);
+    assert!(fleet.log().is_empty());
 }

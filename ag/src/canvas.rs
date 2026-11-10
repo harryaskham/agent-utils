@@ -1,13 +1,15 @@
 //! Fleet Cursive canvases: what every node's boards show, in one live view.
 //!
-//! This machine's `cursive` reaches each node with `cursive --remote` (SSH with
-//! ControlMaster reuse, no service or port): a cheap `history --list` per node
-//! and poll, then `export --format svg` only for canvases whose revision
-//! changed. The node's own Cursive renders; ag never interprets canvas
-//! objects. Renders land in a private cache with a per-node manifest and one
-//! generated viewer (also the dash's Canvases tab). Nodes whose Cursive predates
-//! SVG export (0.5.0) fall back to PNG, and a node that cannot be reached keeps
-//! its cached renders.
+//! The gateway (a Cursive >= 0.6 daemon that knows the fleet, by default this
+//! machine's on 127.0.0.1:7685) lists every node's canvases in one HTTP call
+//! and serves `GET /v1/hosts/NODE/canvases/ID/export` (Cursive >= 0.7) for
+//! the ones whose revision changed. Older daemons answer through their
+//! `cursive_export` tool; nodes the gateway cannot reach, or exports beyond an
+//! old daemon, use this machine's `cursive --remote` over SSH. Each node's own
+//! Cursive renders; ag never interprets canvas objects. Renders land in a
+//! private cache with a per-node manifest and one generated viewer (also the
+//! dash's Canvases tab, which follows the gateway's change stream). A node
+//! that cannot be reached keeps its cached renders.
 use crate::{
     Error, Result,
     config::{self, CanvasConfig, CanvasFormat, Config, Host},
@@ -69,6 +71,9 @@ pub struct CanvasHost {
     pub host: String,
     /// synced, cached (offline) or unavailable (cached renders kept).
     pub state: String,
+    /// How this pull reached the node: daemon, ssh, local, cache or none.
+    #[serde(default)]
+    pub via: String,
     pub last_sync_ms: Option<u64>,
     pub canvases: usize,
     /// Exported during this pull (new or changed).
@@ -97,10 +102,30 @@ pub struct CanvasEntry {
     pub text: String,
     /// Command to open this board from here.
     pub open: String,
+    /// The board in the gateway's live web view: a `#/NODE/ID` fragment for
+    /// the manifest's `live` base (None for nodes outside the fleet).
+    pub live: Option<String>,
+    pub error: Option<String>,
+}
+/// The gateway as this pull found it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+pub struct GatewayStatus {
+    pub url: String,
+    /// live, unreachable, off (no gateway configured) or cached (offline).
+    pub state: String,
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub hosts: usize,
+    pub hosts_online: usize,
+    /// Browser base for live links (`web_url`, else the gateway).
+    pub web: Option<String>,
+    /// The gateway is on this machine: a browser elsewhere uses its own host.
+    pub loopback: bool,
     pub error: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CanvasReceipt {
+    pub gateway: GatewayStatus,
     pub index: PathBuf,
     pub cache_dir: PathBuf,
     pub canvases: usize,
@@ -127,6 +152,9 @@ struct HostManifest {
     warnings: Vec<String>,
     /// When this node's cursive last refused `--format svg` (PNG until re-probed).
     svg_unsupported_ms: Option<u64>,
+    /// This node's name in the Cursive fleet, for live links.
+    fleet: Option<String>,
+    via: Option<String>,
     canvases: Vec<Stored>,
 }
 /// How long a node that lacks SVG export renders PNG before SVG is tried again.
@@ -419,18 +447,257 @@ async fn list(config: &CanvasConfig, host: &Host, gate: &Semaphore) -> Result<Ve
                 }
             };
         let full = rows.len() == HISTORY_PAGE;
-        all.extend(
-            rows.into_iter()
-                .filter(|r| r.kind == "canvas" || (config.include_notes && r.kind == "note")),
-        );
-        if !full || all.len() >= config.max_per_host {
+        all.extend(rows);
+        if !full || keep(config, all.clone()).len() >= config.max_per_host {
             break;
         }
     }
-    all.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms).then(a.id.cmp(&b.id)));
-    all.dedup_by(|a, b| a.id == b.id);
-    all.truncate(config.max_per_host);
-    Ok(all)
+    Ok(keep(config, all))
+}
+/// Canvases (and notes when wanted), newest first, unique, at most `max_per_host`.
+fn keep(config: &CanvasConfig, rows: Vec<Summary>) -> Vec<Summary> {
+    let mut rows: Vec<Summary> = rows
+        .into_iter()
+        .filter(|r| r.kind == "canvas" || (config.include_notes && r.kind == "note"))
+        .collect();
+    rows.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms).then(a.id.cmp(&b.id)));
+    rows.dedup_by(|a, b| a.id == b.id);
+    rows.truncate(config.max_per_host);
+    rows
+}
+
+/// How one pull reaches one node.
+#[derive(Clone, Debug)]
+enum Via {
+    /// `cursive [--remote]` (SSH, or the local CLI for local hosts).
+    Ssh,
+    /// The gateway: `base` is its `/v1` for its own node, else
+    /// `/v1/hosts/NODE`. `listed` is this node's part of the fleet listing
+    /// (None when that listing may be truncated: page the node). `ssh` allows
+    /// SSH when the daemon cannot serve an export.
+    Daemon {
+        base: String,
+        listed: Option<Vec<Summary>>,
+        ssh: bool,
+    },
+    /// Neither the gateway nor SSH: keep the cache and report why. `quiet`
+    /// for nodes known only from the fleet (phones that sleep, say): offline,
+    /// not a fault.
+    Unreachable { reason: String, quiet: bool },
+}
+impl Via {
+    fn name(&self, host: &Host) -> &'static str {
+        match self {
+            Self::Ssh if host.local => "local",
+            Self::Ssh => "ssh",
+            Self::Daemon { .. } => "daemon",
+            Self::Unreachable { .. } => "none",
+        }
+    }
+}
+/// `GET /v1/info` of a daemon.
+#[derive(Deserialize)]
+struct Info {
+    name: String,
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    peers: Vec<String>,
+}
+/// `GET /v1/fleet/canvases`.
+#[derive(Deserialize)]
+struct FleetCanvases {
+    #[serde(default)]
+    canvases: Vec<FleetSummary>,
+    #[serde(default)]
+    hosts: std::collections::BTreeMap<String, FleetHost>,
+}
+#[derive(Deserialize)]
+struct FleetSummary {
+    host: String,
+    #[serde(flatten)]
+    summary: Summary,
+}
+#[derive(Deserialize, Default)]
+struct FleetHost {
+    #[serde(default)]
+    online: bool,
+    #[serde(default)]
+    error: Option<String>,
+}
+/// The gateway's fleet listing limit: a full page may be truncated.
+const FLEET_PAGE: usize = 200;
+const GATEWAY_INFO_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// One node's canvases from its daemon, paged.
+async fn list_daemon(config: &CanvasConfig, base: &str, gate: &Semaphore) -> Result<Vec<Summary>> {
+    let mut all = vec![];
+    for page in 0..50 {
+        let rows: Vec<Summary> = {
+            let _permit = gate
+                .acquire()
+                .await
+                .map_err(|e| Error::Transport(e.to_string()))?;
+            crate::http::get_json(
+                &format!(
+                    "{base}/canvases?limit={HISTORY_PAGE}&offset={}",
+                    page * HISTORY_PAGE
+                ),
+                MAX_LIST_BYTES,
+                Duration::from_secs(config.timeout_seconds),
+            )
+            .await?
+        };
+        let full = rows.len() == HISTORY_PAGE;
+        all.extend(rows);
+        if !full || keep(config, all.clone()).len() >= config.max_per_host {
+            break;
+        }
+    }
+    Ok(keep(config, all))
+}
+async fn list_via(
+    config: &CanvasConfig,
+    host: &Host,
+    via: &Via,
+    gate: &Semaphore,
+) -> Result<Vec<Summary>> {
+    match via {
+        Via::Ssh => list(config, host, gate).await,
+        Via::Daemon {
+            listed: Some(rows), ..
+        } => Ok(keep(config, rows.clone())),
+        Via::Daemon { base, .. } => list_daemon(config, base, gate).await,
+        Via::Unreachable { reason, .. } => Err(Error::Transport(reason.clone())),
+    }
+}
+fn percent(text: &str) -> String {
+    text.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+                char::from(b).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+/// An export from the daemon. `Err((error, true))` means SSH may still
+/// succeed: the daemon is unreachable, predates `/export` for this format, or
+/// its tool cannot carry this export.
+async fn export_daemon(
+    config: &CanvasConfig,
+    base: &str,
+    id: &str,
+    format: CanvasFormat,
+    gate: &Semaphore,
+) -> std::result::Result<Render, (Error, bool)> {
+    let timeout = Duration::from_secs(config.timeout_seconds);
+    let theme = (format == CanvasFormat::Svg)
+        .then_some(config.theme.as_deref())
+        .flatten();
+    let mut url = format!("{base}/canvases/{id}/export?format={}", format.name());
+    if let Some(theme) = theme {
+        url.push_str(&format!("&theme={}", percent(theme)));
+    }
+    let _permit = gate
+        .acquire()
+        .await
+        .map_err(|e| (Error::Transport(e.to_string()), false))?;
+    let reply = crate::http::request("GET", &url, None, &[], MAX_RENDER_BYTES, timeout)
+        .await
+        .map_err(|e| (e, true))?;
+    if reply.status == 200 {
+        let header_revision = reply
+            .header("x-cursive-revision")
+            .and_then(|r| r.parse().ok());
+        let mut render = check(reply.body, format).map_err(|e| (e, false))?;
+        render.revision = render.revision.or(header_revision);
+        return Ok(render);
+    }
+    let message = crate::http::error_message(&reply.body).unwrap_or_default();
+    if !(reply.status == 404 && message.starts_with("no such endpoint")) {
+        // 5xx is the gateway failing to reach the node.
+        return Err((
+            Error::Transport(bounded(
+                &format!("daemon export: HTTP {} {message}", reply.status),
+                MAX_WARNING_CHARS,
+            )),
+            reply.status >= 500,
+        ));
+    }
+    // A daemon before Cursive 0.7: its tool carries SVG text up to 3 MiB.
+    if format != CanvasFormat::Svg {
+        return Err((
+            Error::Transport("the daemon predates /export (Cursive 0.7); PNG needs SSH".into()),
+            true,
+        ));
+    }
+    let mut input = serde_json::json!({"canvas": id, "format": "svg"});
+    if let Some(theme) = theme {
+        input["theme"] = theme.into();
+    }
+    let body = serde_json::to_vec(&input).map_err(|e| (e.into(), false))?;
+    let reply = crate::http::request(
+        "POST",
+        &format!("{base}/call/cursive_export"),
+        Some(&body),
+        &[],
+        MAX_RENDER_BYTES,
+        timeout,
+    )
+    .await
+    .map_err(|e| (e, true))?;
+    match serde_json::from_slice::<mcp_cli::JsonEnvelope<serde_json::Value>>(&reply.body) {
+        Ok(mcp_cli::JsonEnvelope::Success { data, .. }) => {
+            let svg = data["data"]
+                .as_str()
+                .unwrap_or_default()
+                .as_bytes()
+                .to_vec();
+            check(svg, format).map_err(|e| (e, false))
+        }
+        Ok(mcp_cli::JsonEnvelope::Error { error, .. }) => Err((
+            Error::Transport(bounded(&error.message, MAX_WARNING_CHARS)),
+            error.message.contains("MiB"),
+        )),
+        Err(error) => Err((
+            Error::Transport(format!(
+                "daemon export tool: HTTP {}: {error}",
+                reply.status
+            )),
+            true,
+        )),
+    }
+}
+async fn export_via(
+    config: &CanvasConfig,
+    host: &Host,
+    id: &str,
+    format: CanvasFormat,
+    gate: &Semaphore,
+    via: &Via,
+) -> std::result::Result<Render, (Error, bool)> {
+    match via {
+        Via::Daemon { base, ssh, .. } => {
+            match export_daemon(config, base, id, format, gate).await {
+                Err((error, true)) if *ssh => export(config, host, id, format, gate).await.map_err(
+                    |(ssh_error, unsupported)| {
+                        (
+                            Error::Transport(bounded(
+                                &format!("{error}; ssh: {ssh_error}"),
+                                MAX_WARNING_CHARS,
+                            )),
+                            unsupported,
+                        )
+                    },
+                ),
+                // Not an SVG refusal: that probe is about an old CLI over SSH.
+                other => other.map_err(|(error, _)| (error, false)),
+            }
+        }
+        _ => export(config, host, id, format, gate).await,
+    }
 }
 
 /// The rendered document, its revision (SVG names the one it drew) and text.
@@ -600,34 +867,50 @@ fn entries(
                 ocr: s.ocr.clone(),
                 text: s.text.clone(),
                 open: open_command(&config.program, host, &s.id),
+                live: manifest
+                    .fleet
+                    .as_ref()
+                    .map(|node| format!("#/{}/{}", percent(node), percent(&s.id))),
                 error: s.error.clone(),
             }
         })
         .collect()
 }
 
+/// One node in a pull: its configuration, transport and fleet name.
+struct Job {
+    host: Host,
+    via: Via,
+    fleet: Option<String>,
+}
 /// Pull one node: list, export what changed, prune what disappeared.
 async fn pull_host(
     config: Config,
-    host: Host,
+    job: Job,
     root: PathBuf,
     offline: bool,
     force: bool,
     gate: Arc<Semaphore>,
 ) -> Result<HostResult> {
+    let Job { host, via, fleet } = job;
     let key = host_key(&host);
     let directory = root.join("hosts").join(&key);
     private_dir(&directory)?;
     let mut manifest = read_manifest(&directory);
     manifest.version = 1;
     manifest.host = host.name.clone();
+    if !offline {
+        manifest.fleet = fleet;
+        manifest.via = Some(via.name(&host).into());
+    }
     let canvas = &config.canvases;
     let mut rendered = 0;
     let mut warnings = vec![];
     let state = if offline {
         "cached"
     } else {
-        match list(canvas, &host, &gate).await {
+        match list_via(canvas, &host, &via, &gate).await {
+            Err(_) if matches!(via, Via::Unreachable { quiet: true, .. }) => "offline",
             Err(error) => {
                 warnings.push(bounded(&error.to_string(), MAX_WARNING_CHARS));
                 "unavailable"
@@ -679,7 +962,8 @@ async fn pull_host(
                         next.push(stored);
                         continue;
                     }
-                    let mut result = export(canvas, &host, &summary.id, format, &gate).await;
+                    let mut result =
+                        export_via(canvas, &host, &summary.id, format, &gate, &via).await;
                     if let Err((_, true)) = &result {
                         warnings.push(
                             "cursive on this node predates SVG export (0.5.0); rendering PNG"
@@ -687,7 +971,7 @@ async fn pull_host(
                         );
                         manifest.svg_unsupported_ms = Some(now_ms());
                         format = CanvasFormat::Png;
-                        result = export(canvas, &host, &summary.id, format, &gate).await;
+                        result = export_via(canvas, &host, &summary.id, format, &gate, &via).await;
                     } else if result.is_ok() && format == CanvasFormat::Svg {
                         manifest.svg_unsupported_ms = None;
                     }
@@ -762,6 +1046,11 @@ async fn pull_host(
         status: CanvasHost {
             host: host.name.clone(),
             state: state.into(),
+            via: if offline {
+                "cache".into()
+            } else {
+                via.name(&host).into()
+            },
             last_sync_ms: manifest.last_sync_ms,
             canvases: entries.len(),
             rendered,
@@ -775,6 +1064,7 @@ async fn pull_host(
 struct Manifest<'a> {
     version: u32,
     pulled_ms: u64,
+    gateway: &'a GatewayStatus,
     canvases: &'a [CanvasEntry],
     hosts: &'a [CanvasHost],
 }
@@ -788,10 +1078,177 @@ fn write_index(root: &Path, manifest: &Manifest<'_>) -> Result<PathBuf> {
     let encoded = json.replace('<', "\\u003c").replace('&', "\\u0026");
     let index = root.join("index.html");
     atomic(&index, PAGE.replace("__MANIFEST__", &encoded).as_bytes())?;
+    // The dash updates an open viewer in place from this copy.
+    atomic(&root.join("index.json"), json.as_bytes())?;
     Ok(index)
 }
 
-async fn pull(config: Config, hosts: Vec<Host>, input: CanvasInput) -> Result<CanvasReceipt> {
+/// Fleet-only nodes the cache knows (pulled from the gateway before).
+fn cached_fleet_hosts(root: &Path, known: &[Host]) -> Vec<Host> {
+    let Ok(dirs) = fs::read_dir(root.join("hosts")) else {
+        return vec![];
+    };
+    let mut found = vec![];
+    for dir in dirs.flatten() {
+        let manifest = read_manifest(&dir.path());
+        if manifest.fleet.is_none() || known.iter().any(|h| h.name == manifest.host) {
+            continue;
+        }
+        let host = fleet_host(&manifest.host);
+        if dir.file_name().to_str() == Some(host_key(&host).as_str()) {
+            found.push(host);
+        }
+    }
+    found.sort_by(|a, b| a.name.cmp(&b.name));
+    found
+}
+/// A node known only from the Cursive fleet.
+fn fleet_host(name: &str) -> Host {
+    Host {
+        name: name.into(),
+        address: name.into(),
+        ..Host::default()
+    }
+}
+
+/// Which nodes this pull covers and how it reaches each: the gateway's info
+/// and fleet listing decide; configured nodes keep SSH as a fallback.
+async fn plan(
+    config: &Config,
+    hosts: Vec<Host>,
+    all: bool,
+) -> (GatewayStatus, Vec<(Host, Via, Option<String>)>) {
+    let canvas = &config.canvases;
+    let hosts: Vec<Host> = hosts.into_iter().filter(enabled).collect();
+    let gw = canvas.gateway.trim_end_matches('/').to_owned();
+    let mut status = GatewayStatus {
+        url: gw.clone(),
+        web: canvas
+            .web_url
+            .clone()
+            .or_else(|| (!gw.is_empty()).then(|| gw.clone())),
+        loopback: !gw.is_empty() && crate::http::loopback(&gw),
+        ..GatewayStatus::default()
+    };
+    let over_ssh = |hosts: Vec<Host>| {
+        hosts
+            .into_iter()
+            .map(|h| (h, Via::Ssh, None))
+            .collect::<Vec<_>>()
+    };
+    if gw.is_empty() {
+        status.state = "off".into();
+        return (status, over_ssh(hosts));
+    }
+    let fail = |mut status: GatewayStatus, error: Error, hosts: Vec<Host>| {
+        status.state = "unreachable".into();
+        status.error = Some(bounded(&error.to_string(), MAX_WARNING_CHARS));
+        (status, over_ssh(hosts))
+    };
+    let info: Info = match crate::http::get_json(
+        &format!("{gw}/v1/info"),
+        MAX_LIST_BYTES,
+        GATEWAY_INFO_TIMEOUT,
+    )
+    .await
+    {
+        Ok(info) => info,
+        Err(error) => return fail(status, error, hosts),
+    };
+    // The gateway asks its peers within its own deadline.
+    let fleet: FleetCanvases = match crate::http::get_json(
+        &format!("{gw}/v1/fleet/canvases?limit={FLEET_PAGE}"),
+        16 * 1024 * 1024,
+        Duration::from_secs(canvas.timeout_seconds),
+    )
+    .await
+    {
+        Ok(fleet) => fleet,
+        Err(error) => return fail(status, error, hosts),
+    };
+    let mut names: Vec<String> = std::iter::once(info.name.clone())
+        .chain(info.peers.iter().cloned())
+        .chain(fleet.hosts.keys().cloned())
+        .collect();
+    names.sort();
+    names.dedup();
+    let online = |node: &str| node == info.name || fleet.hosts.get(node).is_some_and(|h| h.online);
+    status.state = "live".into();
+    status.name = Some(info.name.clone());
+    status.version = Some(info.version.clone());
+    status.hosts = names.len();
+    status.hosts_online = names.iter().filter(|n| online(n)).count();
+    // The listing stops at FLEET_PAGE across the fleet: then page each node.
+    let truncated = fleet.canvases.len() >= FLEET_PAGE;
+    let mut listed: HashMap<String, Vec<Summary>> = HashMap::new();
+    for row in fleet.canvases {
+        listed.entry(row.host).or_default().push(row.summary);
+    }
+    let via = |node: &str, configured: bool, listed: &mut HashMap<String, Vec<Summary>>| {
+        if online(node) {
+            Via::Daemon {
+                base: if node == info.name {
+                    format!("{gw}/v1")
+                } else {
+                    format!("{gw}/v1/hosts/{}", percent(node))
+                },
+                listed: (!truncated).then(|| listed.remove(node).unwrap_or_default()),
+                ssh: configured && canvas.ssh_fallback,
+            }
+        } else if configured && canvas.ssh_fallback {
+            Via::Ssh
+        } else {
+            Via::Unreachable {
+                reason: fleet
+                    .hosts
+                    .get(node)
+                    .and_then(|h| h.error.clone())
+                    .unwrap_or_else(|| "not answering the gateway".into()),
+                quiet: !configured,
+            }
+        }
+    };
+    let mut plan = vec![];
+    let mut covered = std::collections::HashSet::new();
+    // Hosts named as fleet nodes claim them first; then a local host is the
+    // gateway's own node when the gateway runs here and no host claimed it.
+    let (named, rest): (Vec<Host>, Vec<Host>) =
+        hosts.into_iter().partition(|h| names.contains(&h.name));
+    for host in named {
+        if covered.insert(host.name.clone()) {
+            let node = host.name.clone();
+            let via = via(&node, true, &mut listed);
+            plan.push((host, via, Some(node)));
+        }
+    }
+    for host in rest {
+        if host.local && status.loopback && covered.insert(info.name.clone()) {
+            let node = info.name.clone();
+            let via = via(&node, true, &mut listed);
+            plan.push((host, via, Some(node)));
+        } else if host.local && status.loopback {
+            // The gateway's node is already listed under its own name.
+        } else {
+            plan.push((host, Via::Ssh, None));
+        }
+    }
+    if all {
+        for node in &names {
+            if covered.insert(node.clone()) {
+                let via = via(node, false, &mut listed);
+                plan.push((fleet_host(node), via, Some(node.clone())));
+            }
+        }
+    }
+    (status, plan)
+}
+
+async fn pull(
+    config: Config,
+    hosts: Vec<Host>,
+    all: bool,
+    input: CanvasInput,
+) -> Result<CanvasReceipt> {
     let root = cache_root(&config, input.cache_dir.as_ref())?;
     private_dir(&root.join("hosts"))?;
     let lock = OpenOptions::new()
@@ -805,17 +1262,44 @@ async fn pull(config: Config, hosts: Vec<Host>, input: CanvasInput) -> Result<Ca
     let _lock: Flock<File> = Flock::lock(lock, FlockArg::LockExclusiveNonblock)
         .map_err(|_| Error::Invalid("another canvas pull is using this cache".into()))?;
     let started = now_ms();
+    let (gateway, plan) = if input.offline {
+        let mut hosts: Vec<Host> = hosts.into_iter().filter(enabled).collect();
+        if all {
+            let cached = cached_fleet_hosts(&root, &hosts);
+            hosts.extend(cached);
+        }
+        let status = GatewayStatus {
+            url: config.canvases.gateway.clone(),
+            state: "cached".into(),
+            web: config.canvases.web_url.clone().or_else(|| {
+                (!config.canvases.gateway.is_empty()).then(|| config.canvases.gateway.clone())
+            }),
+            loopback: crate::http::loopback(&config.canvases.gateway),
+            ..GatewayStatus::default()
+        };
+        (
+            status,
+            hosts.into_iter().map(|h| (h, Via::Ssh, None)).collect(),
+        )
+    } else {
+        plan(&config, hosts, all).await
+    };
     let gate = Arc::new(Semaphore::new(config.canvases.parallelism));
     let mut jobs = JoinSet::new();
-    for host in hosts.into_iter().filter(enabled) {
+    for (host, via, fleet) in plan {
         let (config, root, gate) = (config.clone(), root.clone(), gate.clone());
         let (offline, force) = (input.offline, input.force);
         jobs.spawn(async move {
             // A fault in one node's pull must not cost the fleet its view:
             // that node keeps its cached renders and reports the fault.
+            let job = Job {
+                host: host.clone(),
+                via,
+                fleet,
+            };
             let pulled = tokio::spawn(pull_host(
                 config.clone(),
-                host.clone(),
+                job,
                 root.clone(),
                 offline,
                 force,
@@ -825,8 +1309,13 @@ async fn pull(config: Config, hosts: Vec<Host>, input: CanvasInput) -> Result<Ca
             match pulled {
                 Ok(result) => result,
                 Err(fault) => {
+                    let job = Job {
+                        host,
+                        via: Via::Ssh,
+                        fleet: None,
+                    };
                     let mut cached =
-                        pull_host(config, host, root, true, false, Arc::new(Semaphore::new(1)))
+                        pull_host(config, job, root, true, false, Arc::new(Semaphore::new(1)))
                             .await?;
                     cached.status.state = "unavailable".into();
                     cached.status.warnings.insert(
@@ -867,11 +1356,13 @@ async fn pull(config: Config, hosts: Vec<Host>, input: CanvasInput) -> Result<Ca
         &Manifest {
             version: 1,
             pulled_ms: started,
+            gateway: &gateway,
             canvases: &canvases,
             hosts: &hosts,
         },
     )?;
     Ok(CanvasReceipt {
+        gateway,
         index,
         cache_dir: root,
         canvases: canvases.len(),
@@ -896,9 +1387,10 @@ impl Service {
                 "canvases are disabled (canvases.enabled: false); --offline reads the cache".into(),
             ));
         }
+        let all = input.selection.hosts.is_empty() && !input.selection.local;
         let hosts = self.hosts(&input.selection)?;
         self.runtime
-            .block_on(pull(self.config.clone(), hosts, input))
+            .block_on(pull(self.config.clone(), hosts, all, input))
     }
     /// Cached canvases (no network): what each node's boards showed at the last pull.
     pub fn canvas_list(&self, input: CanvasListInput) -> Result<CanvasList> {
@@ -906,13 +1398,23 @@ impl Service {
         let query = input.query.as_deref().map(str::to_lowercase);
         let mut canvases = vec![];
         let mut hosts = vec![];
-        for host in self.hosts(&input.selection)?.into_iter().filter(enabled) {
+        let mut selected: Vec<Host> = self
+            .hosts(&input.selection)?
+            .into_iter()
+            .filter(enabled)
+            .collect();
+        if input.selection.hosts.is_empty() && !input.selection.local {
+            let cached = cached_fleet_hosts(&root, &selected);
+            selected.extend(cached);
+        }
+        for host in selected {
             let key = host_key(&host);
             let directory = root.join("hosts").join(&key);
             let manifest = read_manifest(&directory);
             let found = entries(&self.config.canvases, &host, &key, &directory, &manifest);
             hosts.push(CanvasHost {
                 host: host.name.clone(),
+                via: manifest.via.clone().unwrap_or_default(),
                 state: manifest
                     .last_state
                     .clone()
@@ -948,7 +1450,12 @@ impl Service {
         if !valid_id(id) {
             return Err(Error::Invalid("invalid canvas id".into()));
         }
-        let hosts = self.hosts(selection)?;
+        // A node known only from the fleet is addressed by its fleet name.
+        let hosts = match (self.hosts(selection), selection.hosts.as_slice()) {
+            (Ok(hosts), _) => hosts,
+            (Err(_), [name]) if !selection.local => vec![fleet_host(name)],
+            (Err(error), _) => return Err(error),
+        };
         if hosts.len() != 1 {
             return Err(Error::Invalid(
                 "select exactly one --host (or --local)".into(),

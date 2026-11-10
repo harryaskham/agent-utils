@@ -382,28 +382,33 @@ function renderAudio(){
   if(audioFramed&&want&&(audioPaused||audioPlaying())){audioPending=want;renderAudioStatus();return}
   frameAudio(want);
 }
-// Canvases: one pull lists every node and re-exports only changed boards; the
-// framed viewer is reloaded only when a pull rendered something new.
-let canvasFramed=null,canvasPending=null,canvasPaused=false;
+// Canvases: pulls follow the gateway's change stream (and an interval
+// backstop). The viewer is framed once; each newer pull is handed to it in
+// place (filters, scroll and an open board stay put), unless paused.
+let canvasFramed=null,canvasShown=0,canvasPending=null,canvasPaused=false;
 function renderCanvasStatus(){
   const c=data?.canvases;if(!c)return;
-  const bad=(c.hosts||[]).filter(h=>h.state==='unavailable').length;
-  const s=!c.enabled?'canvas polling disabled':c.running?'listing canvases…':c.error?'last pull failed: '+c.error:c.finished_ms?`${c.canvases.toLocaleString()} canvases · ${c.rendered} changed · pulled ${ago(c.finished_ms)} · every ${Math.round(data.canvas_refresh_seconds/60)} min`+(bad?` · ${bad} nodes unreachable`:''):c.available?'cached canvases':'first pull pending';
+  const bad=(c.hosts||[]).filter(h=>h.state==='unavailable').length,g=c.gateway,live=c.live?.state;
+  const stream=live==='following'?'live · ':live==='reconnecting'||live==='connecting'?'stream reconnecting · ':'';
+  const via=g?.state==='unreachable'?' · gateway unreachable, SSH':'';
+  const s=!c.enabled?'canvas polling disabled':c.running&&!c.finished_ms?'listing canvases…':c.error?'last pull failed: '+c.error:c.finished_ms?`${stream}${c.canvases.toLocaleString()} canvases · ${c.rendered} changed · pulled ${ago(c.finished_ms)}${via}`+(bad?` · ${bad} nodes unreachable`:''):c.available?'cached canvases':'first pull pending';
   const note=canvasPaused?(canvasPending?'auto-refresh paused · newer canvases waiting · ':'auto-refresh paused · '):'';
   $('canstatus').textContent=note+s;$('canstatus').classList.toggle('paused',canvasPaused);
   $('canpull').disabled=!c.enabled||c.running;$('canreload').hidden=!canvasPending;pauseButton('canpause',canvasPaused);
 }
 function frameCanvases(want){canvasFramed=want;canvasPending=null;const c=data?.canvases;
   $('canframe').replaceChildren(want?el('iframe',{src:want,title:'Fleet canvases'}):el('div',{class:'empty'},el('strong',{text:c?.enabled?'No canvases yet':'Canvas polling is disabled'}),c?.enabled?'The first pull is running in the background.':''));renderCanvasStatus()}
-let canvasVersion=0;
+async function pushCanvases(version){canvasShown=version;canvasPending=null;renderCanvasStatus();
+  try{const r=await fetch('/canvases/index.json?v='+version,{cache:'no-store'});if(!r.ok)return;const manifest=await r.json();
+    $('canframe').querySelector('iframe')?.contentWindow?.postMessage({type:'ag-canvases',manifest},location.origin)}catch{}}
 function renderCanvases(){
   const c=data?.canvases;if(!c)return;renderCanvasStatus();
-  // A new viewer only when a pull changed something (or on first load).
-  if(c.finished_ms&&(c.rendered>0||!canvasVersion))canvasVersion=c.finished_ms;
-  const want=c.available?'/canvases/index.html?v='+canvasVersion:null;
-  if(want===canvasFramed||want===canvasPending)return;
-  if(canvasPaused&&canvasFramed&&want){canvasPending=want;renderCanvasStatus();return}
-  frameCanvases(want);
+  if(!c.available){if(canvasFramed!==null||!$('canframe').firstChild)frameCanvases(null);return}
+  const version=c.finished_ms||0;
+  if(!canvasFramed){canvasShown=version;frameCanvases('/canvases/index.html?v='+version);return}
+  if(version===canvasShown||version===canvasPending)return;
+  if(canvasPaused){canvasPending=version;renderCanvasStatus();return}
+  pushCanvases(version);
 }
 const views=['choices','health','loops','tts','images','audio','canvases'];
 function show(name){tab=name;for(const t of views){$('tab-'+t).setAttribute('aria-selected',String(t===name));$(t).hidden=t!==name}window.agTts?.visibility(name==='tts')}
@@ -420,8 +425,8 @@ $('pull').onclick=()=>api('/api/refresh',{what:['images']}).then(()=>setTimeout(
 $('audpull').onclick=()=>api('/api/refresh',{what:['audio']}).then(()=>setTimeout(poll,300)).catch(()=>{});
 $('audreload').onclick=()=>{if(audioPending)frameAudio(audioPending)};
 $('canpull').onclick=()=>api('/api/refresh',{what:['canvases']}).then(()=>setTimeout(poll,300)).catch(()=>{});
-$('canreload').onclick=()=>{if(canvasPending)frameCanvases(canvasPending)};
-$('canpause').onclick=()=>{canvasPaused=!canvasPaused;if(!canvasPaused&&canvasPending)frameCanvases(canvasPending);else renderCanvasStatus()};
+$('canreload').onclick=()=>{if(canvasPending)pushCanvases(canvasPending)};
+$('canpause').onclick=()=>{canvasPaused=!canvasPaused;if(!canvasPaused&&canvasPending)pushCanvases(canvasPending);else renderCanvasStatus()};
 $('imgreload').onclick=()=>{if(imagesPending)frameImages(imagesPending)};
 $('imgpause').onclick=()=>{imagesPaused=!imagesPaused;if(!imagesPaused&&imagesPending)frameImages(imagesPending);else renderImagesStatus()};
 $('audpause').onclick=()=>{audioPaused=!audioPaused;applyPendingAudio();renderAudioStatus()};
