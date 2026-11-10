@@ -146,7 +146,7 @@
             echo 'export * from "./extensions/durable/voice.mjs";' > $out/voice.mjs
             # Cacophony visiting registration (needs pi-daemon's per-session environment).
             echo 'export * from "./extensions/durable/cacophony.mjs";' > $out/cacophony.mjs
-            # agent-utils' TUI tool extensions (search_web, xvfb, firecracker, app-automation, android, slack).
+            # agent-utils' TUI tool extensions (search_web, xvfb, android; firecracker and app-automation opt-in).
             echo 'export * from "./extensions/durable/tools.mjs";' > $out/tools.mjs
             # interactive_choice and async_choice on pi-daemon's questions (pi-daemon 1.13).
             echo 'export * from "./extensions/durable/choice.mjs";' > $out/choice.mjs
@@ -156,6 +156,8 @@
             echo 'export * from "./extensions/durable/context-limit.mjs";' > $out/context-limit.mjs
             # Visual thoughts painted once per session into its backdrop UI slot (pi-daemon 1.15).
             echo 'export * from "./extensions/durable/visual-thoughts.mjs";' > $out/visual-thoughts.mjs
+            # /splice: copy turns of another session (any host's pi-daemon, or TUI Pi) into this one.
+            echo 'export * from "./extensions/durable/splice.mjs";' > $out/splice.mjs
             # The modules must load with nothing but Node built-ins.
             HOME=$TMPDIR node --input-type=module -e "
               const m = await import('$out/tts.mjs');
@@ -178,6 +180,8 @@
               const thoughts = await import('$out/visual-thoughts.mjs');
               if (typeof thoughts.observe !== 'function' || typeof thoughts.commands?.thoughts?.run !== 'function') process.exit(1);
               if (typeof contextLimit.observe !== 'function' || typeof contextLimit.commands?.context?.run !== 'function') process.exit(1);
+              const splice = await import('$out/splice.mjs');
+              if (typeof splice.commands?.splice?.run !== 'function') process.exit(1);
               const git = await import('$out/git.mjs');
               if (typeof git.observe !== 'function' || typeof git.commands?.git?.run !== 'function') process.exit(1);
               const gitClient = await import('$out/extensions/durable/git-client.js');
