@@ -8,7 +8,8 @@ export const DEFAULTS = Object.freeze({
   enabled: false,
   promptModel: DEFAULT_PROMPT_MODEL,
   // Hosts without Pi's model registry (pi-client): an OpenAI-compatible chat model on baseUrl.
-  clientPromptModel: "deepseek-v4-flash",
+  // In order: the next is asked when one fails or answers nothing (and passed over 10 min).
+  clientPromptModel: "deepseek-v4-flash,claude-haiku-5.5,gemini-3.8-flash",
   provider: "litellm",
   imageModel: "gpt-image-2.5-flare",
   size: "1536x1024",
@@ -84,7 +85,7 @@ const STRINGS = new Set(["promptModel", "clientPromptModel", "imageModel", "size
 /** Seconds-friendly aliases for the millisecond settings, and short names. */
 const ALIASES = Object.freeze({
   hold: ["holdMs", 1000], "canvas-opacity": ["canvasOpacity", 1], "canvas-blend": ["canvasBlend", 1], fade: ["fadeMs", 1000], interval: ["minIntervalMs", 1000], "min-show": ["minShowMs", 1000],
-  model: ["imageModel", 1], "image-model": ["imageModel", 1], "prompt-model": ["promptModel", 1],
+  model: ["imageModel", 1], "image-model": ["imageModel", 1], "prompt-model": ["promptModel", 1], "client-prompt-model": ["clientPromptModel", 1], "chat-models": ["clientPromptModel", 1],
   "max-images": ["maxImages", 1], images: ["slotImages", 1], "slot-images": ["slotImages", 1], "per-run": ["maxPerRun", 1], "per-minute": ["budgetPerMinute", 1], concurrent: ["budgetConcurrent", 1], "min-set": ["minSet", 1], pixels: ["transitionPixels", 1],
 });
 

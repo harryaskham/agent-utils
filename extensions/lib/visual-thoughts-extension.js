@@ -22,7 +22,7 @@ import { parseSettingChange, resolveVisualThoughtsConfig } from "./visual-though
 import { createPaintBudget } from "./visual-thoughts/budget.js";
 import { createVisualThoughtsEngine } from "./visual-thoughts/engine.js";
 import { createImageProvider } from "./visual-thoughts/image-provider.js";
-import { litellmChat } from "./visual-thoughts/litellm-chat.js";
+import { chatModels, createChatPrompter } from "./visual-thoughts/litellm-chat.js";
 import { toolCallDigest } from "./visual-thoughts/prompter.js";
 import { createImageStore, pruneStore, visualThoughtsStateDir } from "./visual-thoughts/store.js";
 import { activeCanvas, backdropLayer, createTuiBackdropSurface } from "./visual-thoughts/tui-surface.js";
@@ -45,7 +45,7 @@ export function resolvePromptModel(registry, reference) {
   return model;
 }
 
-function describeStatus(status, config) {
+function describeStatus(status, config, { chain = false, chatModel = "", resting = {} } = {}) {
   const parts = [status.enabled ? "on" : "off"];
   if (status.enabled) {
     parts.push(status.activity === "idle" ? (status.inRun ? "watching" : "idle") : status.activity);
@@ -54,12 +54,14 @@ function describeStatus(status, config) {
   }
   const lines = [
     `visual thoughts: ${parts.join(", ")}`,
-    `  painting with ${status.provider || config.imageModel}; prompts from ${config.promptModel}`,
+    `  painting with ${status.provider || config.imageModel}; prompts from ${chain ? `${chatModel || chatModels(config.clientPromptModel)[0]} (of ${chatModels(config.clientPromptModel).join(", ")}, in turn)` : config.promptModel}`,
     `  ${config.fit}, opacity ${config.opacity}, feather ${config.feather}, hold ${config.holdMs / 1000}s, fade ${config.fadeMs / 1000}s`,
   ];
   if (status.generated) lines.push(`  ${status.generated} painted this session; last took ${(status.lastMs / 1000).toFixed(1)}s`);
   if (status.stats?.frames) lines.push(`  transitions: ${config.effect}, ${config.fps} fps target, ${status.stats.frameMs.toFixed(1)} ms/frame ${status.stats.threaded ? "on a worker thread" : "in Pi's thread"}, frames by ${status.stats.transport}`);
   if (status.prompt) lines.push(`  last prompt: ${status.prompt.slice(0, 200)}`);
+  const passedOver = Object.entries(resting);
+  if (passedOver.length) lines.push(`  passed over (failed or answered nothing): ${passedOver.map(([model, until]) => `${model} ${Math.ceil((until - Date.now()) / 60_000)} min`).join(", ")}`);
   if (status.lastError) lines.push(`  last error: ${status.lastError}`);
   return lines.join("\n");
 }
@@ -121,6 +123,14 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
       notify(message, "warning");
     };
     const providerFor = (cfg = config) => createImageProvider(cfg, { env, ...(fetchImpl ? { fetchImpl } : {}) });
+    // The chat models (clientPromptModel), in turn; one that fails or answers nothing rests 10 min.
+    const chat = createChatPrompter({
+      models: () => config.clientPromptModel,
+      baseUrl: () => config.baseUrl || env.LITELLM_BASE_URL || env.LITELLM_PROXY_URL,
+      apiKey: () => env[config.apiKeyEnv || "LITELLM_MASTER_KEY"],
+      ...(fetchImpl ? { fetchImpl } : {}),
+      ...(now ? { now } : {}),
+    });
     // pi-client's panes paint in turn: one budget for the whole client.
     const budget = createPaintBudget({ concurrent: config.budgetConcurrent, perMinute: config.budgetPerMinute, ...(now ? { now } : {}) });
 
@@ -133,25 +143,16 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         const response = await runPiTextTurn(ctx, { model, ...request, signal, completeImpl, abortedMessage: "visual thoughts prompt superseded" });
         return response.text;
       }
-      return chatPrompt(reference.startsWith("litellm/") ? reference.slice("litellm/".length) : config.clientPromptModel, request, signal);
+      // An explicit litellm/<model> alone; else clientPromptModel's models, in turn.
+      return chat.prompt(request, signal, reference.startsWith("litellm/") ? { models: [reference.slice("litellm/".length)] } : {});
     }
 
-    function chatPrompt(model, request, signal) {
-      return litellmChat({
-        model, request, signal,
-        baseUrl: config.baseUrl || env.LITELLM_BASE_URL || env.LITELLM_PROXY_URL,
-        apiKey: env[config.apiKeyEnv || "LITELLM_MASTER_KEY"],
-        ...(fetchImpl ? { fetchImpl } : {}),
-      });
-    }
-
-    /** When the prompt model answers nothing: clientPromptModel, unless that was the one asked. */
+    /** When the prompt model answers nothing (or fails): clientPromptModel's models, unless they just did. */
     function fallbackPromptTurn(request, signal) {
-      const model = config.clientPromptModel;
       const reference = String(config.promptModel || "");
-      const usedChat = reference.startsWith("litellm/") ? reference === `litellm/${model}` : typeof lastCtx?.modelRegistry?.find !== "function";
-      if (!model || usedChat) return "";
-      return chatPrompt(model, request, signal);
+      const usedChain = !reference.startsWith("litellm/") && typeof lastCtx?.modelRegistry?.find !== "function";
+      if (usedChain || !chatModels(config.clientPromptModel).length) return "";
+      return chat.prompt(request, signal);
     }
 
     function sessionOf(ctx) {
@@ -566,7 +567,11 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         }
         if (verb === "status") {
           if (unavailable && !pane) return notify(`visual thoughts unavailable: ${unavailable}`, "warning", ctx);
-          return notify(describeStatus(pane ? { ...pane.engine.status(), stats: pane.engine.stats() } : { enabled: false }, pane ? pane.config : config), "info", ctx);
+          return notify(describeStatus(pane ? { ...pane.engine.status(), stats: pane.engine.stats() } : { enabled: false }, pane ? pane.config : config, {
+            chain: !String((pane ? pane.config : config).promptModel || "").startsWith("litellm/") && typeof ctx?.modelRegistry?.find !== "function",
+            chatModel: chat.lastModel,
+            resting: chat.resting(),
+          }), "info", ctx);
         }
         // pi-client panes (not TUI Pi's one screen): on/off and settings are the pane's own.
         const own = pane && pane.key !== "tui" ? pane : null;

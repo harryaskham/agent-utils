@@ -1409,3 +1409,72 @@ test("pi-daemon module: paintings out of the ring are released (pi-daemon ui.rel
     module.dispose();
   }
 });
+
+test("chat prompts: clientPromptModel's models in turn; one that fails or answers nothing rests 10 minutes", async () => {
+  const { createChatPrompter, chatModels, CHAT_MODEL_COOLDOWN_MS } = await import("../extensions/lib/visual-thoughts/litellm-chat.js");
+  const { DEFAULTS } = await import("../extensions/lib/visual-thoughts/config.js");
+  assert.deepEqual(chatModels(DEFAULTS.clientPromptModel), ["deepseek-v4-flash", "claude-haiku-5.5", "gemini-3.8-flash"]);
+  assert.deepEqual(chatModels(" a, b  c,,a "), ["a", "b", "c"]);
+  let at = 0;
+  const asked = [];
+  const behaviour = { gone: "gone", empty: "empty", ok: "ok" };
+  const fetchImpl = async (url, init) => {
+    const model = JSON.parse(init.body).model;
+    asked.push(model);
+    if (behaviour[model] === "gone") return new Response(JSON.stringify({ error: { message: `no such model ${model}` } }), { status: 400 });
+    if (behaviour[model] === "empty") return new Response(JSON.stringify({ choices: [{ message: { content: "  " } }] }));
+    return new Response(JSON.stringify({ choices: [{ message: { content: `a scene from ${model}` } }] }));
+  };
+  const chat = createChatPrompter({ models: "gone,empty,ok", baseUrl: "http://proxy:4000", apiKey: "k", fetchImpl, now: () => at });
+  const request = { systemPrompt: "s", messages: [{ role: "user", content: "x" }] };
+  assert.equal(await chat.prompt(request), "a scene from ok");
+  assert.deepEqual(asked, ["gone", "empty", "ok"]);
+  assert.equal(chat.lastModel, "ok");
+  assert.deepEqual(Object.keys(chat.resting()), ["gone", "empty"]);
+  // Passed over while they rest...
+  asked.length = 0;
+  at += CHAT_MODEL_COOLDOWN_MS - 1;
+  assert.equal(await chat.prompt(request), "a scene from ok");
+  assert.deepEqual(asked, ["ok"]);
+  // ...and asked first again after.
+  asked.length = 0;
+  at += 2;
+  behaviour.gone = "ok";
+  assert.equal(await chat.prompt(request), "a scene from gone");
+  assert.deepEqual(asked, ["gone"]);
+  // All gone: each is still tried, in order, and the last error says why.
+  const none = createChatPrompter({ models: "x,y", fetchImpl: async () => new Response("{}", { status: 404 }), now: () => at });
+  await assert.rejects(() => none.prompt(request), /prompt model y: HTTP 404/);
+  await assert.rejects(() => none.prompt(request), /prompt model y: HTTP 404/);
+});
+
+test("pi-daemon module: with no model registry, a missing first chat model falls through to the next", async () => {
+  const { createVisualThoughtsModule } = await import("../extensions/lib/durable-visual-thoughts.js");
+  const requests = [];
+  const { ui, slots } = fakeSlotsUi({ watchers: 1 });
+  const painting = paintingFetch(requests);
+  const module = createVisualThoughtsModule({
+    env: { LITELLM_BASE_URL: "http://proxy:4000" },
+    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minIntervalMs: 0, budgetPerMinute: 60 } } },
+    fetchImpl: async (url, init) => {
+      if (url.endsWith("/v1/chat/completions") && JSON.parse(init.body).model === "deepseek-v4-flash") {
+        requests.push({ url, body: JSON.parse(init.body) });
+        return new Response(JSON.stringify({ error: { message: "Invalid model name passed in model=deepseek-v4-flash" } }), { status: 400 });
+      }
+      return painting(url, init);
+    },
+    log: () => {},
+  });
+  try {
+    const { info, notices } = moduleInfo(ui);
+    await module.observe({ type: "agent_start" }, info);
+    await module.observe({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "the harbour ".repeat(20) }] } }, info);
+    for (let i = 0; i < 200 && !slots.get("backdrop")?.images.length; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(slots.get("backdrop").images.length, 1, "painted all the same");
+    assert.deepEqual(requests.filter((r) => r.url.endsWith("/chat/completions")).map((r) => r.body.model), ["deepseek-v4-flash", "claude-haiku-5.5"]);
+    await module.commands.thoughts.run("status", info);
+    assert.match(notices.at(-1), /passed over \(failed or answered nothing\): deepseek-v4-flash 10 min/);
+  } finally {
+    module.dispose();
+  }
+});

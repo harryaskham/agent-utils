@@ -26,7 +26,7 @@ import { runPiTextTurn } from "./pi-inference.js";
 import { parseSettingChange, resolveVisualThoughtsConfig } from "./visual-thoughts/config.js";
 import { createPaintBudget } from "./visual-thoughts/budget.js";
 import { createImageProvider } from "./visual-thoughts/image-provider.js";
-import { litellmChat } from "./visual-thoughts/litellm-chat.js";
+import { chatModels, createChatPrompter } from "./visual-thoughts/litellm-chat.js";
 import { createPainter } from "./visual-thoughts/painter.js";
 import { toolCallDigest } from "./visual-thoughts/prompter.js";
 import { createRenderer as defaultCreateRenderer } from "./visual-thoughts/renderer.js";
@@ -89,6 +89,9 @@ export function createVisualThoughtsModule({
   if (!Number.isFinite(base.slotImages)) base.slotImages = 8;
   const sessions = new Map(); // sessionId → session
   const budget = createPaintBudget({ concurrent: base.budgetConcurrent, perMinute: base.budgetPerMinute, now, timers });
+  // The chat models (clientPromptModel), in turn; one that fails or answers nothing rests 10 min,
+  // for every session (they share the endpoint).
+  const chat = createChatPrompter({ ...(fetchImpl ? { fetchImpl } : {}), now });
   let renderer = null;
   let disposed = false;
 
@@ -116,25 +119,26 @@ export function createVisualThoughtsModule({
       const response = await runPiTextTurn(info, { model, ...request, signal, abortedMessage: "visual thoughts prompt superseded" });
       return response.text;
     }
-    return chatPrompt(session, reference.startsWith("litellm/") ? reference.slice("litellm/".length) : session.config.clientPromptModel, request, signal);
+    // An explicit litellm/<model> alone; else clientPromptModel's models, in turn.
+    return chatPrompt(session, reference.startsWith("litellm/") ? [reference.slice("litellm/".length)] : session.config.clientPromptModel, request, signal);
   }
 
-  /** The prompt over the OpenAI-compatible chat endpoint (LiteLLM). */
-  function chatPrompt(session, model, request, signal) {
-    return litellmChat({
-      model, request, signal,
+  /** The prompt over the OpenAI-compatible chat endpoint (LiteLLM), from `models` in turn. */
+  function chatPrompt(session, models, request, signal) {
+    return chat.prompt(request, signal, {
+      models: chatModels(models),
       baseUrl: session.config.baseUrl || session.env.LITELLM_BASE_URL || session.env.LITELLM_PROXY_URL,
       apiKey: session.env[session.config.apiKeyEnv || "LITELLM_MASTER_KEY"],
-      ...(fetchImpl ? { fetchImpl } : {}),
     });
   }
 
-  /** The fallback when the prompt model answers nothing: clientPromptModel, unless that was the one asked. */
+  /** When the prompt model answers nothing (or fails): clientPromptModel's models, unless they just did. */
   function fallbackPrompt(session, request, signal) {
     const reference = String(session.config.promptModel || "");
-    const model = session.config.clientPromptModel;
-    if (!model || reference === `litellm/${model}`) return "";
-    return chatPrompt(session, model, request, signal);
+    const registry = session.info?.modelRegistry;
+    const usedChain = !reference.startsWith("litellm/") && !(typeof registry?.find === "function" && typeof registry?.complete === "function");
+    if (usedChain || !chatModels(session.config.clientPromptModel).length) return "";
+    return chatPrompt(session, session.config.clientPromptModel, request, signal);
   }
 
   /** Write the slot, waiting out the host's per-slot rate limit. */
@@ -360,7 +364,9 @@ export function createVisualThoughtsModule({
       `  this worker's budget: ${budgetNow.concurrent} at a time, ${budgetNow.perMinute} a minute (${budgetNow.lastMinute} in the last minute${budgetNow.waiting ? `, ${budgetNow.waiting} waiting` : ""}${budgetNow.pausedMs > 1_000 ? `, paused ${Math.ceil(budgetNow.pausedMs / 1000)}s: the provider is struggling` : ""})`,
     ];
     if (status.generated) lines.push(`  ${status.generated} painted here since the worker started; the last took ${(status.lastMs / 1000).toFixed(1)}s`);
-    if (status.fallbacks) lines.push(`  ${status.fallbacks} prompt${status.fallbacks === 1 ? "" : "s"} from ${session.config.clientPromptModel}: ${session.config.promptModel} answered nothing`);
+    if (status.fallbacks) lines.push(`  ${status.fallbacks} prompt${status.fallbacks === 1 ? "" : "s"} from ${chat.lastModel || chatModels(session.config.clientPromptModel)[0]}: ${session.config.promptModel} answered nothing`);
+    const resting = Object.entries(chat.resting());
+    if (resting.length) lines.push(`  passed over (failed or answered nothing): ${resting.map(([model, until]) => `${model} ${Math.ceil((until - now()) / 60_000)} min`).join(", ")}`);
     if (status.prompt) lines.push(`  last prompt: ${status.prompt.slice(0, 200)}`);
     if (session.lastError || status.lastError) lines.push(`  last error: ${session.lastError || status.lastError}`);
     return lines.join("\n");
