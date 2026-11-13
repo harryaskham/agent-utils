@@ -17,7 +17,8 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir, hostname, tmpdir } from 'node:os';
 import { MAX_BUNDLE, VERSION, atomicWrite, boundedRead, exists, fail, hash, privateDir, readJson, requestDir, run, withLock, writeJson } from './io.js';
-import { decodeGitBundle, repository } from './git.js';
+import { alternateRemote, cloneRepository, decodeGitBundle, repository } from './git.js';
+export { alternateRemote };
 
 const git = (cwd, args, options) => run('git', ['-C', cwd, ...args], options);
 const BRANCH_NAME = /^(?!-)(?!.*\.\.)(?!.*\/\/)(?!.*@\{)[A-Za-z0-9._\/-]{1,100}(?<![./])$/;
@@ -40,6 +41,10 @@ function validate(payload) {
     fail('destination-repo', 'The repository must lie under HOME on both machines');
   }
   if (repo.remote !== null && repo.remote !== undefined && (typeof repo.remote !== 'string' || repo.remote.length > 4096 || /[\0\r\n]/.test(repo.remote))) fail('protocol', 'Invalid origin');
+  if (repo.identity !== undefined) {
+    const valid = (value) => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\0\r\n]/.test(value);
+    if (typeof repo.identity !== 'object' || repo.identity === null || !valid(repo.identity.name) || !valid(repo.identity.email)) fail('protocol', 'Invalid git identity');
+  }
   if (payload.action !== 'repo-status') {
     if (!COMMIT.test(repo.commit || '')) fail('protocol', 'Invalid Git commit identity');
     if (typeof payload.branch !== 'string' || !BRANCH_NAME.test(payload.branch)) fail('worktree-name', `Not a usable worktree/branch name: ${payload.branch}`);
@@ -47,6 +52,7 @@ function validate(payload) {
 }
 
 const repoPathOf = repo => resolve(homedir(), repo.homeRelativeRoot);
+
 const hasCommit = async (repo, commit) => (await git(repo, ['cat-file', '-e', `${commit}^{commit}`], { allowFailure: true })).code === 0;
 const worktreePath = (repo, branch) => join(nodeWorktreesRoot(), basename(repo), branch.replace(/\//g, '-'));
 
@@ -62,7 +68,7 @@ async function plan(payload) {
   if (!(await exists(repoPath))) {
     if (!repo.remote) fail('clone-required', `${repoPath} is missing here and the repository has no origin to clone it from`);
     await privateDir(dirname(repoPath));
-    await run('git', ['clone', '--no-checkout', '--', repo.remote, repoPath], { timeout: 600000 });
+    await cloneRepository(repo, repoPath);
     cloned = true;
   } else {
     await assertRoot(repoPath);

@@ -22,9 +22,16 @@ export async function repository(cwd) {
     if (url.username || url.password) fail('git-credential', 'Git remote embeds credentials; use credential helpers or an SSH remote before forking');
   }
   const rel = relative(homedir(), root);
+  // Who commits here (the repository's own identity, else the user's): a clone made for a fork on
+  // another node commits as the same person, not as that machine's default identity.
+  const setting = async (key) => {
+    const value = (await git(root, ['config', '--get', key], { allowFailure: true })).stdout.trim();
+    return value && value.length <= 256 && !/[\0\r\n]/.test(value) ? value : undefined;
+  };
+  const [name, email] = [await setting('user.name'), await setting('user.email')];
   return {
     root, standardLayout, homeRelativeRoot: !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../') ? rel : null,
-    remote, commit: (await git(top, ['rev-parse', 'HEAD'])).stdout.trim(),
+    remote, ...(name && email ? { identity: { name, email } } : {}), commit: (await git(top, ['rev-parse', 'HEAD'])).stdout.trim(),
     branch: (await git(top, ['branch', '--show-current'])).stdout.trim(),
     dirty: !!(await git(top, ['status', '--porcelain=v1', '--untracked-files=normal'])).stdout,
   };
@@ -97,13 +104,55 @@ export function decodeGitBundle(bundle) {
   if (bytes.length > MAX_BUNDLE || hash(bytes) !== bundle.sha256) fail('integrity', 'Invalid Git bundle checksum');
   return bytes;
 }
+/**
+ * The same repository over the other transport: https://HOST/PATH ⇄ git@HOST:PATH(.git). A node
+ * may reach it only one way (SSH keys but no HTTPS credential helper for its daemon, or the
+ * reverse), so a clone that fails over the source's URL tries this one. Undefined for others.
+ */
+export function alternateRemote(url) {
+  const value = String(url ?? '');
+  const https = /^https:\/\/([^/@\s:]+)\/([^\s]+?)\/?$/.exec(value);
+  if (https) return `git@${https[1]}:${https[2].endsWith('.git') ? https[2] : `${https[2]}.git`}`;
+  const scp = /^git@([^:/\s]+):([^\s]+)$/.exec(value) ?? /^ssh:\/\/git@([^/:\s]+)\/([^\s]+)$/.exec(value);
+  if (scp) return `https://${scp[1]}/${scp[2]}`;
+  return undefined;
+}
+
+const IDENTITY_VALUE = (value) => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\0\r\n]/.test(value);
+
+/**
+ * Clone `repo.remote` at `path` for a fork from another machine. Never prompts (a daemon has no
+ * terminal: a missing credential fails at once rather than "Device not configured"), and tries the
+ * source's URL, then the same repository over the other transport. The clone commits as the source
+ * repository does (`repo.identity`), not as this machine's default identity.
+ */
+export async function cloneRepository(repo, path) {
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND || 'ssh -o BatchMode=yes' };
+  let failure;
+  for (const url of [repo.remote, alternateRemote(repo.remote)].filter(Boolean)) {
+    try {
+      await run('git', ['clone', '--no-checkout', '--', url, path], { timeout: 600000, env });
+      failure = undefined;
+      break;
+    } catch (error) {
+      failure ??= error;
+      await rm(path, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  if (failure) throw failure;
+  const identity = repo.identity;
+  if (identity && IDENTITY_VALUE(identity.name) && IDENTITY_VALUE(identity.email)) {
+    await git(path, ['config', 'user.name', identity.name]);
+    await git(path, ['config', 'user.email', identity.email]);
+  }
+}
 export async function prepareGit(request, plan, dir, bundle) {
   if (!plan.makeWorktree) return;
   const repo = request.repository;
   if (!(await exists(plan.repo))) {
     if (!request.options.clone || !repo.remote) fail('clone-required', 'Cloning was not authorized');
     await privateDir(dirname(plan.repo));
-    await run('git', ['clone', '--no-checkout', '--', repo.remote, plan.repo]);
+    await cloneRepository(repo, plan.repo);
   }
   if ((await git(plan.repo, ['cat-file', '-e', `${repo.commit}^{commit}`], { allowFailure: true })).code !== 0) {
     if (!bundle) fail('git-objects', 'Exact source commit is unavailable; retry with its saved Git bundle');

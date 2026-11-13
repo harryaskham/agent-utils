@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { peer } from '../extensions/lib/session-fork/core.js';
-import { forkWorktreeOnNode, repoStatusOnNode } from '../extensions/lib/session-fork/worktree.js';
+import { alternateRemote, forkWorktreeOnNode, repoStatusOnNode } from '../extensions/lib/session-fork/worktree.js';
 
 const sh = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
 
@@ -94,4 +94,50 @@ test('a worktree on another node: cloned there, unpushed commits sent thin, on b
   sh(lonely, 'add', '.');
   sh(lonely, 'commit', '--quiet', '-m', 'only here');
   await assert.rejects(() => asNode(homeA, () => forkWorktreeOnNode(lonely, 'w', 'nodeb', { call })), /missing here and the repository has no origin/);
+});
+
+test('alternateRemote: the same repository over the other transport', () => {
+  assert.equal(alternateRemote('https://github.com/harryaskham/suplex.git'), 'git@github.com:harryaskham/suplex.git');
+  assert.equal(alternateRemote('https://github.com/harryaskham/suplex'), 'git@github.com:harryaskham/suplex.git');
+  assert.equal(alternateRemote('git@github.com:harryaskham/suplex.git'), 'https://github.com/harryaskham/suplex.git');
+  assert.equal(alternateRemote('ssh://git@github.com/harryaskham/suplex.git'), 'https://github.com/harryaskham/suplex.git');
+  for (const other of ['/srv/git/x.git', 'file:///srv/x.git', 'https://user@github.com/o/r.git', null, undefined]) assert.equal(alternateRemote(other), undefined, String(other));
+});
+
+test('a fork clone the node cannot make over the source URL uses the other transport, and commits as the source does', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'git-wt-transport-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const homeA = join(root, 'a');
+  const homeB = join(root, 'b');
+  const origin = join(root, 'origin.git');
+  await mkdir(join(homeA, 'src'), { recursive: true });
+  await mkdir(homeB, { recursive: true });
+  execFileSync('git', ['init', '--bare', '--quiet', '-b', 'main', origin]);
+  const source = join(homeA, 'src', 'proj');
+  execFileSync('git', ['clone', '--quiet', origin, source], { stdio: 'ignore' });
+  await writeFile(join(source, 'a.txt'), 'one\n');
+  sh(source, 'add', '.');
+  sh(source, 'commit', '--quiet', '-m', 'pushed');
+  sh(source, 'push', '--quiet', 'origin', 'HEAD:main');
+  sh(source, 'fetch', '--quiet', 'origin');
+  // The source reaches it over HTTPS and commits as its own identity.
+  sh(source, 'remote', 'set-url', 'origin', 'https://example.test/team/proj');
+  sh(source, 'config', 'user.name', 'Source Person');
+  sh(source, 'config', 'user.email', 'source@example.com');
+  // The node reaches it only over SSH (its HTTPS has no credentials), and has another default identity.
+  const nodeConfig = join(homeB, '.gitconfig');
+  await writeFile(nodeConfig, `[url "${origin}"]\n\tinsteadOf = git@example.test:team/proj.git\n[url "${join(root, 'unreachable')}/"]\n\tinsteadOf = https://example.test/\n[user]\n\tname = Node Default\n\temail = node@example.com\n`);
+  const call = (payload) => asNode(homeB, async () => {
+    const saved = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = nodeConfig;
+    try { return await peer(payload); } finally { if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = saved; }
+  });
+
+  const forked = await asNode(homeA, () => forkWorktreeOnNode(source, 'try-ssh', 'nodeb', { call }));
+  const clone = join(homeB, 'src', 'proj');
+  assert.equal(forked.cloned, true);
+  assert.equal(sh(forked.path, 'rev-parse', 'HEAD'), sh(source, 'rev-parse', 'HEAD'));
+  assert.equal(sh(clone, 'config', '--get', 'remote.origin.url'), 'git@example.test:team/proj.git', 'the transport that worked');
+  assert.equal(sh(clone, 'config', '--local', '--get', 'user.name'), 'Source Person');
+  assert.equal(sh(clone, 'config', '--local', '--get', 'user.email'), 'source@example.com', 'not the node default');
 });
