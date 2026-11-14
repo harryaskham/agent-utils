@@ -1851,7 +1851,7 @@ test("/rt stt local-vad captures, segments, batch-transcribes, and sends a commi
       !sentUserMessages[0].content.includes("untrusted audio transcript"),
       "local-vad transcript is NOT labelled by default (bd-678c58; opt-in via PI_RT_STT_UNTRUSTED_LABEL)",
     );
-    assert.equal(sentUserMessages[0].options?.deliverAs, "followUp");
+    assert.equal(sentUserMessages[0].options?.deliverAs, "steer", "a steer by default: it reaches a busy agent at its next step");
     assert.ok(transcribeCalls.length >= 1, "batch transcribe ran over the segment audio");
     assert.equal(transcribeCalls.at(-1).model, "mai-transcribe-2", "uses the decoupled batch model, not the realtime model");
 
@@ -2959,5 +2959,91 @@ test("connect does NOT auto-fall back when PI_RT_CONNECT_AUTOFALLBACK=0 (bd-0b25
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
+  }
+});
+
+test("local /stt and /ptt: source= and send= are the session's; an alias's microphone, delivery and speech last until it stops", async () => {
+  const { callOutput } = await import("../extensions/lib/call-audio.js");
+  const { LOCAL_VOICE_OUTPUT_KEY } = await import("../extensions/lib/voice-settings.js");
+  const captures = [];
+  const captureFn = (cmd, options) => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = () => { proc.killed = true; };
+    Object.assign(proc, { cmd, env: options?.env });
+    captures.push(proc);
+    return proc;
+  };
+  __setLocalVadHooksForTest({ capture: captureFn, transcribe: async () => "hello there" });
+  const dir = mkdtempSync(join(tmpdir(), "local-voice-"));
+  writeFileSync(join(dir, "settings.json"), JSON.stringify({ agentUtils: { voice: { aliases: { bt: "source=source.bluetooth sink=vsink_agent_call pan=0 send=interrupt" } } } }));
+  const savedDir = process.env.PI_CODING_AGENT_DIR;
+  const savedRecord = process.env.PI_RT_RECORD_CMD;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  delete process.env.PI_RT_RECORD_CMD;
+  const pcm = (ms, speech) => {
+    const n = Math.round((ms / 1000) * 24000);
+    const b = Buffer.alloc(n * 2);
+    if (speech) for (let i = 0; i < n; i++) b.writeInt16LE(8000, i * 2);
+    return b;
+  };
+  const say = (cap) => { cap.stdout.emit("data", pcm(500, true)); for (let i = 0; i < 30; i++) cap.stdout.emit("data", pcm(100, false)); };
+  try {
+    const { pi, commands, handlers, ctx, sentUserMessages, notifications } = makeHarness();
+    let idle = false;
+    let aborts = 0;
+    Object.assign(ctx, { isIdle: () => idle, abort: () => { aborts += 1; idle = true; } });
+    realtimeAgentExtension(pi);
+    handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+    // The session's own microphone and delivery, kept; recorded through Pulse's parec.
+    await commands.get("stt").handler("source=source.desk send=followup", ctx);
+    let cap = captures.at(-1);
+    assert.match(cap.cmd, /^parec /);
+    assert.equal(cap.env.PULSE_SOURCE, "source.desk");
+    assert.equal(process.env.PULSE_SOURCE === "source.desk", false, "process.env is never changed");
+    say(cap);
+    await waitFor(() => sentUserMessages.length === 1, { timeoutMs: 2000 });
+    assert.equal(sentUserMessages[0].options.deliverAs, "followUp");
+    assert.equal(aborts, 0);
+    await commands.get("stt").handler("stop", ctx);
+
+    // An alias: its microphone, interrupt and speech output, for this run.
+    await commands.get("stt").handler("bt", ctx);
+    cap = captures.at(-1);
+    assert.equal(cap.env.PULSE_SOURCE, "source.bluetooth");
+    assert.deepEqual(callOutput(LOCAL_VOICE_OUTPUT_KEY), { sink: "vsink_agent_call", pan: 0, tts: true }, "TUI Pi speaks in this process");
+    assert.match(notifications.find((entry) => /^\/stt bt: /.test(entry.message))?.message ?? "", /source=source\.bluetooth .*send=interrupt alias=bt speech sink:vsink_agent_call · pan:0\.00 · tts:on/);
+    say(cap);
+    await waitFor(() => sentUserMessages.length === 2, { timeoutMs: 2000 });
+    assert.equal(aborts, 1, "interrupt stops the agent's turn first");
+    assert.equal(sentUserMessages[1].options.deliverAs, "steer");
+
+    // Stopping returns the session's own: its microphone, its delivery, /tts's speech.
+    await commands.get("stt").handler("stop", ctx);
+    assert.equal(callOutput(LOCAL_VOICE_OUTPUT_KEY), undefined);
+    await commands.get("stt").handler("status", ctx);
+    assert.match(notifications.at(-1).message, /source=source\.desk server=\S+ send=followup$/);
+    await commands.get("stt").handler("aliases", ctx);
+    assert.match(notifications.at(-1).message, /^Voice aliases \(\/stt ALIAS, \/ptt ALIAS; their settings last until it stops\):\n· bt: source=source\.bluetooth sink=vsink_agent_call pan=0 send=interrupt$/);
+    await commands.get("ptt").handler("pan=2", ctx);
+    assert.match(notifications.at(-1).message, /^\/ptt: pan must be a number from -1 to 1/);
+
+    // pi-client: the daemon speaks for the session, so its tts.mjs is asked.
+    const client = makeHarness();
+    const chordCalls = [];
+    client.ctx.chord = { call: async (method, params) => { chordCalls.push([method, params.content]); return {}; } };
+    realtimeAgentExtension(client.pi);
+    client.handlers.get("session_start")?.({ reason: "startup" }, client.ctx);
+    await client.commands.get("ptt").handler("bt pan=0.3", client.ctx);
+    await client.commands.get("ptt").handler("stop", client.ctx);
+    await waitFor(() => chordCalls.length === 2, { timeoutMs: 1000 });
+    assert.deepEqual(chordCalls, [["conversation.submit", "/tts overlay sink=vsink_agent_call pan=0.3 tts=on"], ["conversation.submit", "/tts overlay off"]]);
+  } finally {
+    __setLocalVadHooksForTest({});
+    if (savedDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = savedDir;
+    if (savedRecord !== undefined) process.env.PI_RT_RECORD_CMD = savedRecord;
+    rmSync(dir, { recursive: true, force: true });
   }
 });

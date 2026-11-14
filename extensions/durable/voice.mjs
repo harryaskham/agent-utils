@@ -7,8 +7,10 @@
 // microphone while it plays). The behaviour lives in ../lib/durable-voice.js over the libraries
 // TUI /stt uses. Settings: settings.json `agentUtils.stt`, then the worker's environment
 // (PI_STT_*, PI_RT_LOCAL_VAD_*, PULSE_SOURCE, PULSE_SERVER, PI_RT_RECORD_CMD), then each
-// session's /call key=value. Call aliases come from settings.json `agentUtils.call.aliases`
-// (`/call bt`; their settings, sink= and pan= included, last until hang-up). Needs pi-daemon 1.10
+// session's /call key=value. Voice aliases come from settings.json `agentUtils.voice.aliases` (or
+// the older `agentUtils.call.aliases`): `/call bt`, `/stt bt`, `/ptt bt`, whose settings, sink=
+// and pan= included, last until they stop. `agentUtils.voice.send` (steer by default) is how a
+// turn reaches a busy agent: steer, followup or interrupt. Needs pi-daemon 1.10
 // or later (module commands with the Durable harness; sessions with live background tasks resume
 // at startup).
 import { readFileSync } from "node:fs";
@@ -16,18 +18,17 @@ import { createAudioProviders } from "../lib/audio-providers.js";
 import { readPersistedSttSettings } from "../lib/realtime-settings.js";
 import { agentSettingsPath, readAgentSettings } from "../pi-graphics/agent-io.js";
 import { createVoiceCommands, createVoiceTask, createVoiceTools } from "../lib/durable-voice.js";
+import { aliasesFromSettings, voiceSendFromSettings } from "../lib/voice-settings.js";
 
 function readSlice(read) {
   try { return read(); } catch { return {}; }
 }
 
-/** settings.json `agentUtils.call.aliases`: name → `key=value …` (or an object of values). */
-function readCallAliases() {
-  try {
-    const aliases = readAgentSettings(agentSettingsPath())?.agentUtils?.call?.aliases;
-    return aliases && typeof aliases === "object" && !Array.isArray(aliases) ? aliases : {};
-  } catch { return {}; }
+/** settings.json `agentUtils` (voice aliases and delivery), read once at load. */
+function readAgentUtils() {
+  try { return readAgentSettings(agentSettingsPath())?.agentUtils ?? {}; } catch { return {}; }
 }
+const agentUtils = readAgentUtils();
 
 /** Absolute Pulse binaries the Nix package records next to this module (pacat records too). */
 function packagedExecutables() {
@@ -44,7 +45,8 @@ const task = createVoiceTask({
   persisted: readSlice(readPersistedSttSettings),
   audioProviders: createAudioProviders({}),
   executables: packagedExecutables(),
-  aliases: readCallAliases(),
+  aliases: aliasesFromSettings(agentUtils),
+  send: voiceSendFromSettings(agentUtils, process.env),
 });
 
 // The call task, and the agent's end_call.

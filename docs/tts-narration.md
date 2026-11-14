@@ -243,6 +243,29 @@ Environment overrides are `PI_TTS_PREFIX_WITH_SESSION_NAME` and
 /narrate status
 ```
 
+### Sinks of their own: narration and spoken choices
+
+Narration and spoken choices can play on Pulse sinks of their own, apart from `/tts`'s:
+
+```json
+"agentUtils": {
+  "tts": { "device": "vsink_agent_tts" },
+  "narrate": { "sink": "vsink_agent_narrate" },
+  "choice": { "sink": "vsink_agent_tts" }
+}
+```
+
+- `/narrate sink=NAME` sets this session's narration sink (`PI_NARRATE_SINK` for the process);
+  `sink=tts` plays narration where `/tts` plays, and `sink=` (empty) returns to settings'.
+- `/choice settings sink=NAME` does the same for spoken choices in TUI Pi (`PI_CHOICE_SINK`); in
+  pi-daemon sessions it is `/tts choices_sink=NAME`.
+- Unset, both play where `/tts` plays. Focus and solo (`/tts focus`) still route them.
+- A live `/call`, or a local `/stt` or `/ptt` with `sink=`, `pan=` or an alias, plays every kind
+  on its own sink until it stops.
+
+Each stream names its session in the mixer: `/tts:mac-utils`, `/narrate:mac-utils`,
+`/choices:mac-utils` (a short session id when the session has no name).
+
 The default narration model is `github-copilot/gpt-6.1-terra`, overridable with
 `PI_NARRATE_MODEL` or the runtime command. Narration normally inherits
 `agentUtils.tts.speed`, but `agentUtils.narrate.speed`, `PI_NARRATE_SPEED`, or

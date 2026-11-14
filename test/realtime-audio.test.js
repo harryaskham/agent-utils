@@ -197,11 +197,11 @@ test("applyPulseStreamName appends --stream-name to pacat/parec and no-ops other
   // pacat/parec get a sanitized --stream-name appended.
   assert.equal(
     applyPulseStreamName("pacat --playback --raw --format=s16le --rate=24000 --channels=1", "pi-tts-abc"),
-    "pacat --playback --raw --format=s16le --rate=24000 --channels=1 --stream-name=pi-tts-abc",
+    "pacat --playback --raw --format=s16le --rate=24000 --channels=1 --client-name=pi-tts-abc --stream-name=pi-tts-abc",
   );
   assert.equal(
     applyPulseStreamName("parec --raw --format=s16le --rate=24000 --channels=1", "pi-rt-abc"),
-    "parec --raw --format=s16le --rate=24000 --channels=1 --stream-name=pi-rt-abc",
+    "parec --raw --format=s16le --rate=24000 --channels=1 --client-name=pi-rt-abc --stream-name=pi-rt-abc",
   );
   // Non-pulse commands are unchanged.
   assert.equal(applyPulseStreamName("ffplay -nodisp -autoexit -i -", "pi-rt-x"), "ffplay -nodisp -autoexit -i -");
@@ -213,5 +213,8 @@ test("applyPulseStreamName appends --stream-name to pacat/parec and no-ops other
   assert.equal(applyPulseStreamName("pacat --playback", ""), "pacat --playback");
   assert.equal(applyPulseStreamName("", "pi-rt-x"), "");
   // Unsafe characters in the name are sanitized to a pulse/shell-safe token.
-  assert.equal(applyPulseStreamName("pacat --playback", "pi-rt-a b/c;d"), "pacat --playback --stream-name=pi-rt-a-b-c-d");
+  assert.equal(applyPulseStreamName("pacat --playback", "pi-rt-a b/c;d"), "pacat --playback --client-name=pi-rt-a-b/c-d --stream-name=pi-rt-a-b/c-d");
+  // `/stt:mac-utils` (stream-names.js) as is; a client name already given is kept.
+  assert.equal(applyPulseStreamName("parec --raw", "/stt:mac-utils"), "parec --raw --client-name=/stt:mac-utils --stream-name=/stt:mac-utils");
+  assert.equal(applyPulseStreamName("parec --raw --client-name=mine", "/stt:x"), "parec --raw --client-name=mine --stream-name=/stt:x");
 });

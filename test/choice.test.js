@@ -1024,3 +1024,34 @@ test("choice speaker inherits persisted agentUtils.tts and interrupts stale spee
   assert.equal(calls.at(-1).options.pan, assignment.pan);
   assert.ok(assignment.pan >= -0.5 && assignment.pan <= 0.5);
 });
+
+test("spoken choices play on their own sink (settings' or /choice settings sink=), and local /stt or /ptt output wins", async () => {
+  const { setCallOutput } = await import("../extensions/lib/call-audio.js");
+  const { LOCAL_VOICE_OUTPUT_KEY } = await import("../extensions/lib/voice-settings.js");
+  const spoken = [];
+  const speaker = { speak: async (text, call) => { spoken.push({ text, call }); }, interrupt() {}, dispose() {} };
+  const h = harness();
+  createChoiceExtension({ speaker, persistedSettings: { choice: { sink: "vsink_agent_tts" }, tts: {} } })(h.pi);
+  h.handlers.get("session_start")({}, { sessionManager: { getBranch: () => [] }, ui: h.ctx.ui });
+  const ask = async () => {
+    const pending = h.tools.get("interactive_choice").execute(`id-${spoken.length}`, { question: "Pick", choices, timeoutMs: 1000 }, null, null, h.ctx);
+    await Promise.resolve();
+    h.input("1");
+    await pending;
+    return spoken.find((entry) => /^Pick/.test(entry.text) && !entry.seen && (entry.seen = true));
+  };
+  try {
+    assert.equal((await ask()).call.device, "vsink_agent_tts");
+    await h.commands.get("choice").handler("settings sink=vsink_choices", h.ctx);
+    assert.match(h.notifications.at(-1).message, /^choice settings: sink=vsink_choices /);
+    assert.equal((await ask()).call.device, "vsink_choices");
+    setCallOutput(LOCAL_VOICE_OUTPUT_KEY, { sink: "vsink_agent_call", pan: 0, tts: true });
+    const during = await ask();
+    assert.deepEqual([during.call.device, during.call.pan, during.call.bypassRouting], ["vsink_agent_call", 0, true]);
+    setCallOutput(LOCAL_VOICE_OUTPUT_KEY, null);
+    await h.commands.get("choice").handler("settings sink=", h.ctx);
+    assert.equal((await ask()).call.device, "vsink_agent_tts", "empty: settings' again");
+  } finally {
+    setCallOutput(LOCAL_VOICE_OUTPUT_KEY, null);
+  }
+});

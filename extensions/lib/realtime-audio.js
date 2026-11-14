@@ -91,6 +91,21 @@ export function defaultRecordCommand() {
   return "rec -q -t raw -b 16 -e signed-integer -r 24000 -c 1 -";
 }
 
+/** Records from Pulse (PULSE_SOURCE and PULSE_SERVER in its environment choose the microphone). */
+export const PULSE_RECORD_COMMAND = "parec --raw --format=s16le --rate=24000 --channels=1";
+
+/**
+ * The record command and environment for a chosen Pulse microphone (`source`, `server`): the
+ * configured command (or PI_RT_RECORD_CMD) as is; else Pulse's parec, since only Pulse can pick a
+ * source by name. Without a choice, the default command.
+ */
+export function localRecordPlan({ source, server } = {}, { configured, env = process.env } = {}) {
+  const chosen = Boolean(source || server);
+  const childEnv = chosen ? { ...env, ...(source ? { PULSE_SOURCE: String(source) } : {}), ...(server ? { PULSE_SERVER: String(server) } : {}) } : undefined;
+  const command = configured || env.PI_RT_RECORD_CMD || (chosen ? PULSE_RECORD_COMMAND : defaultRecordCommand());
+  return { command, env: childEnv };
+}
+
 export function defaultPlaybackCommand() {
   if (process.env.PI_RT_PLAYBACK_CMD) return process.env.PI_RT_PLAYBACK_CMD;
   const backend = (process.env.PI_RT_AUDIO_BACKEND || "").toLowerCase();
@@ -127,8 +142,8 @@ export function defaultPlaybackCommand() {
 // so an EPIPE/exit never bubbles into an unhandled 'error' that takes down the
 // host; playPcmBuffer streams a PCM buffer into a playback command and resolves
 // when the process exits. Both are pure over their inputs (no ctx/module state).
-export function runShellStream(command) {
-  const proc = spawn("/bin/sh", ["-lc", command], { stdio: ["pipe", "pipe", "pipe"] });
+export function runShellStream(command, { env } = {}) {
+  const proc = spawn("/bin/sh", ["-lc", command], { stdio: ["pipe", "pipe", "pipe"], ...(env ? { env } : {}) });
   // Default error handlers so an EPIPE / exit never bubbles into an
   // Unhandled 'error' event that takes down the host.
   proc.on("error", () => {});
@@ -168,7 +183,9 @@ export function applyPulseStreamName(command, streamName) {
   if (!cmd || !name) return cmd;
   if (!/^\s*(pacat|parec)\b/.test(cmd)) return cmd; // only pulse client commands
   if (/(^|\s)(--stream-name(=|\s)|-n(=|\s))/.test(cmd)) return cmd; // already named
-  const safe = name.replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 60);
+  // `/stt:mac-utils` (stream-names.js) keeps its / and :, which no shell treats specially.
+  const safe = name.replace(/[^A-Za-z0-9._:/-]/g, "-").slice(0, 60);
   if (!safe) return cmd;
-  return `${cmd} --stream-name=${safe}`;
+  const client = /(^|\s)--client-name(=|\s)/.test(cmd) ? "" : ` --client-name=${safe}`;
+  return `${cmd}${client} --stream-name=${safe}`;
 }

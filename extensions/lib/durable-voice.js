@@ -3,7 +3,8 @@
 // A Durable background task holds the session's microphone: a Pulse record stream with the
 // session's own device= and server=. It finds speech with TUI /stt's local VAD
 // (LocalVadController), transcribes it with the same providers (transcribeSpeech) and submits
-// each turn as the user's message, as a follow-up while the agent works (or a steer). Sessions
+// each turn as the user's message: by default as a steer, which reaches a busy agent at its next
+// step (send=followup waits for its whole turn; send=interrupt stops the turn first). Sessions
 // with live tasks resume at startup, so a call outlives a worker restart.
 //
 // The settings and the call's state are one session document (VOICE_DOC). Every client follows
@@ -17,11 +18,12 @@
 // end_call. Dictation (/stt, /ptt) stays on until stopped. Input is muted while this session's
 // speech plays (tts.mjs), as TUI /stt is.
 //
-// Call aliases (settings.json `agentUtils.call.aliases`, e.g. `bt: "source=source.bluetooth
-// sink=vsink_agent_call pan=0"`) start a call with settings of its own: `/call bt`. An alias's
-// microphone settings (source=, mode=, …) and its speech output (sink=, pan=, tts=, see
-// call-audio.js) last only while the call does, so hanging up returns the session to its own
-// /call and /tts settings. sink= and pan= on /call itself are for the call only too.
+// Voice aliases (settings.json `agentUtils.voice.aliases`, or the older `agentUtils.call.aliases`,
+// e.g. `bt: "source=source.bluetooth sink=vsink_agent_call pan=0"`; voice-settings.js) start a
+// call or dictation with settings of its own: `/call bt`, `/stt bt`, `/ptt bt`. An alias's
+// microphone settings (source=, mode=, send=, …) and its speech output (sink=, pan=, tts=, see
+// call-audio.js) last only while it does, so hanging up returns the session to its own /call
+// and /tts settings. sink= and pan= typed on /call, /stt or /ptt are for that run only too.
 import { spawn } from "node:child_process";
 import { createAudioProviders, rejectSurfaceAuthKeys } from "./audio-providers.js";
 import { parseEnvStyleArgs } from "./env-args.js";
@@ -33,12 +35,14 @@ import { sttEnvUpdates } from "./stt-session-values.js";
 import { labelUntrustedTranscript } from "./untrusted-transcript.js";
 import { VOICE_DOC } from "./voice-doc.js";
 import { callOutputFrom, describeCallOutput, lastSpeechActivity, setCallOutput as publishCallOutput, splitCallValues } from "./call-audio.js";
+import { DEFAULT_VOICE_SEND, VOICE_WORDS, normalizeVoiceSend, voiceAliases, voiceSendLabel } from "./voice-settings.js";
+import { sessionLabel, speechStreamName } from "./stream-names.js";
 
 export { VOICE_DOC };
 export const VOICE_TASK = "agent-utils.voice";
 export const DEFAULT_HANGUP_AFTER_MS = 5 * 60_000;
-/** Settings of the call itself (not STT): its default mode, delivery and silence hang-up. */
-export const VOICE_CALL_KEYS = Object.freeze(["mode", "deliver", "hangup_after"]);
+/** Settings of the call itself (not STT): its default mode, delivery (send=, or deliver=) and silence hang-up. */
+export const VOICE_CALL_KEYS = Object.freeze(["mode", "send", "deliver", "hangup_after"]);
 const MAX_PARTIAL = 2000;
 const MAX_ERROR = 300;
 const AUDIO_INSTANCE = Symbol.for("agent-utils.durable-agent-audio.v1");
@@ -55,7 +59,7 @@ export function parseDurationMs(value) {
 
 function validateCallValues(values, surface) {
   if (values.mode !== undefined && !["vad", "ptt"].includes(String(values.mode).toLowerCase())) throw new Error(`${surface}: mode must be vad or ptt`);
-  if (values.deliver !== undefined && !["followup", "follow-up", "steer"].includes(String(values.deliver).toLowerCase())) throw new Error(`${surface}: deliver must be followup or steer`);
+  for (const key of ["send", "deliver"]) if (values[key] !== undefined) normalizeVoiceSend(values[key], surface);
   if (values.hangup_after !== undefined && parseDurationMs(values.hangup_after) === null) throw new Error(`${surface}: hangup_after must be a duration such as 5m, or off`);
 }
 
@@ -63,7 +67,7 @@ function validateCallValues(values, surface) {
  * A session's environment and resolved settings: the worker's environment with the session's
  * values over it, and settings.json's agentUtils.stt under both.
  */
-export function voiceSettings(values = {}, { env = process.env, persisted = {}, audioProviders, surface = "/call" } = {}) {
+export function voiceSettings(values = {}, { env = process.env, persisted = {}, audioProviders, surface = "/call", send = DEFAULT_VOICE_SEND } = {}) {
   const sttValues = Object.fromEntries(Object.entries(values).filter(([key]) => !VOICE_CALL_KEYS.includes(key)));
   const { updates, clear } = sttEnvUpdates(sttValues, { env, persisted, audioProviders, surface, devices: true });
   const sessionEnv = { ...env };
@@ -79,7 +83,8 @@ export function voiceSettings(values = {}, { env = process.env, persisted = {}, 
     device: sessionEnv.PULSE_SOURCE || null,
     server: sessionEnv.PULSE_SERVER || null,
     mode: String(values.mode ?? "vad").toLowerCase() === "ptt" ? "ptt" : "vad",
-    deliver: String(values.deliver ?? "").toLowerCase() === "steer" ? "steer" : "followUp",
+    // How a turn reaches a busy agent: steer (the default), followUp, or interrupt (stop its turn first).
+    deliver: normalizeVoiceSend(values.send ?? values.deliver ?? send, surface),
     hangupAfterMs: hangup ?? DEFAULT_HANGUP_AFTER_MS,
   };
 }
@@ -93,7 +98,7 @@ export function defaultCapture({ env, executables = {}, streamName, spawnImpl = 
   const options = { env, stdio: ["ignore", "pipe", "pipe"] };
   let proc;
   if (!env.PI_RT_RECORD_CMD && executables.pacat) {
-    const args = ["--record", "--raw", "--format=s16le", `--rate=${SAMPLE_RATE}`, `--channels=${CHANNELS}`, `--stream-name=${streamName}`];
+    const args = ["--record", "--raw", "--format=s16le", `--rate=${SAMPLE_RATE}`, `--channels=${CHANNELS}`, `--client-name=${streamName}`, `--stream-name=${streamName}`];
     if (env.PULSE_SOURCE) args.push(`--device=${env.PULSE_SOURCE}`);
     if (env.PULSE_SERVER) args.push(`--server=${env.PULSE_SERVER}`);
     proc = spawnImpl(executables.pacat, args, options);
@@ -155,8 +160,8 @@ const isLive = (call) => Boolean(call) && !call.end;
  * `patch` commits fields of the call; `submit` delivers a turn; `requestEnd` asks to hang up.
  */
 class VoiceCall {
-  constructor({ sessionId, taskId, deps, patch, submit, requestEnd, sent }) {
-    Object.assign(this, { sessionId, taskId, deps, patch, submit, requestEnd });
+  constructor({ sessionId, taskId, deps, patch, submit, interrupt, requestEnd, sent }) {
+    Object.assign(this, { sessionId, taskId, deps, patch, submit, interrupt, requestEnd });
     this.sent = sent;
     this.seen = {};
     this.capture = null;
@@ -181,12 +186,13 @@ class VoiceCall {
       return;
     }
     // The call's own settings (an alias's) over the session's, for this call only.
+    this.label = typeof call.label === "string" ? call.label : this.label;
     const values = withCallSettings(doc.settings ?? {}, call.overlay?.voice ?? {});
     const settingsKey = JSON.stringify(values);
     const before = this.seen;
     this.seen = { kind: call.kind, mode: call.mode, talking: call.mode === "ptt" && call.talking === true, muted: call.muted === true, settingsKey, discard: call.discard === true };
     // Its speech output (sink, pan) while it lasts: tts.mjs reads it for this session.
-    if (call.kind === "call") this.publishOutput(call.overlay?.output ?? null);
+    this.publishOutput(call.overlay?.output ?? null);
     // New settings or another mode: the microphone reopens with them.
     const restart = before.settingsKey !== settingsKey || before.mode !== call.mode;
     if (restart) {
@@ -197,6 +203,9 @@ class VoiceCall {
         this.requestEnd({ reason: "settings invalid" });
         return;
       }
+      // Where the microphone is, for clients that sample its level alongside (voice-client.js).
+      const input = { device: this.settings.device, server: this.settings.server };
+      if (JSON.stringify(input) !== JSON.stringify(call.input ?? null)) this.patch({ input });
       await this.stopCapture({ flush: false });
     }
     if (call.mode === "vad") {
@@ -264,7 +273,9 @@ class VoiceCall {
     });
     let capture;
     try {
-      capture = deps.capture({ env: settings.env, executables: deps.executables, streamName: `pi-call-${this.sessionId.slice(0, 12)}`, sessionId: this.sessionId });
+      // `/call:harbour`, `/stt:…`, `/ptt:…`: who listens, in a mixer.
+      const kind = this.seen.kind === "call" ? "call" : this.seen.mode === "ptt" ? "ptt" : "stt";
+      capture = deps.capture({ env: settings.env, executables: deps.executables, streamName: speechStreamName(kind, this.label || sessionLabel({ sessionId: this.sessionId })), sessionId: this.sessionId });
     } catch (error) {
       this.fail(error);
       this.requestEnd({ reason: "capture failed" });
@@ -315,9 +326,11 @@ class VoiceCall {
     if (!content) return;
     const number = this.sent + 1;
     try {
+      // interrupt: stop the agent's turn first (the session's own background work goes on).
+      if (this.settings.deliver === "interrupt") await this.interrupt?.();
       await this.submit(labelUntrustedTranscript(content, this.settings.env), {
         requestId: `voice:${this.taskId}:${number}`,
-        whenBusy: this.settings.deliver === "steer" ? "steer" : "followUp",
+        whenBusy: this.settings.deliver === "followUp" ? "followUp" : "steer",
       });
       this.sent = number;
       this.lastHeardAt = this.deps.now();
@@ -413,7 +426,10 @@ export function createVoiceTask(options = {}) {
             if (conversation === undefined) throw new Error("the session's conversation is gone");
             await conversation.submit({ type: "input", content, whenBusy, requestId }, context);
           };
-          const call = new VoiceCall({ sessionId: String(task.input?.sessionId ?? ""), taskId, deps, patch, submit, requestEnd, sent });
+          const interrupt = async () => {
+            if (typeof conversation?.abort === "function") await conversation.abort(context);
+          };
+          const call = new VoiceCall({ sessionId: String(task.input?.sessionId ?? ""), taskId, deps, patch, submit, interrupt, requestEnd, sent });
           const onAbort = () => { void call.stop({ discard: true }).then(() => call.finish("aborted")); };
           runtime.signal?.addEventListener?.("abort", onAbort, { once: true });
           // Follow the document in order: the value read, then every change.
@@ -442,23 +458,11 @@ export function createVoiceTask(options = {}) {
   return token;
 }
 
-/** The call aliases from settings: name → its `key=value …` (a string, or an object of values). */
-export function callAliases(raw) {
-  const aliases = {};
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return aliases;
-  for (const [name, value] of Object.entries(raw)) {
-    const key = String(name).trim().toLowerCase();
-    if (!/^[a-z0-9][a-z0-9_.-]{0,31}$/.test(key) || CALL_VERBS.has(key)) continue;
-    if (typeof value === "string") aliases[key] = parseEnvStyleArgs(value).values;
-    else if (value && typeof value === "object" && !Array.isArray(value)) {
-      aliases[key] = Object.fromEntries(Object.entries(value).filter(([, v]) => v !== null && v !== undefined).map(([k, v]) => [k, String(v)]));
-    }
-  }
-  return aliases;
-}
+/** The voice aliases from settings: name → its `key=value …` (a string, or an object of values). */
+export const callAliases = voiceAliases;
 
-/** /call's own words: never alias names. */
-const CALL_VERBS = new Set(["help", "usage", "?", "status", "devices", "sources", "talk", "send", "cancel", "mute", "unmute", "hangup", "end", "stop", "off", "on", "start", "vad", "ptt", "aliases"]);
+/** /call's, /stt's and /ptt's own words: never alias names. */
+const CALL_VERBS = VOICE_WORDS;
 
 /** The session's settings with a call's own over them (`source=` and `device=` are one setting). */
 export function withCallSettings(settings = {}, own = {}) {
@@ -490,12 +494,13 @@ function voiceDeps({
   listSources,
   log = (line) => { try { process.stderr.write(`${line}\n`); } catch {} },
   aliases = {},
+  send = DEFAULT_VOICE_SEND,
   setCallOutput = publishCallOutput,
   lastSpeech = lastSpeechActivity,
 } = {}) {
   return {
     env, persisted, audioProviders, executables, transcribe, speaking, now, tickMs, log,
-    aliases: callAliases(aliases), setCallOutput, lastSpeech,
+    aliases: callAliases(aliases), send: normalizeVoiceSend(send, "agentUtils.voice.send"), setCallOutput, lastSpeech,
     capture: capture ?? ((options) => defaultCapture({ ...options, ...(spawnImpl ? { spawnImpl } : {}) })),
     listSources: listSources ?? ((options) => defaultListSources({ executables, ...options, ...(spawnImpl ? { spawnImpl } : {}) })),
     setInterval: setTimer,
@@ -530,7 +535,7 @@ export function voiceOperations({ task, now = () => Date.now() }) {
       });
     },
     /** Start voice input, or change the live one to this kind and mode. */
-    async start(commit, { sessionId, conversationId, kind, mode, talking = false, overlay }) {
+    async start(commit, { sessionId, conversationId, kind, mode, talking = false, overlay, label }) {
       return commit(async (tx) => {
         const doc = await tx.doc(VOICE_DOC);
         const at = now();
@@ -545,6 +550,7 @@ export function voiceOperations({ task, now = () => Date.now() }) {
           number: doc.seq, taskId: String(taskId), kind, mode, startedAt: at, phase: mode === "ptt" && !talking ? "armed" : "listening",
           talking: mode === "ptt" && talking, muted: false, discard: false, partial: null, lastHeardAt: at, sent: 0, error: null, end: null,
           overlay: overlay ?? null,
+          ...(label ? { label: String(label) } : {}),
         };
         return { started: true, call: plain(doc.call) };
       });
@@ -595,7 +601,7 @@ export function voiceStatus(state, deps, now = Date.now()) {
   let resolved;
   const overlay = state.call?.overlay ?? null;
   try { resolved = voiceSettings(withCallSettings(state.settings, overlay?.voice ?? {}), deps); } catch (error) { return `voice: settings invalid: ${error.message}`; }
-  const where = `device:${resolved.device ?? "default"} · server:${resolved.server ?? "default"}`;
+  const where = `device:${resolved.device ?? "default"} · server:${resolved.server ?? "default"} · send:${voiceSendLabel(resolved.deliver)}`;
   const stt = `provider:${resolved.stt.providerName && resolved.stt.providerName !== resolved.stt.provider ? `${resolved.stt.providerName}(${resolved.stt.provider})` : resolved.stt.provider} · model:${resolved.stt.model ?? "default"}`;
   const call = state.call;
   if (!call) {
@@ -603,14 +609,14 @@ export function voiceStatus(state, deps, now = Date.now()) {
     return `voice:off · ${where} · ${stt}${last}`;
   }
   const hangup = call.kind === "call" ? ` · hangup_after:${resolved.hangupAfterMs ? formatAgo(resolved.hangupAfterMs) : "off"} (since the last speech, either side)` : "";
-  const own = overlay ? ` · ${overlay.alias ? `alias:${overlay.alias}` : "this call"}${overlay.output ? ` · speech ${describeCallOutput(overlay.output)}` : ""} (until hang-up)` : "";
+  const own = overlay ? ` · ${overlay.alias ? `alias:${overlay.alias}` : `this ${call.kind === "call" ? "call" : "dictation"}`}${overlay.output ? ` · speech ${describeCallOutput(overlay.output)}` : ""} (until ${call.kind === "call" ? "hang-up" : "it stops"})` : "";
   return `${call.kind}:on${own} · ${call.mode} · ${call.end ? `ending (${call.end.reason})` : call.phase}${call.muted ? " · muted" : ""} · ${where} · ${stt} · ${call.sent ?? 0} sent · ${formatAgo(now - call.startedAt)}${hangup}${call.error ? ` · error: ${call.error}` : ""} · ${describeLocalVadConfig(resolved.vad)}`;
 }
 
 const USAGE = {
-  call: "/call [ALIAS] [vad|ptt] [key=value …] starts a voice call (or changes the live one); /call ALIAS uses an alias from settings (agentUtils.call.aliases; /call aliases lists them), whose settings last until hang-up; /call talk (PTT: start, then send), send, cancel, mute, unmute, hangup, status; /call devices lists the microphones (Pulse sources). Settings: device= (source=) server= provider= model= language= energy= … mode= deliver=followup|steer hangup_after=5m|off (after the last speech, either side); for this call only: sink= pan= tts=on|off (the agent's speech).",
-  stt: "/stt [on|ptt|off|cancel|status|key=value …]: dictation run by the daemon, each turn sent as your message. Settings as /call (device=, server=, provider=, model=, …).",
-  ptt: "/ptt [on|talk|send|cancel|off|status|key=value …]: push-to-talk run by the daemon. /ptt talk starts recording; /ptt talk (or send) sends.",
+  call: "/call [ALIAS] [vad|ptt] [key=value …] starts a voice call (or changes the live one); /call ALIAS uses an alias from settings (agentUtils.voice.aliases; /call aliases lists them), whose settings last until hang-up; /call talk (PTT: start, then send), send, cancel, mute, unmute, hangup, status; /call devices lists the microphones (Pulse sources). Settings: device= (source=) server= provider= model= language= energy= … mode= send=steer|followup|interrupt (how a turn reaches a busy agent; steer by default) hangup_after=5m|off (after the last speech, either side); for this call only: sink= pan= tts=on|off (the agent's speech).",
+  stt: "/stt [ALIAS] [on|ptt|off|cancel|status|key=value …]: dictation run by the daemon, each turn sent as your message. Settings and aliases as /call (device=, server=, send=, sink=, pan=, …); an alias's, and sink=/pan=, last until it stops.",
+  ptt: "/ptt [ALIAS] [on|talk|send|cancel|off|status|key=value …]: push-to-talk run by the daemon. /ptt talk starts recording; /ptt talk (or send) sends. Settings and aliases as /call.",
 };
 
 /** /call, /stt and /ptt for pi-daemon sessions. */
@@ -629,7 +635,13 @@ export function createVoiceCommands({ task, now = () => Date.now() } = {}) {
     await ops.reconcile(commitOf(ctx), new Set(tasks.map((entry) => String(entry.record.id))));
   };
   const status = async (ctx) => voiceStatus(await ops.read(commitOf(ctx)), deps, now());
-  const startOf = (ctx, kind, mode, talking, overlay) => ops.start(commitOf(ctx), { sessionId: ctx.sessionId, conversationId: ctx.conversationId, kind, mode, talking, overlay });
+  // The session's name (or a short id), for the microphone's Pulse name.
+  const labelOf = async (ctx) => {
+    let name;
+    try { name = await ctx.getSessionName?.(); } catch {}
+    return sessionLabel({ name, sessionId: ctx.sessionId });
+  };
+  const startOf = async (ctx, kind, mode, talking, overlay) => ops.start(commitOf(ctx), { sessionId: ctx.sessionId, conversationId: ctx.conversationId, kind, mode, talking, overlay, label: await labelOf(ctx) });
   const settingsMode = async (ctx) => {
     const { settings } = await ops.read(commitOf(ctx));
     return String(settings.mode ?? "vad").toLowerCase() === "ptt" ? "ptt" : "vad";
@@ -652,8 +664,8 @@ export function createVoiceCommands({ task, now = () => Date.now() } = {}) {
   const aliasesText = () => {
     const names = Object.keys(deps.aliases);
     return names.length === 0
-      ? "No call aliases: add them to settings.json agentUtils.call.aliases (bt: \"source=… sink=… pan=0\")."
-      : `Call aliases (their settings last until hang-up):\n${names.map((alias) => `· ${alias}: ${describeValues(deps.aliases[alias])}`).join("\n")}`;
+      ? "No voice aliases: add them to settings.json agentUtils.voice.aliases (bt: \"source=… sink=… pan=0\")."
+      : `Voice aliases (their settings last until hang-up, or until /stt or /ptt stops):\n${names.map((alias) => `· ${alias}: ${describeValues(deps.aliases[alias])}`).join("\n")}`;
   };
 
   const run = (name, kind) => async (args, ctx) => {
@@ -663,16 +675,16 @@ export function createVoiceCommands({ task, now = () => Date.now() } = {}) {
       await prune(ctx);
       const parsed = parseEnvStyleArgs(String(args ?? ""));
       let positionals = [...parsed.positionals];
-      // /call ALIAS: an alias's settings, with any typed after it over them, for this call only.
+      // /call ALIAS (and /stt ALIAS, /ptt ALIAS): an alias's settings, with any typed after it over
+      // them, until it stops.
       let alias;
-      if (kind === "call" && positionals.length && !CALL_VERBS.has(String(positionals[0]).toLowerCase())) {
+      if (positionals.length && !CALL_VERBS.has(String(positionals[0]).toLowerCase())) {
         const named = String(positionals[0]).toLowerCase();
         if (!Object.hasOwn(deps.aliases, named)) throw new Error(`${surface}: unknown '${positionals[0]}'. ${aliasesText()}\n${USAGE[name]}`);
         alias = named;
         positionals = positionals.slice(1);
       }
       const typed = splitCallValues(parsed.values);
-      if (kind !== "call" && Object.keys(typed.output).length) throw new Error(`${surface}: sink=, pan= and tts= are for /call (the agent's speech during a call)`);
       const named = alias ? splitCallValues(deps.aliases[alias]) : { voice: {}, output: {} };
       // Typed microphone settings are the session's, kept for later calls (as before); with an
       // alias they are this call's, like the alias's own. Speech output is always this call's.
@@ -787,8 +799,8 @@ export function createVoiceCommands({ task, now = () => Date.now() } = {}) {
   };
   return {
     call: { description: `Voice call with this agent, run by the daemon. ${USAGE.call}`, run: run("call", "call"), getArgumentCompletions: completions([...Object.keys(deps.aliases), "vad", "ptt", "talk", "send", "cancel", "mute", "unmute", "hangup", "status", "aliases"]) },
-    stt: { description: `Speech to text run by the daemon. ${USAGE.stt}`, run: run("stt", "stt"), getArgumentCompletions: completions(["on", "ptt", "off", "cancel", "status"]) },
-    ptt: { description: `Push-to-talk run by the daemon. ${USAGE.ptt}`, run: run("ptt", "stt"), getArgumentCompletions: completions(["on", "talk", "send", "cancel", "off", "status"]) },
+    stt: { description: `Speech to text run by the daemon. ${USAGE.stt}`, run: run("stt", "stt"), getArgumentCompletions: completions([...Object.keys(deps.aliases), "on", "ptt", "off", "cancel", "status", "aliases"]) },
+    ptt: { description: `Push-to-talk run by the daemon. ${USAGE.ptt}`, run: run("ptt", "stt"), getArgumentCompletions: completions([...Object.keys(deps.aliases), "on", "talk", "send", "cancel", "off", "status", "aliases"]) },
   };
 }
 

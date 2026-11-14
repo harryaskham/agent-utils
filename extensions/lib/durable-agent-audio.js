@@ -31,8 +31,10 @@ import {
   createAgentSpeechController,
   normalizeNarrationText,
   resolveAgentTtsSettings,
+  resolveChoiceSink,
   resolveNarrateSettings,
   resolveNarrationModel,
+  speechSink,
   toolResultText,
 } from "./tts-narration.js";
 import { runPiTextTurn } from "./pi-inference.js";
@@ -45,7 +47,8 @@ import { createAudioProviders, rejectSurfaceAuthKeys } from "./audio-providers.j
 import { appendTtsFeed } from "./tts-feed.js";
 import { ttsFeedEnabled } from "./privacy.js";
 import { artifactIdentity } from "./artifact-state.js";
-import { callOutput, callSpeechOverrides, describeCallOutput, noteSpeechActivity } from "./call-audio.js";
+import { callOutput, callOutputFrom, callSpeechOverrides, describeCallOutput, noteSpeechActivity, setCallOutput } from "./call-audio.js";
+import { sessionLabel, speechStreamName } from "./stream-names.js";
 
 export const DURABLE_AUDIO_SETTINGS_KEY = "settings";
 export const DURABLE_AUDIO_LEDGER_KEY = "spoken";
@@ -79,7 +82,7 @@ const SECRET_KEY = /api_?key|token$|secret|password/i;
 const ENV_REFERENCE = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/;
 const PROVIDER_SPECIFIC_KEYS = ["voice", "model", "lang", "speed", "embedding", "speaker", "speakerprofileid", "speaker_profile_id", "style", "styledegree", "style_degree", "endpoint", "base_url", "baseurl", "api_key", "apikey", "instructions", "pitch", "volume", "role"];
 const NARRATE_SPEECH_KEYS = new Set(["provider", "voice", "tts_model", "daemon_url", "daemon_provider", "daemon_sink", "token_file", "playback", "endpoint", "base_url", "lang", "embedding", "instructions", "role", "pitch", "volume", "timeout_ms", "pan", "interrupt", "auth", "az", "resource", "tenant", "subscription", "resource_id"]);
-const NARRATE_OWN_KEYS = new Set(["enabled", "on", "model", "phases", "phase", "mode", "speed", "style", "styledegree", "style_degree", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "suffix"]);
+const NARRATE_OWN_KEYS = new Set(["enabled", "on", "model", "phases", "phase", "mode", "speed", "style", "styledegree", "style_degree", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "suffix", "sink", "device"]);
 
 function boolValue(value, name) {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -315,6 +318,10 @@ export function createDurableAgentAudio({
     try { phases = normalizePhases(sessionEnvValue.PI_NARRATE_PHASES ?? persisted.narrate.phases ?? "before", "PI_NARRATE_PHASES"); } catch {}
     return {
       config: tts.config,
+      // Narration's and spoken choices' own sinks from settings; a session's /narrate sink= and
+      // /tts choices_sink= are saved over them, so a later settings change still reaches sessions
+      // that never set their own.
+      sinks: { narrate: narrate.sink, choices: resolveChoiceSink(sessionEnvValue, persisted.choice) },
       tts: { enabled: tts.enabled, prefix: tts.prefix, suffix: tts.suffix, choices: optionalBool(sessionEnvValue.PI_CHOICE_SPEECH_ENABLED, optionalBool(persisted.choice.speechEnabled, true)), speech: {} },
       narrate: { enabled: narrate.enabled, phases, model: narrate.model, speed: narrate.speed, style: narrate.style, styleDegree: narrate.styleDegree, reasoningSummaries: narrate.reasoningSummaries, prefix: narrate.prefix, suffix: narrate.suffix },
     };
@@ -372,6 +379,7 @@ export function createDurableAgentAudio({
       // The newest handle for writes without a ctx of their own; the one kept may be closed.
       if (current.durable) session.store = current.store;
       if (typeof ctx?.cwd === "string" && ctx.cwd) session.cwd = ctx.cwd;
+      refreshLabel(session, ctx);
       return session;
     }
     entry = { envKey: environment.key, loading: (async () => {
@@ -402,6 +410,7 @@ export function createDurableAgentAudio({
         durable,
         tts,
         narrate,
+        sinks: base.sinks,
         routing,
         speech: speechFactory({ sessionId, config, env: sessionEnvValue, routing }),
         choices: null,
@@ -414,6 +423,9 @@ export function createDurableAgentAudio({
         lastError: null,
         reported: new Set(),
       };
+      // Its name (or a short id) in the Pulse names of its speech: /tts:harbour.
+      session.label = sessionLabel({ sessionId });
+      try { session.label = sessionLabel({ name: await ctx?.getSessionName?.(), sessionId }); session.labelAt = now(); } catch {}
       // The session's saved focus and solo, as before the worker restarted.
       for (const mode of ROUTING_MODES) {
         if (!tts.routing[mode]) continue;
@@ -429,6 +441,15 @@ export function createDurableAgentAudio({
     evict();
     try { return await entry.loading; }
     catch (error) { if (sessions.get(sessionId) === entry) sessions.delete(sessionId); throw error; }
+  };
+
+  /** Re-read a session's name now and then (a rename shows in its next speech). */
+  const refreshLabel = (session, ctx) => {
+    if (typeof ctx?.getSessionName !== "function" || now() - (session.labelAt ?? 0) < 60_000) return;
+    session.labelAt = now();
+    Promise.resolve()
+      .then(() => ctx.getSessionName())
+      .then((name) => { session.label = sessionLabel({ name, sessionId: session.sessionId }); }, () => {});
   };
 
   const assignSessionVoice = (config, sessionId, speechValues, speechPolicy) => {
@@ -521,7 +542,7 @@ export function createDurableAgentAudio({
     if (disposed || !body.trim()) return;
     recordFeed(session, kind === "tts" ? "tts" : "narrate", body);
     track(whileSpeaking(session, Promise.resolve()
-      .then(() => session.speech.speak(body, { ...overrides, ...callSpeechOverrides(callOutput(session.sessionId)), speechKind: kind, streamName: `/${kind}` })))
+      .then(() => session.speech.speak(body, { ...overrides, ...callSpeechOverrides(callOutput(session.sessionId)), speechKind: kind, streamName: speechStreamName(kind, session.label) })))
       .then((result) => { for (const warning of result?.warnings || []) report(session, `${kind} daemon`, new Error(warning)); })
       .catch((error) => report(session, kind, error)));
   };
@@ -562,10 +583,22 @@ export function createDurableAgentAudio({
     recordFeed(session, "choices", String(text));
     session.choices ||= choiceFactory({ sessionId: session.sessionId, env: session.env, persisted: session.persisted, routing: session.routing });
     try { session.choices.assignSession?.({ sessionManager: { getSessionId: () => session.sessionId } }); } catch {}
-    track(whileSpeaking(session, Promise.resolve().then(() => session.choices.speak(text, callSpeechOverrides(callOutput(session.sessionId))))).catch((error) => report(session, "choices", error)));
+    const sink = choicesSink(session);
+    track(whileSpeaking(session, Promise.resolve().then(() => session.choices.speak(text, { ...(sink ? { device: sink } : {}), ...callSpeechOverrides(callOutput(session.sessionId)), streamName: speechStreamName("choices", session.label) }))).catch((error) => report(session, "choices", error)));
+  };
+
+  // A kind's own sink: the session's (/narrate sink=, /tts choices_sink=; "tts" plays where /tts
+  // plays), else settings'. A live call's output still wins (speak, speakChoice).
+  const ownSink = (session, saved, kind) => (saved !== undefined ? speechSink(saved) : session.sinks?.[kind]);
+  const narrateSink = (session) => { try { return ownSink(session, session.narrate.sink, "narrate"); } catch { return undefined; } };
+  const choicesSink = (session) => { try { return ownSink(session, session.tts.choicesSink, "choices"); } catch { return undefined; } };
+  const sinkNote = (session, saved, kind) => {
+    const sink = kind === "narrate" ? narrateSink(session) : choicesSink(session);
+    return `${sink ?? "as /tts"}${saved === undefined && sink !== undefined ? " (settings)" : ""}`;
   };
 
   const narrateOverrides = (session) => ({
+    ...(narrateSink(session) ? { device: narrateSink(session) } : {}),
     ...(session.narrate.speed ? { speed: session.narrate.speed } : {}),
     ...(session.narrate.style ? { style: session.narrate.style } : {}),
     ...(session.narrate.styleDegree ? { styleDegree: session.narrate.styleDegree } : {}),
@@ -700,8 +733,11 @@ export function createDurableAgentAudio({
       credentials,
       `output:${usesDaemonPlayback(config) ? `daemon/${config.daemonSink || "server-default"}` : `${config.backend}/${optional(config.device)}`}`,
       `choices:${session.tts.choices ? "on" : "off"}`,
-      // A live /call's output wins over the settings above until the call ends.
-      callOutput(session.sessionId) ? `call:${describeCallOutput(callOutput(session.sessionId))} (until the call ends)` : "",
+      `choices_sink:${sinkNote(session, session.tts.choicesSink, "choices")}`,
+      // A live /call's output wins over the settings above until the call ends; a client's
+      // (pi-client /stt or /ptt, through /tts overlay) until it stops.
+      callOutput(session.sessionId, "call") ? `call:${describeCallOutput(callOutput(session.sessionId, "call"))} (until the call ends)` : "",
+      callOutput(session.sessionId, "client") ? `overlay:${describeCallOutput(callOutput(session.sessionId, "client"))} (until /tts overlay off)` : "",
       `prefix:${session.tts.prefix ? "set" : "none"}`,
       `suffix:${session.tts.suffix ? "set" : "none"}`,
       scopeNote(session),
@@ -718,6 +754,7 @@ export function createDurableAgentAudio({
     `reasoning-summaries:${session.narrate.reasoningSummaries ? "prefer" : "off"}`,
     `prefix:${session.narrate.prefix ? "set" : "none"}`,
     `suffix:${session.narrate.suffix ? "set" : "none"}`,
+    `sink:${sinkNote(session, session.narrate.sink, "narrate")}`,
     "lines:agent preamble, else the narration model (when the host offers models), else tool names",
     scopeNote(session),
   ].join(" · ") + (check ? readinessNote(session) : "") + lastErrorNote(session);
@@ -759,6 +796,19 @@ export function createDurableAgentAudio({
         return reply(ctx, speechRoutingStatus(state));
       }
       if (simple === "status") return reply(ctx, ttsStatus(session, { check: true }));
+      if (/^overlay(?:\s|$)/.test(simple)) {
+        // A client's speech output while its own voice input runs (pi-client's local /stt and
+        // /ptt with sink=, pan= or an alias): `/tts overlay sink=… pan=… tts=on|off`, `/tts overlay off`.
+        const parsed = parseEnvStyleArgs(raw.replace(/^overlay\s*/i, ""));
+        const verb = String(parsed.positionals[0] ?? "").toLowerCase();
+        if (parsed.positionals.length > 1 || (verb && verb !== "off")) throw new Error("Usage: /tts overlay sink=NAME pan=-1..1 tts=on|off, or /tts overlay off");
+        const unknown = Object.keys(parsed.values).find((key) => !["sink", "pan", "tts"].includes(key));
+        if (unknown) throw new Error(`overlay: unknown setting '${unknown}'`);
+        const output = verb === "off" ? null : callOutputFrom(parsed.values, "overlay");
+        if (verb !== "off" && !output) throw new Error("Usage: /tts overlay sink=NAME pan=-1..1 tts=on|off, or /tts overlay off");
+        setCallOutput(session.sessionId, output, "client");
+        return reply(ctx, output ? `overlay:${describeCallOutput(output)} (until /tts overlay off)` : "overlay:off");
+      }
       if (simple === "off") {
         session.tts.enabled = false;
         await saveSettings(session, ctx);
@@ -769,7 +819,12 @@ export function createDurableAgentAudio({
       else if (raw && simple !== "on") {
         const parsed = parseEnvStyleArgs(raw);
         if (parsed.positionals.length) throw new Error(`/tts: unexpected argument '${parsed.positionals[0]}'`);
-        const { prefix, suffix, choices, prefix_with_session_name, prefixwithsessionname, ...speechValues } = parsed.values;
+        const { prefix, suffix, choices, choices_sink, prefix_with_session_name, prefixwithsessionname, ...speechValues } = parsed.values;
+        if (choices_sink !== undefined) {
+          // Empty: settings' again; "tts": where /tts plays.
+          if (String(choices_sink).trim() === "") delete session.tts.choicesSink;
+          else { speechSink(choices_sink, "choices_sink"); session.tts.choicesSink = String(choices_sink).trim(); }
+        }
         if (prefix_with_session_name !== undefined || prefixwithsessionname !== undefined) throw new Error("/tts: prefix_with_session_name needs a Pi session name; use prefix= instead");
         if (prefix !== undefined) session.tts.prefix = expandEnvReferences(prefix, session.env, "/tts prefix");
         if (suffix !== undefined) session.tts.suffix = expandEnvReferences(suffix, session.env, "/tts suffix");
@@ -781,7 +836,7 @@ export function createDurableAgentAudio({
       session.lastError = null;
       await saveSettings(session, ctx);
       // A live /call's sink wins until hang-up: say so, and how to move the call's speech.
-      const call = callOutput(session.sessionId);
+      const call = callOutput(session.sessionId, "call");
       const output = /(?:^|\s)(?:sink|device)=/.test(raw) && call?.sink !== undefined
         ? `\nThis session is on a call: its speech stays on ${call.sink} until hang-up. /call sink=NAME moves it for the call; this /tts setting applies after.`
         : "";
@@ -838,6 +893,12 @@ export function createDurableAgentAudio({
         }
         const reasoning = values.reasoning_summaries ?? values.reasoningsummaries ?? values.reasoning;
         if (reasoning !== undefined) next.reasoningSummaries = boolValue(reasoning, "/narrate reasoning_summaries");
+        const sinkValue = values.sink ?? values.device;
+        if (sinkValue !== undefined) {
+          // Empty: settings' again; "tts": where /tts plays.
+          if (String(sinkValue).trim() === "") delete next.sink;
+          else { speechSink(sinkValue, "sink"); next.sink = String(sinkValue).trim(); }
+        }
         if (values.prefix !== undefined) next.prefix = expandEnvReferences(values.prefix, session.env, "/narrate prefix");
         if (values.suffix !== undefined) next.suffix = expandEnvReferences(values.suffix, session.env, "/narrate suffix");
         next.enabled = values.enabled !== undefined ? boolValue(values.enabled, "/narrate enabled")
@@ -858,11 +919,11 @@ export function createDurableAgentAudio({
 
   const commands = {
     tts: {
-      description: "Speak this session's final assistant messages on the daemon host. /tts [on|off|status|harry|key=value …]; choices=on|off speaks ask_user questions; prefix=/suffix= wrap speech; /tts focus|solo [on|off|toggle|status] routes this session's speech to the focus sink, or a sink of its own.",
+      description: "Speak this session's final assistant messages on the daemon host. /tts [on|off|status|harry|key=value …]; sink= plays it there; choices=on|off speaks ask_user questions, choices_sink= on a sink of their own (\"tts\": as /tts; empty: settings'); prefix=/suffix= wrap speech; /tts focus|solo [on|off|toggle|status] routes this session's speech to the focus sink, or a sink of its own; /tts overlay sink= pan= tts= | off is a client's output while its voice input runs.",
       run: runTts,
     },
     narrate: {
-      description: "Speak short lines about this session's tool work on the daemon host. /narrate [on|off|status|before|after|both|key=value …] (phases=, speed=, style=, styledegree=, reasoning_summaries=, prefix=, suffix=).",
+      description: "Speak short lines about this session's tool work on the daemon host. /narrate [on|off|status|before|after|both|key=value …] (phases=, speed=, style=, styledegree=, reasoning_summaries=, prefix=, suffix=, sink= its own Pulse sink: \"tts\" plays where /tts plays, empty returns to settings').",
       run: runNarrate,
     },
   };

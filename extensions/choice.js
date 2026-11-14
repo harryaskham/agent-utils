@@ -6,6 +6,10 @@
 
 import { randomUUID } from "node:crypto";
 import { expandEnvReferences, parseEnvStyleArgs } from "./lib/env-args.js";
+import { callOutput, callSpeechOverrides } from "./lib/call-audio.js";
+import { resolveChoiceSink, speechSink } from "./lib/tts-narration.js";
+import { LOCAL_VOICE_OUTPUT_KEY } from "./lib/voice-settings.js";
+import { sessionLabel, speechStreamName } from "./lib/stream-names.js";
 import { ChoiceView, choiceViewKey, choicePanelRows } from "./lib/choice-layout.js";
 import { createChoicePreferenceStore } from "./lib/choice-preferences.js";
 import { ToolSchema } from "./lib/tool-schema.js";
@@ -93,6 +97,8 @@ export function resolveChoiceSettings(env, persisted = {}) {
     maxChoices: number("PI_CHOICE_MAX_CHOICES", "maxChoices", 9, 2, 9),
     wrap: boolSetting(env.PI_CHOICE_WRAP, boolSetting(persisted.wrap, true)),
     speechEnabled: boolSetting(env.PI_CHOICE_SPEECH_ENABLED, boolSetting(persisted.speechEnabled, true)),
+    // Spoken choices' own Pulse sink (agentUtils.choice.sink, PI_CHOICE_SINK); unset plays where /tts plays.
+    sink: resolveChoiceSink(env, persisted),
     descriptionOnNavigate: boolSetting(env.PI_CHOICE_DESCRIPTION_ON_NAVIGATE, boolSetting(persisted.descriptionOnNavigate, true)),
     expanded: boolSetting(env.PI_CHOICE_EXPANDED, boolSetting(persisted.expanded, true)),
     fullscreen: boolSetting(env.PI_CHOICE_FULLSCREEN, boolSetting(persisted.fullscreen, false)),
@@ -176,6 +182,15 @@ export function createChoiceExtension({ speaker, cacophonyBridge, decisionBridge
     const persistedChoice = persistedSettings?.choice ?? readPersistedChoiceSettings(settingsPath);
     const choiceConfig = resolveChoiceSettings(env, persistedChoice);
     let speakerController = speaker || null;
+    const settingsSink = choiceConfig.sink;
+    // Choices on their own sink; local /stt or /ptt's output (sink=, pan=) over it while it runs.
+    let speechSessionId;
+    pi.on?.("session_start", (_event, ctx) => { try { speechSessionId = ctx?.sessionManager?.getSessionId?.(); } catch {} });
+    const choiceSpeech = () => {
+      let label = "";
+      try { label = sessionLabel({ name: pi.getSessionName?.(), sessionId: speechSessionId }); } catch {}
+      return { ...(choiceConfig.sink ? { device: choiceConfig.sink } : {}), ...callSpeechOverrides(callOutput(LOCAL_VOICE_OUTPUT_KEY)), streamName: speechStreamName("choices", label) };
+    };
     const ensureSpeaker = (ctx) => {
       if (!speakerController) speakerController = createChoiceSpeaker({ env, routing: outputBinding.routing, audioProviders: audioBinding.providers, persisted: persistedSettings?.tts ?? readPersistedTtsSettings(settingsPath) });
       if (ctx) speakerController.assignSession?.(ctx);
@@ -431,7 +446,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, decisionBridge
           const navigationSpeech = choiceConfig.descriptionOnNavigate && outcome.choice.summary
             ? `${outcome.choice.headline}. ${outcome.choice.summary}`
             : outcome.choice.headline;
-          speakerController.speak(navigationSpeech).catch((error) => {
+          speakerController.speak(navigationSpeech, choiceSpeech()).catch((error) => {
             if (record.warnedSpeech) return;
             record.warnedSpeech = true;
             try { record.ctx?.ui?.notify?.(`choice speech unavailable; input remains active: ${error?.message || String(error)}`, "warning"); } catch {}
@@ -451,7 +466,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, decisionBridge
             emitChoiceUpdate(record);
             if (record.requestRender) { try { record.requestRender(); } catch {} }
             else { try { record.ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(record.question, record.state.choices, record.state.index), { placement: "belowEditor" }); } catch {} }
-            if (choiceConfig.speechEnabled) void speakerController.speak("Stop cancelled. Back to choices.");
+            if (choiceConfig.speechEnabled) void speakerController.speak("Stop cancelled. Back to choices.", choiceSpeech());
           }
         } else if (isStopChoice(outcome.choice)) {
           record.stopSelection = { index: outcome.index, choice: outcome.choice };
@@ -465,7 +480,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, decisionBridge
           if (record.requestRender) { try { record.requestRender(); } catch {} }
           else { try { record.ctx?.ui?.setWidget?.("agent-utils-choice", renderChoiceWidget(record.question, record.state.choices, record.state.index, "confirm stop"), { placement: "belowEditor" }); } catch {} }
           try { record.onUpdate?.({ content: [{ type: "text", text: "Confirm stop: Yes or No (selected: No)" }] }); } catch {}
-          if (choiceConfig.speechEnabled) void speakerController.speak("Stop continuous choices? Option 1: Yes, stop. Option 2: No, keep choosing. Selected: No.");
+          if (choiceConfig.speechEnabled) void speakerController.speak("Stop continuous choices? Option 1: Yes, stop. Option 2: No, keep choosing. Selected: No.", choiceSpeech());
         } else if (outcome.choice?.appended && outcome.choice?.terminal) {
           finish(record, {
             status: "cancelled",
@@ -855,7 +870,7 @@ export function createChoiceExtension({ speaker, cacophonyBridge, decisionBridge
           suffix: promptSuffix,
           repeat: { ...choiceConfig.repeat },
         });
-        const speakIntroduction = () => speakerController.speak(formatChoiceIntroduction(question, choices, state.index, { prefix: promptPrefix, suffix: promptSuffix })).catch((error) => {
+        const speakIntroduction = () => speakerController.speak(formatChoiceIntroduction(question, choices, state.index, { prefix: promptPrefix, suffix: promptSuffix }), choiceSpeech()).catch((error) => {
           if (record.warnedSpeech || record.finished) return;
           record.warnedSpeech = true;
           try { ctx?.ui?.notify?.(`choice speech unavailable; input remains active: ${error?.message || String(error)}`, "warning"); } catch {}
@@ -993,14 +1008,14 @@ export function createChoiceExtension({ speaker, cacophonyBridge, decisionBridge
         }
         if (raw.toLowerCase() === "status") {
           const state = active ? "active" : lastResult ? resultText(lastResult) : "idle";
-          ctx.ui.notify(`choice:${choiceConfig.enabled ? "on" : "off"} · ${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} · append=${choiceConfig.append.length} · caco=${cacoBridge?.config?.enabled ? "on" : "off"} · force-at-end=${choiceConfig.forceAtAgentEnd} · async=${asyncEnabled() ? `${asyncChoices.pending().length} pending` : "off"} · async-caco=${decisions?.config?.enabled ? "decisions" : "off"}`, "info");
+          ctx.ui.notify(`choice:${choiceConfig.enabled ? "on" : "off"} · ${state} · timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} · wrap=${choiceConfig.wrap} · max=${choiceConfig.maxChoices} · speech=${choiceConfig.speechEnabled} · sink=${choiceConfig.sink ?? "as /tts"} · descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} · prefix=${choiceConfig.prefix ? "set" : "none"} · suffix=${choiceConfig.suffix ? "set" : "none"} · repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} · append=${choiceConfig.append.length} · caco=${cacoBridge?.config?.enabled ? "on" : "off"} · force-at-end=${choiceConfig.forceAtAgentEnd} · async=${asyncEnabled() ? `${asyncChoices.pending().length} pending` : "off"} · async-caco=${decisions?.config?.enabled ? "decisions" : "off"}`, "info");
           return;
         }
         if (/^settings(?:\s|$)/i.test(raw)) {
           try {
             const parsed = parseEnvStyleArgs(raw.replace(/^settings\s*/i, ""));
             if (parsed.positionals.length) throw new Error(`/choice settings: unexpected '${parsed.positionals[0]}'`);
-            const allowed = new Set(["timeout", "timeout_ms", "wrap", "max", "max_choices", "speech", "speech_enabled", "description", "descriptions", "description_on_navigate", "force", "force_at_end", "prefix", "suffix", "repeat.interval", "repeat_interval", "repeat.limit", "repeat_limit"]);
+            const allowed = new Set(["sink", "timeout", "timeout_ms", "wrap", "max", "max_choices", "speech", "speech_enabled", "description", "descriptions", "description_on_navigate", "force", "force_at_end", "prefix", "suffix", "repeat.interval", "repeat_interval", "repeat.limit", "repeat_limit"]);
             for (const key of Object.keys(parsed.values)) if (!allowed.has(key)) throw new Error(`/choice settings: unknown '${key}'`);
             const number = (keys, field, min, max) => {
               const key = keys.find((candidate) => Object.hasOwn(parsed.values, candidate));
@@ -1044,7 +1059,12 @@ export function createChoiceExtension({ speaker, cacophonyBridge, decisionBridge
             boolean(["force", "force_at_end"], "forceAtAgentEnd");
             affix("prefix", "prefix");
             affix("suffix", "suffix");
-            ctx.ui.notify(`choice settings: timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled} descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} prefix=${choiceConfig.prefix ? "set" : "none"} suffix=${choiceConfig.suffix ? "set" : "none"} repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} append=${choiceConfig.append.length} force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
+            if (Object.hasOwn(parsed.values, "sink")) {
+              // Empty: settings' again; "tts": where /tts plays.
+              const text = String(parsed.values.sink).trim();
+              choiceConfig.sink = text ? speechSink(text, "/choice settings: sink") : settingsSink;
+            }
+            ctx.ui.notify(`choice settings: sink=${choiceConfig.sink ?? "as /tts"} timeout=${choiceConfig.timeoutMs === 0 ? "off" : `${choiceConfig.timeoutMs}ms`} wrap=${choiceConfig.wrap} max=${choiceConfig.maxChoices} speech=${choiceConfig.speechEnabled} descriptions-on-navigate=${choiceConfig.descriptionOnNavigate} prefix=${choiceConfig.prefix ? "set" : "none"} suffix=${choiceConfig.suffix ? "set" : "none"} repeat=${choiceConfig.repeat.interval}s/${choiceConfig.repeat.limit ?? "unlimited"} append=${choiceConfig.append.length} force-at-end=${choiceConfig.forceAtAgentEnd}`, "info");
           } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); }
           return;
         }

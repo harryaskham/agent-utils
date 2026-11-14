@@ -42,6 +42,7 @@ function durable(sessionId) {
   const tasks = [];
   const watchers = new Set();
   const submitted = [];
+  const aborted = [];
   let next = 0;
   let revokers = [];
   const tx = {
@@ -87,18 +88,22 @@ function durable(sessionId) {
       return { value: doc(), start(fn) { listener = fn; watchers.add(entry); }, async stop() { watchers.delete(entry); } };
     },
     async conversation() {
-      return { async submit(input) { submitted.push(input); } };
+      return {
+        async submit(input) { submitted.push(input); },
+        async abort() { aborted.push(submitted.length); },
+      };
     },
   });
-  return { tasks, commit, doc, runtime, submitted };
+  return { tasks, commit, doc, runtime, submitted, aborted };
 }
 
-function commandContext(store, sessionId) {
+function commandContext(store, sessionId, name) {
   const notices = [];
   return {
     notices,
     ctx: {
       sessionId,
+      getSessionName: async () => name,
       conversationId: `${sessionId}-c1`,
       context: {},
       notify: (text) => notices.push(text),
@@ -140,7 +145,7 @@ async function until(check, label) {
   assert.fail(`timed out waiting for ${label}`);
 }
 
-function setup({ env = {}, persisted = {}, speaking = () => false, listSources, aliases = {}, lastSpeech = () => 0 } = {}) {
+function setup({ env = {}, persisted = {}, speaking = () => false, listSources, aliases = {}, send, lastSpeech = () => 0 } = {}) {
   let clock = 1_000_000;
   const mics = microphones();
   const heard = [];
@@ -148,6 +153,7 @@ function setup({ env = {}, persisted = {}, speaking = () => false, listSources, 
   const outputs = [];
   const task = createVoiceTask({
     aliases,
+    ...(send ? { send } : {}),
     setCallOutput: (sessionId, output) => outputs.push([sessionId, output]),
     lastSpeech,
     env: { PATH: "/bin", ...env },
@@ -183,13 +189,13 @@ test("/call holds a call per session, each recording its own device= and server=
   const voice = setup({ persisted: { provider: "openai", model: "whisper-settings" } });
   const one = durable("s1");
   const two = durable("s2");
-  const a = commandContext(one, "s1");
+  const a = commandContext(one, "s1", "harbour");
   const b = commandContext(two, "s2");
 
   await voice.commands.call.run("device=mic-a server=tcp:mac:4713 commit=500 insert=200", a.ctx);
   await voice.commands.call.run("vad device=mic-b model=whisper-session commit=500 insert=200", b.ctx);
-  assert.match(a.notices.at(-1), /^started · call:on · vad · listening · device:mic-a · server:tcp:mac:4713 · provider:openai · model:whisper-settings/);
-  assert.match(b.notices.at(-1), /^started · call:on · vad · listening · device:mic-b · server:default · provider:openai · model:whisper-session/);
+  assert.match(a.notices.at(-1), /^started · call:on · vad · listening · device:mic-a · server:tcp:mac:4713 · send:steer · provider:openai · model:whisper-settings/);
+  assert.match(b.notices.at(-1), /^started · call:on · vad · listening · device:mic-b · server:default · send:steer · provider:openai · model:whisper-session/);
   assert.deepEqual(one.doc().settings, { device: "mic-a", server: "tcp:mac:4713", commit: "500", insert: "200" });
   assert.equal(one.tasks[0].record.background, true);
   assert.deepEqual(one.tasks[0].record.input, { sessionId: "s1", startedAt: 1_000_000 });
@@ -200,11 +206,14 @@ test("/call holds a call per session, each recording its own device= and server=
   const [micA, micB] = voice.mics.opened;
   assert.deepEqual([micA.env.PULSE_SOURCE, micA.env.PULSE_SERVER, micB.env.PULSE_SOURCE, micB.env.PULSE_SERVER], ["mic-a", "tcp:mac:4713", "mic-b", undefined]);
   assert.equal(micA.env.PATH, "/bin", "the worker's environment under the session's");
+  assert.deepEqual([micA.streamName, micB.streamName], ["/call:harbour", "/call:s2"], "the session's name (or a short id) in the mixer");
   assert.equal(process.env.PULSE_SOURCE === "mic-a", false, "process.env is never changed");
 
   say(micA, { speech: 5, silence: 8 });
   await until(() => one.submitted.length === 1, "s1's turn");
-  assert.deepEqual(one.submitted[0], { type: "input", content: "hello agent", whenBusy: "followUp", requestId: "voice:s1-t1:1" });
+  assert.deepEqual(one.submitted[0], { type: "input", content: "hello agent", whenBusy: "steer", requestId: "voice:s1-t1:1" }, "a steer by default: it reaches a busy agent at its next step");
+  assert.deepEqual(one.doc().call.input, { device: "mic-a", server: "tcp:mac:4713" }, "where the microphone is, for clients' meters");
+  assert.deepEqual(one.aborted, [], "steer never stops the agent's turn");
   assert.equal(two.submitted.length, 0, "s2 heard nothing");
   assert.ok(voice.heard.every((entry) => entry.source === "mic-a" && entry.model === "whisper-settings"));
   await until(() => one.doc().call.sent === 1 && one.doc().call.phase === "listening", "s1's call back to listening");
@@ -347,7 +356,7 @@ test("settings are checked before they are kept, and settings.json and the envir
   assert.deepEqual(store.doc()?.settings ?? {}, {}, "nothing kept");
   assert.equal(store.tasks.length, 0, "nothing started");
   await voice.commands.call.run("status", ctx);
-  assert.match(notices.at(-1), /^voice:off · device:default · server:tcp:env:4713 · provider:openai · model:from-settings$/);
+  assert.match(notices.at(-1), /^voice:off · device:default · server:tcp:env:4713 · send:steer · provider:openai · model:from-settings$/);
   await voice.commands.ptt.run("server=tcp:session:4713 mode=ptt", ctx);
   assert.match(notices.at(-1), /^started · stt:on · ptt · armed · device:default · server:tcp:session:4713/);
   await voice.commands.call.run("server=", ctx);
@@ -371,7 +380,7 @@ test("the session overlay is TUI /stt's mapping; device= and server= reach the c
   const spawned = [];
   const spawnImpl = (command, args, options) => { spawned.push({ command, args, env: options.env }); return new EventEmitter(); };
   defaultCapture({ env: { PULSE_SOURCE: "mic", PULSE_SERVER: "tcp:mac:4713" }, executables: { pacat: "/nix/pacat" }, streamName: "pi-call-s", spawnImpl });
-  assert.deepEqual(spawned[0].args, ["--record", "--raw", "--format=s16le", "--rate=24000", "--channels=1", "--stream-name=pi-call-s", "--device=mic", "--server=tcp:mac:4713"]);
+  assert.deepEqual(spawned[0].args, ["--record", "--raw", "--format=s16le", "--rate=24000", "--channels=1", "--client-name=pi-call-s", "--stream-name=pi-call-s", "--device=mic", "--server=tcp:mac:4713"]);
   assert.equal(spawned[0].command, "/nix/pacat");
   defaultCapture({ env: { PI_RT_RECORD_CMD: "my-recorder", PULSE_SOURCE: "mic" }, executables: { pacat: "/nix/pacat" }, streamName: "x", spawnImpl });
   assert.deepEqual([spawned[1].command, spawned[1].args, spawned[1].env.PULSE_SOURCE], ["/bin/sh", ["-c", "my-recorder"], "mic"]);
@@ -401,7 +410,7 @@ test("pi-client shows the focused session's call as the speech chip and a status
       events: { on: (name, listener) => { bus.set(name, [...(bus.get(name) ?? []), listener]); return () => {}; }, emit: (name, data) => (bus.get(name) ?? []).forEach((listener) => listener(data)) },
     };
     pi.events.on(SPEECH_INDICATOR_EVENT, (state) => chips.push({ phase: state.phase, surface: state.surface, hint: state.hint }));
-    voiceClient(pi);
+    voiceClient(pi, { meter: false });
     const ctx = {
       sessionManager: { getSessionId: () => "s" },
       ui: { setStatus: (key, text) => statuses.push([key, text]) },
@@ -423,7 +432,7 @@ test("pi-client shows the focused session's call as the speech chip and a status
   assert.deepEqual(clients[1].statuses, clients[0].statuses);
 });
 
-test("Ctrl-Space sends /ptt talk to the focused session's daemon when it runs voice input", async () => {
+test("Ctrl-Space sends /ptt talk to the focused session's daemon while it has a live call there; otherwise it stays local", async () => {
   const { default: voiceClient } = await import("../extensions/durable/voice-client.js");
   const { offerDaemonPtt } = await import("../extensions/lib/voice-ptt.js");
   const handlers = new Map();
@@ -432,8 +441,9 @@ test("Ctrl-Space sends /ptt talk to the focused session's daemon when it runs vo
     on: (name, handler) => handlers.set(name, handler),
     events: { on: (name, listener) => { bus.set(name, [...(bus.get(name) ?? []), listener]); return () => {}; }, emit: (name, data) => (bus.get(name) ?? []).forEach((listener) => listener(data)) },
   };
-  voiceClient(pi);
+  voiceClient(pi, { meter: false });
   const calls = [];
+  const watches = [];
   const sessionCommands = { voice: [{ name: "tts" }, { name: "call" }, { name: "ptt" }], plain: [{ name: "tts" }] };
   let current = "voice";
   const ctx = {
@@ -445,12 +455,14 @@ test("Ctrl-Space sends /ptt talk to the focused session's daemon when it runs vo
         calls.push({ session: current, method, content: params.content, requestId: params.requestId });
         return { command: "ptt", status: "done" };
       },
-      async watchDocument() { return () => {}; },
+      async watchDocument(_address, onValue) { watches.push(onValue); return () => {}; },
     },
   };
   assert.equal(offerDaemonPtt(pi), false, "no session yet");
   handlers.get("session_start")({}, ctx);
   await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(offerDaemonPtt(pi), false, "no live call: the local /ptt records this machine's microphone");
+  watches[0]({ settings: {}, call: { kind: "call", mode: "vad", phase: "listening", end: null } });
   assert.equal(offerDaemonPtt(pi), true);
   assert.equal(offerDaemonPtt(pi), true);
   await new Promise((resolve) => setImmediate(resolve));
@@ -526,9 +538,9 @@ test("/call ALIAS starts a call with the alias's microphone and speech settings,
   const { ctx, notices } = commandContext(store, "s");
 
   await voice.commands.call.run("aliases", ctx);
-  assert.equal(notices.at(-1), "Call aliases (their settings last until hang-up):\n· bt: source=source.bluetooth sink=vsink_agent_call pan=0\n· phone: source=source.phone sink=vsink_agent_call pan=0 mode=ptt", "a verb is never an alias");
+  assert.equal(notices.at(-1), "Voice aliases (their settings last until hang-up, or until /stt or /ptt stops):\n· bt: source=source.bluetooth sink=vsink_agent_call pan=0\n· phone: source=source.phone sink=vsink_agent_call pan=0 mode=ptt", "a verb is never an alias");
   await voice.commands.call.run("nope", ctx);
-  assert.match(notices.at(-1), /^\/call: unknown 'nope'\. Call aliases/);
+  assert.match(notices.at(-1), /^\/call: unknown 'nope'\. Voice aliases/);
 
   // The session's own microphone setting, kept for later calls as before.
   await voice.commands.call.run("device=source.desk", ctx);
@@ -565,11 +577,47 @@ test("/call ALIAS starts a call with the alias's microphone and speech settings,
   assert.match(notices.at(-1), /device:source\.desk/);
   await voice.commands.call.run("hangup", ctx);
 
-  // Speech settings are /call's, and refused when invalid.
-  await voice.commands.stt.run("sink=vsink_x", ctx);
-  assert.match(notices.at(-1), /^\/stt: sink=, pan= and tts= are for \/call/);
+  // /stt and /ptt take aliases and sink=/pan= too, until they stop.
+  await voice.commands.stt.run("bt", ctx);
+  assert.match(notices.at(-1), /^started · stt:on · alias:bt · speech sink:vsink_agent_call · pan:0\.00 · tts:on \(until it stops\) · vad · listening · device:source\.bluetooth/);
+  const dictation = voice.run(store);
+  await until(() => voice.outputs.at(-1)?.[1]?.sink === "vsink_agent_call", "the dictation's speech output");
+  await voice.commands.stt.run("off", ctx);
+  await dictation;
+  assert.deepEqual(voice.outputs.at(-1), ["s", null], "stopping returns speech to /tts");
+  await voice.commands.ptt.run("sink=vsink_x", ctx);
+  assert.deepEqual(store.doc().call.overlay, { voice: {}, output: { sink: "vsink_x", tts: true } });
+  assert.deepEqual(store.doc().settings, { device: "source.desk" }, "sink= is never kept");
+  await voice.commands.ptt.run("off", ctx);
+
+  // Refused when invalid.
   await voice.commands.call.run("pan=3", ctx);
   assert.match(notices.at(-1), /^\/call: pan must be a number from -1 to 1/);
+  await voice.commands.call.run("send=later", ctx);
+  assert.match(notices.at(-1), /^\/call: send must be steer, followup or interrupt/);
+});
+
+test("send= is how a turn reaches a busy agent: steer by default, followup, or interrupt (its turn stops first)", async () => {
+  for (const [typed, configured, whenBusy, aborted] of [
+    ["", undefined, "steer", []],
+    ["", "followup", "followUp", []],
+    ["send=followup", undefined, "followUp", []],
+    ["deliver=follow-up", undefined, "followUp", []],
+    ["send=interrupt", "followup", "steer", [0]],
+  ]) {
+    const voice = setup(configured ? { send: configured } : {});
+    const store = durable("s");
+    const { ctx } = commandContext(store, "s");
+    await voice.commands.stt.run(`${typed} commit=500 insert=200`, ctx);
+    const ended = voice.run(store);
+    await until(() => voice.mics.opened.length === 1, "the microphone");
+    say(voice.mics.opened[0], { speech: 5, silence: 8 });
+    await until(() => store.submitted.length === 1, `the turn (${typed || configured || "default"})`);
+    assert.equal(store.submitted[0].whenBusy, whenBusy, typed || configured || "default");
+    assert.deepEqual(store.aborted, aborted, "only interrupt stops the agent's turn, before it sends");
+    await voice.commands.stt.run("off", ctx);
+    await ended;
+  }
 });
 
 test("a call's hang-up timer counts the agent's speech as activity, as it counts the operator's", async () => {
@@ -595,4 +643,62 @@ test("a call's hang-up timer counts the agent's speech as activity, as it counts
   voice.advance(1_000);
   await ended;
   assert.equal(store.doc().last.reason, "silence");
+});
+
+test("pi-client's meter samples a live call's microphone itself, as /meter:<session>, and stops with the call", async () => {
+  const { default: voiceClient, meterArgs, clientMeterEnabled } = await import("../extensions/durable/voice-client.js");
+  const { SPEECH_INDICATOR_EVENT } = await import("../extensions/lib/speech-indicator.js");
+  const handlers = new Map();
+  const bus = new Map();
+  const chips = [];
+  const pi = {
+    on: (name, handler) => handlers.set(name, handler),
+    events: { on: (name, listener) => { bus.set(name, [...(bus.get(name) ?? []), listener]); return () => {}; }, emit: (name, data) => (bus.get(name) ?? []).forEach((listener) => listener(data)) },
+  };
+  pi.events.on(SPEECH_INDICATOR_EVENT, (state) => chips.push({ phase: state.phase, meter: state.meter, level: state.level }));
+  const spawned = [];
+  const spawnImpl = (command, args) => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    Object.assign(proc, { command, args, killed: false, kill() { proc.killed = true; } });
+    spawned.push(proc);
+    return proc;
+  };
+  voiceClient(pi, { meter: true, spawnImpl, record: { command: "parec", prefix: [] } });
+  const watches = [];
+  const ctx = {
+    sessionManager: { getSessionId: () => "chord-1234567890" },
+    ui: { setStatus() {} },
+    chord: { async watchDocument(_address, onValue) { watches.push(onValue); return () => {}; } },
+  };
+  handlers.get("session_start")({}, ctx);
+  await new Promise((resolve) => setImmediate(resolve));
+  const live = { kind: "call", mode: "vad", phase: "listening", end: null, label: "harbour", input: { device: "source.bluetooth", server: "sgu24:4713" } };
+  watches[0]({ settings: {}, call: live });
+  assert.equal(spawned.length, 1);
+  assert.equal(spawned[0].command, "parec");
+  assert.deepEqual(spawned[0].args, meterArgs(live.input, "harbour"));
+  assert.ok(spawned[0].args.includes("--client-name=/meter:harbour") && spawned[0].args.includes("--device=source.bluetooth") && spawned[0].args.includes("--server=sgu24:4713"));
+  const loud = Buffer.alloc(1600);
+  for (let i = 0; i < 800; i++) loud.writeInt16LE(i % 2 ? 9000 : -9000, i * 2);
+  spawned[0].stdout.emit("data", loud);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.ok(chips.some((chip) => chip.meter && chip.level > 0), "the chip shows the level");
+
+  // A new phase keeps the sampler; muting or ending the call stops it.
+  watches[0]({ settings: {}, call: { ...live, phase: "transcribing" } });
+  assert.equal(spawned.length, 1);
+  watches[0]({ settings: {}, call: { ...live, muted: true } });
+  assert.equal(spawned[0].killed, true);
+  watches[0]({ settings: {}, call: live });
+  assert.equal(spawned.length, 2);
+  spawned[1].emit("exit", 1);
+  watches[0]({ settings: {}, call: { ...live, phase: "on-air" } });
+  assert.equal(spawned.length, 2, "an unreachable server is not retried at once");
+  watches[0]({ settings: {}, call: { ...live, input: { device: null, server: null } } });
+  assert.equal(spawned.length, 2, "no meter for the daemon's unnamed default server");
+
+  assert.equal(clientMeterEnabled({ PI_VOICE_CLIENT_METER: "0" }, {}), false);
+  assert.equal(clientMeterEnabled({}, { voice: { clientMeter: false } }), false);
+  assert.equal(clientMeterEnabled({}, {}), true);
 });

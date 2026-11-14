@@ -191,7 +191,7 @@ export function createChoiceSpeaker({
   persisted = {},
   synthesize = synthesizeSpeechDirect,
   player = createInterruptiblePcmPlayer(),
-  streamName = DEFAULT_CHOICE_STREAM_NAME,
+  streamName: defaultStreamName = DEFAULT_CHOICE_STREAM_NAME,
   audioProviders,
   routing,
 } = {}) {
@@ -207,6 +207,8 @@ export function createChoiceSpeaker({
   const speak = async (text, call = {}) => {
     const body = String(text ?? "").trim();
     if (!body) return { skipped: true };
+    // The caller's Pulse name (`/choices:harbour`, stream-names.js), else the speaker's.
+    const streamName = call.streamName || defaultStreamName;
     const route = call.bypassRouting === true ? null : routing;
     const pan = call.pan !== undefined ? call.pan : shared.pan !== undefined ? shared.pan : assignment?.pan;
     const panSource = call.pan !== undefined || shared.pan !== undefined ? "explicit" : "session";

@@ -190,9 +190,26 @@ The short commands use local VAD and batch transcription by default:
 ```text
 /stt                 # always-listening local VAD
 /stt ptt             # local VAD, held until release
+/stt source=bluez_input.headset server=tcp:phone:4713   # this session's microphone, kept
+/stt send=followup   # how turns reach a busy agent: steer (default), followup, interrupt
+/ptt bt              # a voice alias (agentUtils.voice.aliases) until /ptt stop
+/stt devices         # the Pulse sources the session's server has
+/stt aliases
 /ptt                 # shorter alias for the same PTT mode
 /stt stop
 ```
+
+`source=` (or `device=`) and `server=` choose the Pulse microphone for this
+session and are kept with its other `/stt` settings, never in `process.env`
+(so `/tts`'s server is untouched); with either set, recording uses Pulse's
+`parec`. `send=` sets how a finished turn reaches an agent that is still
+working: `steer` (the default, at its next step), `followup` (after its whole
+turn) or `interrupt` (stop its turn, then send); settings.json
+`agentUtils.voice.send` sets the default. An alias, and `sink=`, `pan=` or
+`tts=` typed on `/stt` or `/ptt`, last until it stops: in TUI Pi this process
+plays the agent's speech there, and in pi-client the daemon does (through
+`/tts overlay`). The microphone shows in the mixer as `/stt:<session>` or
+`/ptt:<session>`.
 
 They keep the current Pi model and never open a Realtime WebSocket. Full
 Realtime transcription remains available only through the explicit `/rt`

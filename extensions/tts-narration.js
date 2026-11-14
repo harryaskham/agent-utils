@@ -19,8 +19,12 @@ import {
   resolveAgentTtsSettings,
   resolveNarrateSettings,
   resolveNarrationModel,
+  speechSink,
   toolResultText,
 } from "./lib/tts-narration.js";
+import { callOutput, callSpeechOverrides, describeCallOutput } from "./lib/call-audio.js";
+import { LOCAL_VOICE_OUTPUT_KEY } from "./lib/voice-settings.js";
+import { sessionLabel, speechStreamName } from "./lib/stream-names.js";
 import {
   readPersistedNarrateSettings,
   readPersistedTtsSettings,
@@ -66,6 +70,8 @@ function ttsStatus(enabled, speech, env, enabledSource = "runtime", { prefix = "
     `endpoint:${source(config.endpoint, "AZURE_SPEECH_ENDPOINT", env)}`,
     speechCredentialStatus(config, env),
     `output:${usesDaemonPlayback(config) ? `daemon/${config.daemonSink || "server-default"}` : `${config.backend}/${optional(config.device)}`}`,
+    // Local /stt or /ptt with sink=, pan= or an alias: its output wins until it stops.
+    ...(callOutput(LOCAL_VOICE_OUTPUT_KEY) ? [`voice:${describeCallOutput(callOutput(LOCAL_VOICE_OUTPUT_KEY))} (until /stt or /ptt stops)`] : []),
     `prefix:${prefix ? "set" : "none"}`,
     `suffix:${suffix ? "set" : "none"}`,
     "stream:/tts",
@@ -119,6 +125,13 @@ export function createTtsNarrationExtension({
     let narrationPrefix = expandEnvReferences(resolvedNarrate.prefix, env, "/narrate prefix");
     let narrationPrefixWithSessionName = resolvedNarrate.prefixWithSessionName;
     let narrationSuffix = expandEnvReferences(resolvedNarrate.suffix, env, "/narrate suffix");
+    // Narration's own sink: the session's (/narrate sink=, "tts" for where /tts plays), else settings'.
+    let narrationSinkSetting;
+    const narrationSink = () => {
+      if (narrationSinkSetting === undefined) return resolvedNarrate.sink;
+      try { return speechSink(narrationSinkSetting); } catch { return undefined; }
+    };
+    const localVoiceOutput = () => callOutput(LOCAL_VOICE_OUTPUT_KEY);
 
     const effectivePrefix = (configuredPrefix, enabled, ctx) => speechPrefix({
       enabled,
@@ -183,6 +196,7 @@ export function createTtsNarrationExtension({
       if (typeof narrate.prefix === "string") narrationPrefix = narrate.prefix;
       if (typeof narrate.prefixWithSessionName === "boolean") narrationPrefixWithSessionName = narrate.prefixWithSessionName;
       if (typeof narrate.suffix === "string") narrationSuffix = narrate.suffix;
+      if (typeof narrate.sink === "string") narrationSinkSetting = narrate.sink || undefined;
       if (typeof narrate.enabled === "boolean") { narrateEnabled = narrate.enabled; narrateEnabledSource = "session"; }
 
       sessionSpeechAssignment = resolveSessionSpeechAssignment(sessionSpeechIdentity(ctx, env), sessionSpeechPolicy);
@@ -234,7 +248,12 @@ export function createTtsNarrationExtension({
       // extensions (Pi graphics editor glow) can react to agent speech.
       const emitSpeech = (state) => { try { pi.events?.emit?.("agent-utils:speech", { state, kind: speechKind, chars: String(text || "").length, at: Date.now() }); } catch {} };
       emitSpeech("start");
-      void speechController.speak(text, { ...overrides, speechKind, streamName: `/${speechKind}` })
+      // Narration on its own sink; local /stt or /ptt's output (sink=, pan=) over every kind.
+      const own = speechKind === "narrate" && narrationSink() ? { device: narrationSink() } : {};
+      // `/tts:mac-utils`: the session's name (or a short id) in the mixer.
+      let label = "";
+      try { label = sessionLabel({ name: pi.getSessionName?.(), sessionId: ctx?.sessionManager?.getSessionId?.() }); } catch {}
+      void speechController.speak(text, { ...own, ...overrides, ...callSpeechOverrides(localVoiceOutput()), speechKind, streamName: speechStreamName(speechKind, label) })
         .then(result => { for (const warning of result?.warnings || []) warnOnce("tts daemon", new Error(warning), ctx); })
         .catch((error) => warnOnce(kind, error, ctx))
         .finally(() => emitSpeech("end"));
@@ -322,7 +341,7 @@ export function createTtsNarrationExtension({
       const text = assistantPlainText(message);
       const reasoningSummary = narrationReasoningSummaries ? normalizeNarrationText(assistantReasoningSummary(message), "before") : "";
       const preamble = normalizeNarrationText(text, "before");
-      if (ttsEnabled && !(narrateEnabled && calls.length)) {
+      if ((ttsEnabled || localVoiceOutput()?.tts === true) && !(narrateEnabled && calls.length)) {
         if (text) {
           const key = `${message?.timestamp ?? ""}:${text}`;
           if (key !== lastPlainKey) {
@@ -461,7 +480,7 @@ export function createTtsNarrationExtension({
             if (parsed.positionals.length) throw new Error(`/narrate: unexpected argument '${parsed.positionals[0]}'`);
             const speechKeys = new Set(["provider", "voice", "tts_model", "daemon_url", "daemon_provider", "daemon_sink", "token_file", "playback", "endpoint", "base_url", "lang", "embedding", "instructions", "role", "pitch", "volume", "timeout_ms", "pan", "interrupt", "auth", "az", "resource", "tenant", "subscription", "resource_id"]);
             for (const key of Object.keys(parsed.values)) {
-              if (!speechKeys.has(key) && !new Set(["model", "enabled", "on", "speed", "style", "styledegree", "style_degree", "text", "text_enabled", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "prefix_with_session_name", "prefixwithsessionname", "suffix"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
+              if (!speechKeys.has(key) && !new Set(["model", "enabled", "on", "speed", "style", "styledegree", "style_degree", "text", "text_enabled", "reasoning", "reasoning_summaries", "reasoningsummaries", "prefix", "prefix_with_session_name", "prefixwithsessionname", "suffix", "sink", "device"]).has(key)) throw new Error(`/narrate: unknown setting '${key}'`);
             }
             const speechValues = Object.fromEntries(Object.entries(parsed.values).filter(([key]) => speechKeys.has(key)).map(([key, value]) => [key === "tts_model" ? "model" : key, value]));
             if (Object.keys(speechValues).length) {
@@ -481,6 +500,14 @@ export function createTtsNarrationExtension({
             if (parsed.values.suffix !== undefined) {
               narrationSuffix = expandEnvReferences(parsed.values.suffix, env, "/narrate suffix");
               rememberNarrate({ suffix: narrationSuffix });
+            }
+            const sinkValue = parsed.values.sink ?? parsed.values.device;
+            if (sinkValue !== undefined) {
+              // Empty: settings' again; "tts": where /tts plays.
+              const text = String(sinkValue).trim();
+              if (text) speechSink(text, "/narrate: sink");
+              narrationSinkSetting = text || undefined;
+              rememberNarrate({ sink: text });
             }
             if (parsed.values.model) {
               narrationModel = String(parsed.values.model).trim();
@@ -535,7 +562,7 @@ export function createTtsNarrationExtension({
           stopNarrationWork();
           await speechController.interrupt({ kind: "narrate" });
         }
-        ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · enabled-source:${narrateEnabledSource} · model:${narrationModel} · model-source:${narrationModelSource} · speed:${narrationSpeed ?? "tts"} · speed-source:${narrationSpeedSource} · style:${narrationStyle ?? "tts"} · style-source:${narrationStyleSource} · styledegree:${narrationStyleDegree ?? "tts"} · styledegree-source:${narrationStyleDegreeSource} · text:${narrationTextEnabled ? "on" : "off"} · text-source:${narrationTextEnabledSource} · reasoning-summaries:${narrationReasoningSummaries ? "prefer" : "off"} · reasoning-source:${narrationReasoningSummariesSource} · prefix:${narrationPrefix ? "set" : "none"} · suffix:${narrationSuffix ? "set" : "none"} · context:${narrationTextEnabled ? "custom nextTurn/no-trigger" : "speech-only"} · speech:/tts settings`, "info");
+        ctx.ui.notify(`narrate:${narrateEnabled ? "on" : "off"} · enabled-source:${narrateEnabledSource} · model:${narrationModel} · model-source:${narrationModelSource} · speed:${narrationSpeed ?? "tts"} · speed-source:${narrationSpeedSource} · style:${narrationStyle ?? "tts"} · style-source:${narrationStyleSource} · styledegree:${narrationStyleDegree ?? "tts"} · styledegree-source:${narrationStyleDegreeSource} · text:${narrationTextEnabled ? "on" : "off"} · text-source:${narrationTextEnabledSource} · reasoning-summaries:${narrationReasoningSummaries ? "prefer" : "off"} · reasoning-source:${narrationReasoningSummariesSource} · prefix:${narrationPrefix ? "set" : "none"} · suffix:${narrationSuffix ? "set" : "none"} · sink:${narrationSink() ?? "as /tts"}${narrationSinkSetting === undefined && narrationSink() ? " (settings)" : ""} · context:${narrationTextEnabled ? "custom nextTurn/no-trigger" : "speech-only"} · speech:/tts settings`, "info");
       },
     });
 

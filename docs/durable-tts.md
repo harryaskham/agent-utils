@@ -106,15 +106,27 @@ chosen for the session (`/tts voice=…`, `/tts harry`) wins.
 /tts status             # settings, credentials, output and any recent error
 /tts voice=en-GB-SoniaNeural speed=1.5 prefix='Build agent: '
 /tts choices=off        # stop speaking ask_user questions
+/tts choices_sink=vsink_agent_tts   # spoken choices on a sink of their own ("tts": as /tts)
 /tts harry              # the default voice with Harry's embedding
+/tts overlay sink=vsink_agent_call pan=0   # a client's output while its voice input runs
+/tts overlay off
 
 /narrate                # on, speaking before each tool batch
 /narrate both           # before and after (also: before, after)
 /narrate phases=after speed=2 style=cheerful styledegree=1.4
 /narrate reasoning_summaries=off
+/narrate sink=vsink_agent_narrate  # narration on a sink of its own ("tts": as /tts; empty: settings')
 /narrate off
 /narrate status
 ```
+
+Narration and spoken choices take settings.json `agentUtils.narrate.sink` and
+`agentUtils.choice.sink` (`PI_NARRATE_SINK`, `PI_CHOICE_SINK`) unless a session
+sets its own; unset, they play where `/tts` plays. A live `/call` plays every
+kind on its own sink, and so does `/tts overlay`, which pi-client's local `/stt`
+and `/ptt` send while an alias or `sink=`/`pan=` of theirs runs; the call wins
+over an overlay. Streams carry the session's name in the mixer: `/tts:harbour`,
+`/narrate:harbour`, `/choices:harbour`.
 
 `/tts` accepts the same speech `key=value` settings as interactive Pi. Literal
 API keys are used but never stored; `api_key=$OPENAI_API_KEY` stores the

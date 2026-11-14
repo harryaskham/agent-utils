@@ -62,7 +62,7 @@ function stubSpeech(log, sessionId) {
 }
 
 /** A fake pi-daemon worker: one module instance over a durable store. */
-function fakeHost({ store = durableStore(), env = baseEnv(), speech, choices, withState = true, modelRegistry, cwd, ...options } = {}) {
+function fakeHost({ store = durableStore(), env = baseEnv(), speech, choices, withState = true, modelRegistry, cwd, names = {}, ...options } = {}) {
   const spoken = speech || [];
   const choiceLog = choices || [];
   const notifications = [];
@@ -81,6 +81,7 @@ function fakeHost({ store = durableStore(), env = baseEnv(), speech, choices, wi
     ...(withState ? { state: store.forSession(sessionId) } : {}),
     ...(modelRegistry ? { modelRegistry } : {}),
     ...(cwd ? { cwd } : {}),
+    ...(Object.hasOwn(names, sessionId) ? { getSessionName: async () => names[sessionId] } : {}),
   });
   return {
     audio,
@@ -120,7 +121,7 @@ test("/tts on then a message_end speaks the final answer exactly once", async ()
   await host.emit("s1", event);
   await host.emit("s1", event); // the same event delivered twice
   assert.deepEqual(host.spoken.map(({ kind, text }) => ({ kind, text })), [{ kind: "tts", text: "The build is green." }]);
-  assert.equal(host.spoken[0].overrides.streamName, "/tts");
+  assert.equal(host.spoken[0].overrides.streamName, "/tts:s1", "a session with no name: a short id in the mixer");
 });
 
 test("/tts is off by default and /tts off silences and interrupts", async () => {
@@ -164,7 +165,7 @@ test("/narrate speaks tool batches per phase mode", async () => {
     ["narrate", "bash failed."],
   ]);
   assert.equal(host.spoken[0].overrides.speed, 1.5);
-  assert.equal(host.spoken[0].overrides.streamName, "/narrate");
+  assert.equal(host.spoken[0].overrides.streamName, "/narrate:s1");
 
   await host.command("s1", "/narrate after");
   host.spoken.length = 0;
@@ -522,6 +523,7 @@ test("the real speech controller reaches a stub provider and stub player", async
   const played = [];
   const host = fakeHost({
     env,
+    names: { s1: "harbour" },
     createSpeech: ({ config }) => createAgentSpeechController({
       env,
       initialConfig: config,
@@ -531,8 +533,8 @@ test("the real speech controller reaches a stub provider and stub player", async
   });
   await host.command("s1", "/tts voice=en-GB-SoniaNeural");
   await host.emit("s1", assistantEnd([text("Hello from the daemon host.")]));
-  assert.deepEqual(synthesized, [{ body: "Hello from the daemon host.", voice: "en-GB-SoniaNeural", streamName: "/tts" }]);
-  assert.deepEqual(played, [{ bytes: 4, streamName: "/tts" }]);
+  assert.deepEqual(synthesized, [{ body: "Hello from the daemon host.", voice: "en-GB-SoniaNeural", streamName: "/tts:harbour" }], "the session's name in the mixer");
+  assert.deepEqual(played, [{ bytes: 4, streamName: "/tts:harbour" }]);
 });
 
 test("helpers: deterministic tool lines, secret filtering, readiness", () => {
@@ -760,4 +762,64 @@ test("the speech controller plays a call's sink without focus/solo routing", asy
   await controller.speak("on the call", { device: "vsink_agent_call", bypassRouting: true, pan: 0 });
   assert.deepEqual(played, [{ device: "vsink_focus", pan: undefined }, { device: "vsink_agent_call", pan: 0 }]);
   assert.equal(routed, 1, "the call's utterance skipped focus routing");
+});
+
+test("narration and spoken choices play on sinks of their own: the session's, else settings', else where /tts plays; a call's wins", async () => {
+  const { setCallOutput } = await import("../extensions/lib/call-audio.js");
+  const choices = [];
+  const host = fakeHost({
+    persistedSettings: { narrate: { sink: "vsink_agent_narrate" }, choice: { sink: "vsink_agent_tts" } },
+    createChoiceSpeech: ({ sessionId }) => ({ async speak(text, call) { choices.push({ sessionId, text, call }); return {}; }, interrupt() {}, dispose() {} }),
+  });
+  const session = "sinks-session";
+  const narrate = async (id) => {
+    await host.emit(session, assistantEnd([toolCall(id, "bash", { command: "ls" })]));
+    await host.emit(session, toolStart(id, "bash", { command: "ls" }));
+    return host.spoken.at(-1);
+  };
+  try {
+    await host.command(session, "/narrate on");
+    assert.match(host.notifications.at(-1).text, / · sink:vsink_agent_narrate \(settings\) · /);
+    assert.equal((await narrate("t1")).overrides.device, "vsink_agent_narrate");
+    await host.command(session, "/tts on");
+    await host.emit(session, assistantEnd([text("The answer.")]));
+    assert.equal(host.spoken.at(-1).overrides.device, undefined, "final answers play where /tts plays");
+    assert.match(host.notifications.at(-1).text, / · choices:on · choices_sink:vsink_agent_tts \(settings\) · /);
+    await host.emit(session, toolStart("q1", "ask_user", { question: "Ship it?" }));
+    assert.equal(choices.at(-1).call.device, "vsink_agent_tts");
+
+    // A session's own, kept; "tts" plays where /tts plays; empty returns to settings'.
+    await host.command(session, "/narrate sink=vsink_mine");
+    assert.equal((await narrate("t2")).overrides.device, "vsink_mine");
+    await host.command(session, "/narrate sink=tts");
+    assert.match(host.notifications.at(-1).text, / · sink:as \/tts · /);
+    assert.equal((await narrate("t3")).overrides.device, undefined);
+    await host.command(session, "/narrate sink=");
+    assert.equal((await narrate("t4")).overrides.device, "vsink_agent_narrate");
+    await host.command(session, "/tts choices_sink=vsink_choices");
+    await host.emit(session, toolStart("q2", "ask_user", { question: "Again?" }));
+    assert.equal(choices.at(-1).call.device, "vsink_choices");
+    await host.command(session, "/narrate sink=bad\u0007name");
+    assert.match(host.notifications.at(-1).text, /^\/narrate: sink must be a Pulse sink name/);
+
+    // A client's overlay (pi-client /ptt sink=…), then a live call over it.
+    await host.command(session, "/tts overlay sink=vsink_ptt pan=0.2");
+    assert.equal(host.notifications.at(-1).text, "overlay:sink:vsink_ptt · pan:0.20 · tts:on (until /tts overlay off)");
+    assert.equal((await narrate("t5")).overrides.device, "vsink_ptt");
+    setCallOutput(session, { sink: "vsink_agent_call", tts: true });
+    assert.equal((await narrate("t6")).overrides.device, "vsink_agent_call", "a live call's output wins over a client's");
+    await host.emit(session, toolStart("q3", "ask_user", { question: "Call?" }));
+    assert.equal(choices.at(-1).call.device, "vsink_agent_call");
+    setCallOutput(session, null);
+    await host.command(session, "/tts status");
+    assert.match(host.notifications.at(-1).text, / · overlay:sink:vsink_ptt · pan:0\.20 · tts:on \(until \/tts overlay off\) · /);
+    await host.command(session, "/tts overlay off");
+    assert.equal(host.notifications.at(-1).text, "overlay:off");
+    assert.equal((await narrate("t7")).overrides.device, "vsink_agent_narrate");
+    await host.command(session, "/tts overlay volume=3");
+    assert.match(host.notifications.at(-1).text, /^\/tts: overlay: unknown setting 'volume'/);
+  } finally {
+    setCallOutput(session, null);
+    setCallOutput(session, null, "client");
+  }
 });

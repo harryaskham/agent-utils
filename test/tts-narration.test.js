@@ -517,3 +517,43 @@ test("narration failures are best-effort and never throw from tool/message hooks
   await waitFor(() => h.notifications.some((entry) => /model down/.test(entry.message)));
   assert.equal(h.sent.length, 0);
 });
+
+test("narration plays on its own sink (settings', or /narrate sink=), and local /stt or /ptt output wins over every kind", async () => {
+  const { setCallOutput } = await import("../extensions/lib/call-audio.js");
+  const { LOCAL_VOICE_OUTPUT_KEY } = await import("../extensions/lib/voice-settings.js");
+  const spoken = [];
+  const speech = {
+    getConfig: () => ({ provider: "azure", voice: "v", lang: "en", speed: 1, embedding: null, style: null, styleDegree: null, backend: "pulse", device: "vsink_agent_tts" }),
+    apply() {}, interrupt() {}, dispose() {}, async speak(text, overrides) { spoken.push({ text, overrides }); },
+  };
+  const h = harness({ speech, runTextTurn: async () => ({ text: "Done.", model: DEFAULT_NARRATION_MODEL }), persistedSettings: { tts: {}, narrate: { enabled: true, textEnabled: false, sink: "vsink_agent_narrate" } } });
+  const tool = (id, text = "Checking.") => h.emit("message_end", { message: { role: "assistant", timestamp: Number(id.slice(1)), content: [{ type: "text", text }, { type: "toolCall", id, name: "read", arguments: {} }] } });
+  try {
+    tool("t1");
+    await waitFor(() => spoken.length === 1);
+    assert.equal(spoken[0].overrides.device, "vsink_agent_narrate");
+    await h.commands.get("narrate").handler("status", h.ctx);
+    assert.match(h.notifications.at(-1).message, / · sink:vsink_agent_narrate \(settings\) · /);
+    await h.commands.get("narrate").handler("sink=tts", h.ctx);
+    tool("t2", "Reading.");
+    await waitFor(() => spoken.length === 2);
+    assert.equal(spoken[1].overrides.device, undefined, "\"tts\": where /tts plays");
+    await h.commands.get("narrate").handler("sink=", h.ctx);
+    tool("t3", "Looking.");
+    await waitFor(() => spoken.length === 3);
+    assert.equal(spoken[2].overrides.device, "vsink_agent_narrate", "empty: settings' again");
+
+    // Local /ptt bt: its sink and pan for every kind, and final answers spoken with /tts off.
+    setCallOutput(LOCAL_VOICE_OUTPUT_KEY, { sink: "vsink_agent_call", pan: 0, tts: true });
+    tool("t4", "Searching.");
+    await waitFor(() => spoken.length === 4);
+    assert.deepEqual([spoken[3].overrides.device, spoken[3].overrides.pan, spoken[3].overrides.bypassRouting], ["vsink_agent_call", 0, true]);
+    h.emit("message_end", { message: { role: "assistant", timestamp: 99, content: [{ type: "text", text: "All done." }] } });
+    await waitFor(() => spoken.length === 5);
+    assert.deepEqual([spoken[4].text, spoken[4].overrides.device], ["All done.", "vsink_agent_call"]);
+    await h.commands.get("tts").handler("status", h.ctx);
+    assert.match(h.notifications.at(-1).message, / · voice:sink:vsink_agent_call · pan:0\.00 · tts:on \(until \/stt or \/ptt stops\) · /);
+  } finally {
+    setCallOutput(LOCAL_VOICE_OUTPUT_KEY, null);
+  }
+});

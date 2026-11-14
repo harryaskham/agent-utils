@@ -6,6 +6,9 @@
 //   session's speech plays on that sink and pan, bypassing /tts focus and solo, and speaks even if
 //   /tts is off. Nothing in the session's /tts settings changes: when the call ends the overlay
 //   goes, and speech is as it was.
+// - A client's output: pi-client's local /stt and /ptt (sink=, pan=, an alias's) ask the daemon's
+//   tts.mjs for the same with /tts overlay, kept under the session as the "client" source. A
+//   live call's own output wins over it.
 // - Speech activity: when each session last started or finished speaking, so a call's hang-up
 //   timer counts the agent's speech as activity, as it counts the operator's.
 
@@ -64,18 +67,27 @@ export function splitCallValues(values = {}) {
   return { voice, output };
 }
 
-/** Set (or with null, clear) a session's call output. */
-export function setCallOutput(sessionId, output) {
+/**
+ * Set (or with null, clear) a session's speech output from `source`: "call" (a live /call, /stt
+ * or /ptt run by the daemon, or TUI Pi's local /stt and /ptt) or "client" (pi-client's local
+ * /stt and /ptt, through /tts overlay).
+ */
+export function setCallOutput(sessionId, output, source = "call") {
   const outputs = map(OUTPUTS);
   const key = String(sessionId ?? "");
   if (!key) return;
-  if (output && typeof output === "object") remember(outputs, key, { ...output });
+  const entry = { ...(outputs.get(key)?.sources ?? {}) };
+  if (output && typeof output === "object") entry[source] = { ...output };
+  else delete entry[source];
+  if (Object.keys(entry).length) remember(outputs, key, { sources: entry });
   else outputs.delete(key);
 }
 
-/** A session's live call output, or undefined. */
-export function callOutput(sessionId) {
-  return map(OUTPUTS).get(String(sessionId ?? ""));
+/** A session's speech output: its call's, else its client's; or undefined. */
+export function callOutput(sessionId, source) {
+  const sources = map(OUTPUTS).get(String(sessionId ?? ""))?.sources;
+  if (!sources) return undefined;
+  return source ? sources[source] : sources.call ?? sources.client;
 }
 
 /** Per-utterance speech overrides for a call output: its sink (bypassing focus/solo) and pan. */

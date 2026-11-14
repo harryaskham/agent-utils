@@ -83,6 +83,12 @@ import { spawnSync } from "node:child_process";
 
 import { parseEnvStyleArgs } from "./lib/env-args.js";
 import { sttEnvUpdates } from "./lib/stt-session-values.js";
+import { setCallOutput as publishSpeechOutput, describeCallOutput } from "./lib/call-audio.js";
+import { effectiveLocalMic, overlayCommand, planLocalVoice, splitLocalVoiceValues } from "./lib/local-voice.js";
+import { LOCAL_VOICE_OUTPUT_KEY, VOICE_WORDS, aliasesFromSettings, piSendOptions, voiceSendFromSettings, voiceSendLabel } from "./lib/voice-settings.js";
+import { defaultListSources, sourcesText } from "./lib/durable-voice.js";
+import { agentSettingsPath, readAgentSettings } from "./pi-graphics/agent-io.js";
+import { sessionLabel, speechStreamName } from "./lib/stream-names.js";
 import { labelUntrustedTranscript } from "./lib/untrusted-transcript.js";
 import { offerDaemonPtt } from "./lib/voice-ptt.js";
 import { isKeyRelease, isKeyRepeat } from "./lib/kitty-key-events.js";
@@ -120,6 +126,7 @@ import {
   runShellStream,
   playPcmBuffer,
   applyPulseStreamName,
+  localRecordPlan,
 } from "./lib/realtime-audio.js";
 import {
   REALTIME_CONTEXT_WINDOW_TOKENS,
@@ -2965,6 +2972,81 @@ export default function realtimeAgentExtension(pi) {
     } catch {}
   };
 
+  // Local /stt and /ptt (lib/local-voice.js): the session's microphone (source=, server=) and
+  // delivery (send=), kept with its /stt settings; an alias's settings (settings.json
+  // agentUtils.voice.aliases), and typed sink=/pan=/tts=, for the run: until /stt or /ptt stops,
+  // or the next /stt or /ptt replaces it.
+  const voiceSettingsRoot = (() => { try { return readAgentSettings(agentSettingsPath())?.agentUtils ?? {}; } catch { return {}; } })();
+  const localAliases = aliasesFromSettings(voiceSettingsRoot);
+  const defaultLocalSend = voiceSendFromSettings(voiceSettingsRoot, process.env);
+  const localVoice = { mic: {}, send: undefined, overlay: null, restoreEnv: null, outputTarget: null };
+  const localSend = () => localVoice.overlay?.send ?? localVoice.send ?? defaultLocalSend;
+  const localMic = () => effectiveLocalMic(localVoice.mic, localVoice.overlay?.mic);
+  const localAliasesText = () => {
+    const names = Object.keys(localAliases);
+    return names.length === 0
+      ? "No voice aliases: add them to settings.json agentUtils.voice.aliases (bt: \"source=… sink=… pan=0\")."
+      : `Voice aliases (/stt ALIAS, /ptt ALIAS; their settings last until it stops):\n${names.map((name) => `· ${name}: ${Object.entries(localAliases[name]).map(([key, value]) => `${key}=${value}`).join(" ")}`).join("\n")}`;
+  };
+  const localVoiceNote = () => {
+    const mic = localMic();
+    const parts = [`source=${mic.source || "default"}`, `server=${mic.server || process.env.PULSE_SERVER || "default"}`, `send=${voiceSendLabel(localSend())}`];
+    if (localVoice.overlay?.alias) parts.push(`alias=${localVoice.overlay.alias}`);
+    if (localVoice.overlay?.output) parts.push(`speech ${describeCallOutput(localVoice.overlay.output)} (until it stops)`);
+    return parts.join(" ");
+  };
+  // The run's speech output. TUI Pi speaks in this process (tts-narration.js, choice.js read it);
+  // in pi-client the daemon speaks for the session, so its tts.mjs is asked (/tts overlay).
+  const publishLocalOutput = (output, ctx) => {
+    const target = typeof ctx?.pinned === "function" ? ctx.pinned() : ctx;
+    const holder = output ? target : localVoice.outputTarget;
+    if (typeof holder?.chord?.call === "function" || (!output && localVoice.outputTarget)) {
+      localVoice.outputTarget = output ? holder : null;
+      const content = overlayCommand(output);
+      Promise.resolve()
+        .then(() => holder.chord.call("conversation.submit", { requestId: `local-voice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, content }))
+        .catch((error) => { try { ctx?.ui?.notify?.(`${content}: ${error?.message || error}`, "warning"); } catch {} });
+      return;
+    }
+    publishSpeechOutput(LOCAL_VOICE_OUTPUT_KEY, output || null);
+  };
+  /** Replace the run's own settings (null: none), returning the previous run's STT settings. */
+  const setLocalVoiceOverlay = (overlay, ctx) => {
+    let next = null;
+    if (overlay && Object.keys(overlay.stt || {}).length) {
+      rejectSurfaceAuthKeys(overlay.stt, "/stt", { providerName: overlay.stt.provider || process.env.PI_STT_PROVIDER || readPersistedSttSettings().provider || "azure", audioProviders: audioBinding.providers });
+      next = sttEnvUpdates(overlay.stt, { env: process.env, persisted: readPersistedSttSettings(), audioProviders: audioBinding.providers });
+    }
+    if (localVoice.restoreEnv) {
+      for (const [key, value] of Object.entries(localVoice.restoreEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      localVoice.restoreEnv = null;
+    }
+    const hadOutput = Boolean(localVoice.overlay?.output);
+    localVoice.overlay = overlay || null;
+    if (next) {
+      const restore = {};
+      for (const key of [...Object.keys(next.updates), ...next.clear]) restore[key] = process.env[key];
+      for (const key of next.clear) delete process.env[key];
+      Object.assign(process.env, next.updates);
+      localVoice.restoreEnv = restore;
+    }
+    const output = overlay?.output ?? null;
+    if (output || hadOutput) publishLocalOutput(output, ctx);
+  };
+  /** interrupt: stop the agent's turn (and wait, briefly, until it has stopped) before sending. */
+  const interruptAgentTurn = async (target) => {
+    const owner = [target, session.lastCtx].find((candidate) => typeof candidate?.abort === "function");
+    if (!owner) return;
+    const idle = () => { try { return owner.isIdle?.() !== false; } catch { return true; } };
+    if (idle()) return;
+    try { owner.abort(); } catch {}
+    const deadline = Date.now() + 5000;
+    while (!idle() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+  };
+
   let terminalInputUnsub = null;
   let activeChoiceSessionId = null;
   const choiceSessionHandler = (event = {}) => {
@@ -3127,6 +3209,7 @@ export default function realtimeAgentExtension(pi) {
     try { terminalInputUnsub?.(); } catch {}
     terminalInputUnsub = null;
     stopLocalVad({ flush: false, cancel: true });
+    try { setLocalVoiceOverlay(null, session.lastCtx); } catch {}
     cascade.vadController?.dispose?.();
     stopCascade();
     await batchSttRequests.cancel();
@@ -3295,6 +3378,7 @@ export default function realtimeAgentExtension(pi) {
       }
     }
     if (localVad.cfg) parts.push(describeLocalVadConfig(localVad.cfg).replace(/^local-vad: /, ""));
+    parts.push(localVoiceNote());
     if (localVad.lastError) parts.push(`err=${String(localVad.lastError).slice(0, 60)}`);
     return parts.join(" | ");
   }
@@ -3434,12 +3518,17 @@ export default function realtimeAgentExtension(pi) {
             .catch((e) => { localVad.lastError = `quickfile failed: ${e?.message || String(e)}`; try { ctx.ui.notify(localVad.lastError, "warning"); } catch {} });
           return;
         }
-        const sendOptions = { deliverAs: "followUp", streamingBehavior: "followUp" };
-        try {
+        // send=: a steer by default (reaches a busy agent at its next step), followup (after its
+        // whole turn), or interrupt (its turn stops first, then this is sent).
+        const mode = localSend();
+        const deliver = () => {
+          const sendOptions = piSendOptions(mode);
           if (target !== ctx && typeof target.sendUserMessage === "function") target.sendUserMessage(labelUntrustedTranscript(finalText), sendOptions);
           else pi.sendUserMessage(labelUntrustedTranscript(finalText), sendOptions);
-        }
-        catch (e) { localVad.lastError = `sendUserMessage failed: ${e.message}`; ctx.ui.notify(localVad.lastError, "warning"); }
+        };
+        const failed = (e) => { localVad.lastError = `sendUserMessage failed: ${e?.message || e}`; ctx.ui.notify(localVad.lastError, "warning"); };
+        if (mode === "interrupt") void interruptAgentTurn(target).then(deliver).catch(failed);
+        else { try { deliver(); } catch (e) { failed(e); } }
         flashSpeechIndicator("sent", localVad.surface || "STT", "sent", 900);
       },
       onError: (e) => {
@@ -3456,9 +3545,14 @@ export default function realtimeAgentExtension(pi) {
       },
     });
 
-    const cmd = rtStream(config.recordCommand || defaultRecordCommand());
+    // The session's microphone (source=, server=; an alias's for its run) through Pulse.
+    const recording = localRecordPlan(localMic(), { configured: config.recordCommand });
+    // `/stt:mac-utils`, `/ptt:…`: who listens, in the mixer.
+    let micLabel = "";
+    try { micLabel = sessionLabel({ name: pi.getSessionName?.(), sessionId: speechSessionIdOf(target) || piAudioSessionId }); } catch {}
+    const cmd = applyPulseStreamName(recording.command, speechStreamName(hold ? "ptt" : quickfile ? "note" : "stt", micLabel));
     let capture;
-    try { capture = localVadRunShellStream(cmd); }
+    try { capture = recording.env ? localVadRunShellStream(cmd, { env: recording.env }) : localVadRunShellStream(cmd); }
     catch (e) { stopLocalVad({ flush: false, cancel: true }); ctx.ui.notify(`local-vad capture failed: ${e.message}`, "error"); return false; }
 
     Object.assign(localVad, { controller, capture, active: true });
@@ -4159,44 +4253,80 @@ export default function realtimeAgentExtension(pi) {
   });
 
   function applyLocalSttSettings(values, ctx, { restoring = false } = {}) {
-    if (!restoring) rejectSurfaceAuthKeys(values, "/stt", { providerName: values.provider || process.env.PI_STT_PROVIDER || readPersistedSttSettings().provider || "azure", audioProviders: audioBinding.providers });
+    // The microphone (source=, server=) and delivery (send=) are this session's own, never
+    // process.env (TTS reads PULSE_SERVER too); the rest are TUI /stt's environment settings.
+    const { mic, send, stt } = splitLocalVoiceValues(values, "/stt");
+    if (!restoring) rejectSurfaceAuthKeys(stt, "/stt", { providerName: stt.provider || process.env.PI_STT_PROVIDER || readPersistedSttSettings().provider || "azure", audioProviders: audioBinding.providers });
     // The shared mapping (lib/stt-session-values.js): pi-daemon sessions keep the same updates
     // as their own overlay instead.
-    const { updates, clear } = sttEnvUpdates(values, { env: process.env, persisted: readPersistedSttSettings(), audioProviders: audioBinding.providers });
+    const { updates, clear } = sttEnvUpdates(stt, { env: process.env, persisted: readPersistedSttSettings(), audioProviders: audioBinding.providers });
     for (const key of clear) delete process.env[key];
     Object.assign(process.env, updates);
+    for (const [key, value] of Object.entries(mic)) {
+      if (value) localVoice.mic[key] = value;
+      else delete localVoice.mic[key];
+    }
+    if (send !== undefined) localVoice.send = send;
     const persisted = readPersistedSttSettings();
     const cfg = parseLocalVadConfig(process.env, persisted);
     const model = resolveSttSettings(process.env, persisted).model ?? "daemon-default";
     const timeoutMs = resolveBatchSttTimeoutMs(process.env, persisted);
     const sttSelection = resolveSttSettings(process.env, persisted);
-    ctx?.ui?.notify?.(`stt settings: provider=${sttSelection.providerName && sttSelection.providerName !== sttSelection.provider ? `${sttSelection.providerName}(${sttSelection.provider})` : sttSelection.provider} model=${model} timeout=${timeoutMs}ms ${describeLocalVadConfig(cfg)} shortcuts=${localSttShortcutsEnabled() ? "on" : "off"}`, "info");
+    ctx?.ui?.notify?.(`stt settings: provider=${sttSelection.providerName && sttSelection.providerName !== sttSelection.provider ? `${sttSelection.providerName}(${sttSelection.provider})` : sttSelection.provider} model=${model} timeout=${timeoutMs}ms ${describeLocalVadConfig(cfg)} shortcuts=${localSttShortcutsEnabled() ? "on" : "off"} ${localVoiceNote()}`, "info");
   }
 
   async function handleLocalSpeechCommand(args, ctx, { defaultHold = false, commandName = "/stt" } = {}) {
     const parsed = parseEnvStyleArgs(String(args || ""));
-    if (Object.keys(parsed.values).length) {
-      if (parsed.positionals.length) { ctx.ui.notify(`${commandName}: unexpected positional '${parsed.positionals[0]}' with settings`, "warning"); return; }
-      try { applyLocalSttSettings(parsed.values, ctx); }
-      catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); return; }
-      rememberSttValues(parsed.values);
-      pttArmed = defaultHold;
-      return startLocalVad(ctx, { hold: defaultHold });
+    let positionals = parsed.positionals.map((entry) => String(entry));
+    // /stt ALIAS, /ptt ALIAS: a voice alias (settings.json agentUtils.voice.aliases) for this run.
+    const first = String(positionals[0] ?? "").toLowerCase();
+    let alias = null;
+    if (first && !VOICE_WORDS.has(first) && Object.hasOwn(localAliases, first)) {
+      alias = first;
+      positionals = positionals.slice(1);
     }
-    const value = parsed.positionals.join(" ").trim().toLowerCase();
+    if (alias || Object.keys(parsed.values).length) {
+      const verb = String(positionals[0] ?? "").toLowerCase();
+      if (positionals.length > 1 || (verb && !["start", "on", "vad", "ptt", "hold", "follow"].includes(verb))) {
+        ctx.ui.notify(`${commandName}: unexpected '${positionals[verb && ["start", "on", "vad", "ptt", "hold", "follow"].includes(verb) ? 1 : 0]}' with settings. ${localAliasesText()}`, "warning");
+        return;
+      }
+      let plan;
+      try {
+        plan = planLocalVoice(parsed.values, { alias, aliasValues: alias ? localAliases[alias] : {}, surface: commandName });
+        if (Object.keys(plan.kept).length) applyLocalSttSettings(plan.kept, ctx);
+        setLocalVoiceOverlay(plan.overlay, ctx);
+      } catch (error) { ctx.ui.notify(error?.message || String(error), "warning"); return; }
+      if (Object.keys(plan.kept).length) rememberSttValues(plan.kept);
+      const mode = plan.overlay?.mode ?? plan.mode;
+      const hold = defaultHold || ["ptt", "hold"].includes(verb) || (verb !== "vad" && mode === "ptt");
+      pttArmed = hold;
+      if (alias || plan.overlay?.output) ctx.ui.notify(`${commandName}${alias ? ` ${alias}` : ""}: ${localVoiceNote()}`, "info");
+      return startLocalVad(ctx, { hold, follow: verb === "follow" });
+    }
+    const value = positionals.join(" ").trim().toLowerCase();
+    if (value === "aliases") { ctx.ui.notify(localAliasesText(), "info"); return; }
+    if (value === "devices" || value === "sources") {
+      // The Pulse sources this session's microphone settings reach.
+      const mic = localMic();
+      const env = { ...process.env, ...(mic.server ? { PULSE_SERVER: mic.server } : {}) };
+      ctx.ui.notify(`${sourcesText(await defaultListSources({ env }), mic.source || null)}\nChoose one with ${commandName} source=NAME.`, "info");
+      return;
+    }
     if (["help", "usage", "?"].includes(value)) {
       const persisted = readPersistedSttSettings();
-      ctx.ui.notify(`${commandName} [start|vad|ptt|stop|cancel|status|key=value]. Local batch STT uses ${resolveBatchSttModel(process.env, persisted)} with shared agentUtils.stt settings for /stt and /ptt.`, "info");
+      ctx.ui.notify(`${commandName} [ALIAS] [start|vad|ptt|follow|stop|cancel|status|devices|aliases|key=value]. Local batch STT uses ${resolveBatchSttModel(process.env, persisted)} with shared agentUtils.stt settings for /stt and /ptt. source= (device=) and server= choose the Pulse microphone, send=steer|followup|interrupt how a turn reaches a busy agent (steer by default; agentUtils.voice.send); an ALIAS (agentUtils.voice.aliases) and sink=, pan=, tts= (the agent's speech) last until it stops.`, "info");
       return;
     }
     if (value === "status") {
       const persisted = readPersistedSttSettings();
       const cfg = parseLocalVadConfig(process.env, persisted);
-      ctx.ui.notify(`${localVadStatusLine()} | configured model=${resolveBatchSttModel(process.env, persisted)} timeout=${resolveBatchSttTimeoutMs(process.env, persisted)}ms ${describeLocalVadConfig(cfg)} shortcuts=${localSttShortcutsEnabled() ? "on" : "off"}`, "info");
+      ctx.ui.notify(`${localVadStatusLine()} | configured model=${resolveBatchSttModel(process.env, persisted)} timeout=${resolveBatchSttTimeoutMs(process.env, persisted)}ms ${describeLocalVadConfig(cfg)} shortcuts=${localSttShortcutsEnabled() ? "on" : "off"} ${localVoiceNote()}`, "info");
       return;
     }
     if (["stop", "off"].includes(value)) {
       disarmSpeechIndicator();
+      try { setLocalVoiceOverlay(null, ctx); } catch {}
       if (localVad.active && localVad.hold) {
         const ctrl = localVad.controller;
         stopLocalVad({ flush: false });
@@ -4211,6 +4341,7 @@ export default function realtimeAgentExtension(pi) {
     }
     if (value === "cancel") {
       disarmSpeechIndicator();
+      try { setLocalVoiceOverlay(null, ctx); } catch {}
       const ctrl = localVad.controller;
       const had = stopLocalVad({ flush: false });
       try { ctrl?.discardHeld?.(); } catch {}
@@ -4220,6 +4351,7 @@ export default function realtimeAgentExtension(pi) {
     }
     // follow: the mic follows focus between pi-client's splits instead of staying where it began.
     if (value === "follow") {
+      try { setLocalVoiceOverlay(null, ctx); } catch {}
       pttArmed = defaultHold;
       return startLocalVad(ctx, { hold: defaultHold, follow: true });
     }
@@ -4234,12 +4366,14 @@ export default function realtimeAgentExtension(pi) {
     }
     // /ptt (or /stt ptt) arms PTT: after a send, the indicator stays ready
     // for Ctrl-Space until /ptt stop. Continuous /stt is its own enabled mode.
+    // A plain start replaces a previous run's own settings (an alias's, sink=, pan=).
+    try { setLocalVoiceOverlay(null, ctx); } catch {}
     pttArmed = hold;
     return startLocalVad(ctx, { hold });
   }
 
   pi.registerCommand("stt", {
-    description: "Speech transcription into the editor. /stt provider=auto|azure|openai|daemon model=... daemon_url=helsinki language=en. Shared by /ptt, choice freeform and cascade. /stt ptt holds until release.",
+    description: "Speech transcription into the editor. /stt [ALIAS] provider=auto|azure|openai|daemon model=... daemon_url=helsinki language=en source=PULSE_SOURCE server=PULSE_SERVER send=steer|followup|interrupt sink= pan=. Shared by /ptt, choice freeform and cascade. /stt ptt holds until release; /stt devices lists microphones, /stt aliases the voice aliases.",
     handler: async (args, ctx) => handleLocalSpeechCommand(args, ctx, { defaultHold: false, commandName: "/stt" }),
   });
 
@@ -4264,7 +4398,7 @@ export default function realtimeAgentExtension(pi) {
   });
 
   pi.registerCommand("ptt", {
-    description: "Local-VAD push-to-talk (Ctrl-Space toggles from the editor). VAD updates the draft; Ctrl-Space or Enter sends, Space types, Escape preserves, Ctrl-C cancels. /ptt stop disarms.",
+    description: "Local-VAD push-to-talk (Ctrl-Space toggles from the editor). VAD updates the draft; Ctrl-Space or Enter sends, Space types, Escape preserves, Ctrl-C cancels. /ptt stop disarms. /ptt ALIAS (agentUtils.voice.aliases) or source= server= send= sink= pan= as /stt.",
     handler: async (args, ctx) => handleLocalSpeechCommand(args, ctx, { defaultHold: true, commandName: "/ptt" }),
   });
 

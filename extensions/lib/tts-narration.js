@@ -188,6 +188,23 @@ export function resolveAgentTtsSettings({ env = process.env, persisted = {}, aud
   };
 }
 
+/**
+ * A speech kind's own Pulse sink from a setting: the name, or undefined to play where /tts plays
+ * (unset, empty, "tts" or "default"). Throws on a name Pulse cannot have.
+ */
+export function speechSink(value, surface = "sink") {
+  if (value === undefined || value === null) return undefined;
+  const text = String(value).trim();
+  if (!text || ["tts", "default"].includes(text.toLowerCase())) return undefined;
+  if (text.length > 255 || /[\x00-\x1f\x7f]/.test(text)) throw new Error(`${surface} must be a Pulse sink name`);
+  return text;
+}
+
+/** Spoken choices' own Pulse sink: PI_CHOICE_SINK, else settings.json agentUtils.choice.sink. */
+export function resolveChoiceSink(env = process.env, persistedChoice = {}) {
+  try { return speechSink(env.PI_CHOICE_SINK ?? persistedChoice?.sink); } catch { return undefined; }
+}
+
 export function resolveNarrateSettings({ env = process.env, persisted = {} } = {}) {
   const speedRaw = env.PI_NARRATE_SPEED ?? persisted.speed;
   const speedNumber = Number(speedRaw);
@@ -205,6 +222,9 @@ export function resolveNarrateSettings({ env = process.env, persisted = {} } = {
     prefix: String(env.PI_NARRATE_PREFIX ?? persisted.prefix ?? ""),
     prefixWithSessionName: enabledValue(env.PI_NARRATE_PREFIX_WITH_SESSION_NAME, enabledValue(persisted.prefixWithSessionName, false)),
     suffix: String(env.PI_NARRATE_SUFFIX ?? persisted.suffix ?? ""),
+    // Narration's own Pulse sink (agentUtils.narrate.sink, PI_NARRATE_SINK); unset (or "tts")
+    // plays it where /tts plays.
+    sink: (() => { try { return speechSink(env.PI_NARRATE_SINK ?? persisted.sink ?? persisted.device); } catch { return undefined; } })(),
     enabledSource: env.PI_NARRATE_ENABLED != null ? "env" : Object.hasOwn(persisted, "enabled") ? "settings" : "default",
     modelSource: env.PI_NARRATE_MODEL ? "env" : persisted.model ? "settings" : "default",
     speedSource: env.PI_NARRATE_SPEED != null ? "env" : persisted.speed != null ? "settings" : "tts",
