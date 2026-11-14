@@ -21,6 +21,21 @@ import { sttEnvUpdates } from "../extensions/lib/stt-session-values.js";
 
 const clone = (value) => JSON.parse(JSON.stringify(value ?? null));
 
+/**
+ * A transaction's view of a stored value, as Durable's drafts are: proxies, nested objects too,
+ * that refuse every use once their commit settles (Durable: "Cannot use a settled overlay").
+ */
+function draftOf(target, revokers) {
+  const { proxy, revoke } = Proxy.revocable(target, {
+    get(object, key) {
+      const value = Reflect.get(object, key);
+      return value !== null && typeof value === "object" ? draftOf(value, revokers) : value;
+    },
+  });
+  revokers.push(revoke);
+  return proxy;
+}
+
 /** A Durable session as far as voice input uses it: its document, tasks, watches and conversation. */
 function durable(sessionId) {
   const docs = new Map();
@@ -28,10 +43,11 @@ function durable(sessionId) {
   const watchers = new Set();
   const submitted = [];
   let next = 0;
+  let revokers = [];
   const tx = {
     async doc(token) {
       if (!docs.has(token.definition.kind)) docs.set(token.definition.kind, token.definition.initial());
-      return docs.get(token.definition.kind);
+      return draftOf(docs.get(token.definition.kind), revokers);
     },
     async createTask(task, input, options) {
       const id = `${sessionId}-t${++next}`;
@@ -41,10 +57,19 @@ function durable(sessionId) {
   };
   const doc = () => clone(docs.get(VOICE_DOC.definition.kind));
   const notify = () => { const value = doc(); for (const watcher of [...watchers]) watcher(value); };
+  // What a commit returns is the change's own value: drafts in it are settled afterwards.
+  const settle = async (run) => {
+    const mine = (revokers = []);
+    try {
+      return await run();
+    } finally {
+      for (const revoke of mine) revoke();
+    }
+  };
   const commit = async (change) => {
-    const result = await change(tx);
+    const result = await settle(() => change(tx));
     notify();
-    return clone(result);
+    return result;
   };
   /** A task invocation's runtime over this session. */
   const runtime = (record) => ({
@@ -52,8 +77,8 @@ function durable(sessionId) {
     conversationId: record.conversationId,
     signal: new AbortController().signal,
     async commit(change) {
-      const state = await change(tx, record);
-      if (state) record.state = state;
+      const state = await settle(() => change(tx, record));
+      if (state) record.state = clone(state);
       notify();
     },
     async watchDoc() {

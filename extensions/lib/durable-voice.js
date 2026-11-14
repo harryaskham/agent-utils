@@ -503,6 +503,12 @@ function voiceDeps({
   };
 }
 
+/**
+ * A plain copy of a value read in a commit. Durable's drafts are proxies that throw once their
+ * transaction settles ("Cannot use a settled overlay"), nested objects (a call's overlay) too.
+ */
+const plain = (value) => (value === undefined || value === null ? value ?? null : JSON.parse(JSON.stringify(value)));
+
 /** Voice operations over a Durable commit (a command's harness, or a tool's api). */
 export function voiceOperations({ task, now = () => Date.now() }) {
   const deps = task.deps;
@@ -520,7 +526,7 @@ export function voiceOperations({ task, now = () => Date.now() }) {
         // Throws on a bad value or unknown key before anything is kept.
         voiceSettings(next, { ...deps, surface });
         doc.settings = next;
-        return next;
+        return plain(next);
       });
     },
     /** Start voice input, or change the live one to this kind and mode. */
@@ -531,7 +537,7 @@ export function voiceOperations({ task, now = () => Date.now() }) {
         if (isLive(doc.call)) {
           Object.assign(doc.call, { kind, mode, talking: mode === "ptt" && talking, discard: false });
           if (overlay !== undefined) doc.call.overlay = overlay;
-          return { started: false, call: doc.call };
+          return { started: false, call: plain(doc.call) };
         }
         const taskId = await tx.createTask(task, { sessionId, startedAt: at }, { ownership: { kind: "conversation" }, conversationId, background: true });
         doc.seq = (Number(doc.seq) || 0) + 1;
@@ -540,7 +546,7 @@ export function voiceOperations({ task, now = () => Date.now() }) {
           talking: mode === "ptt" && talking, muted: false, discard: false, partial: null, lastHeardAt: at, sent: 0, error: null, end: null,
           overlay: overlay ?? null,
         };
-        return { started: true, call: doc.call };
+        return { started: true, call: plain(doc.call) };
       });
     },
     async update(commit, change) {
@@ -548,7 +554,7 @@ export function voiceOperations({ task, now = () => Date.now() }) {
         const doc = await tx.doc(VOICE_DOC);
         if (!isLive(doc.call)) return null;
         change(doc.call);
-        return doc.call;
+        return plain(doc.call);
       });
     },
     async end(commit, { reason, by, note, discard = false }) {
@@ -556,13 +562,13 @@ export function voiceOperations({ task, now = () => Date.now() }) {
         const doc = await tx.doc(VOICE_DOC);
         if (!isLive(doc.call)) return null;
         doc.call.end = { reason, by, at: now(), ...(note ? { note: bounded(note, 200) } : {}), ...(discard ? { discard: true } : {}) };
-        return doc.call;
+        return plain(doc.call);
       });
     },
     async read(commit) {
       return commit(async (tx) => {
         const doc = await tx.doc(VOICE_DOC);
-        return { settings: { ...(doc.settings ?? {}) }, call: doc.call ? { ...doc.call } : null, last: doc.last ? { ...doc.last } : null };
+        return { settings: plain(doc.settings ?? {}), call: plain(doc.call), last: plain(doc.last) };
       });
     },
     /** Forget a call whose task is gone (it ended without saying so). */
