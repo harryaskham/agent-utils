@@ -189,3 +189,237 @@ test("a question that says freeText (pi-daemon bb1863d4) takes words through ses
   assert.equal(h.calls.some(([method]) => method === "conversation.submit"), false);
   assert.equal(h.pending.length, 0);
 });
+
+/**
+ * A pi-client with several panes, a session each (pi-daemon bd-02a7f8): the ctx of an event or a
+ * command refers to the focused pane; `ctx.pinned()` is that pane's own ctx (one a pane), whose
+ * widgets are drawn in that pane only (`ui.widgetScope` "pane"). `scoped: false` is an earlier
+ * pi-client: every widget is the client's, drawn wherever the focus is.
+ */
+function panesHarness(sessions, { scoped = true, selects = [] } = {}) {
+  const handlers = new Map();
+  const answers = [];
+  const select = async (title, options) => {
+    const pick = selects.shift();
+    return typeof pick === "function" ? pick(title, options) : pick;
+  };
+  const commands = new Map();
+  const timers = [];
+  const notices = [];
+  // What each pane shows of the line now, and every line ever drawn in it.
+  const panes = new Map();
+  const clientWidget = { now: undefined };
+  let focused;
+  // Calls held until released, to act while one is on its way.
+  let hold;
+  const pane = (name) => panes.get(name);
+  const paneCtx = (state) => ({
+    sessionManager: { getSessionId: () => (state.closed ? undefined : state.session) },
+    chord: {
+      async call(method, params) {
+        const session = state.closed ? undefined : state.session;
+        state.calls.push(method);
+        if (session === undefined) throw new Error("no session attached");
+        if (method === "session.commands") return { items: [] };
+        if (method === "session.answerQuestion") {
+          answers.push([state.name, session, params.questionId, params.answer]);
+          sessions[session] = (sessions[session] ?? []).filter((question) => question.id !== params.questionId);
+          return null;
+        }
+        assert.equal(method, "session.questions");
+        // As the host answered when it was asked, however late that arrives.
+        const listed = sessions[session] ?? [];
+        if (hold !== undefined) await hold;
+        return listed;
+      },
+    },
+    ui: {
+      widgetScope: "pane",
+      setWidget: (_key, lines) => {
+        state.now = lines;
+        if (lines !== undefined) state.drawn.push(lines[0]);
+      },
+      notify: (text, level) => notices.push([state.name, text, level]),
+      select,
+      input: async () => undefined,
+    },
+    pinned: () => state.ctx,
+  });
+  const add = (name, session) => {
+    const state = { name, session, closed: false, now: undefined, drawn: [], calls: [] };
+    state.ctx = paneCtx(state);
+    panes.set(name, state);
+    focused ??= state;
+    return state;
+  };
+  // The ctx extensions are given: whatever pane has the focus when each call is made.
+  const ctx = {
+    sessionManager: { getSessionId: () => focused.ctx.sessionManager.getSessionId() },
+    chord: { call: (method, params) => focused.ctx.chord.call(method, params) },
+    ui: {
+      ...(scoped ? { widgetScope: "client" } : {}),
+      setWidget: (_key, lines) => {
+        clientWidget.now = lines;
+        // The client's widgets are drawn where the focus is.
+        if (lines !== undefined) focused.drawn.push(lines[0]);
+      },
+      notify: (text, level) => notices.push([focused.name, text, level]),
+      select,
+      input: async () => undefined,
+    },
+    pinned: () => (scoped ? focused.ctx : { ...focused.ctx, ui: { ...focused.ctx.ui, widgetScope: undefined, setWidget: ctx.ui.setWidget } }),
+  };
+  const pi = { on: (type, handler) => handlers.set(type, handler), registerCommand: (name, options) => commands.set(name, options) };
+  choiceClient(pi, { pollMs: 10, setTimer: (fn) => (timers.push(fn), fn), clearTimer: (fn) => { const at = timers.indexOf(fn); if (at >= 0) timers.splice(at, 1); } });
+  return {
+    add,
+    pane,
+    notices,
+    timers,
+    answers,
+    clientWidget,
+    focus: (name) => { focused = pane(name); },
+    // As pi-client says a pane's session has started: the pane has the focus.
+    start: (name) => { focused = pane(name); return handlers.get("session_start")({ type: "session_start" }, ctx); },
+    emit: (type) => handlers.get(type)({ type }, ctx),
+    run: (name) => commands.get(name).handler("", ctx),
+    // Run every look-again that is due, as the timer would.
+    tick: async () => { for (const fn of timers.splice(0)) await fn(); },
+    held: () => { let release; hold = new Promise((resolve) => { release = resolve; }); return () => { hold = undefined; release(); }; },
+    // Calls from now on answer at once; one held before still waits for its release.
+    passing: () => { hold = undefined; },
+  };
+}
+
+const LINE = "◇ 1 question for you · /choices";
+
+test("each session's line is drawn in its own pane and no other, whoever has the focus (pi-daemon bd-02a7f8)", async () => {
+  const h = panesHarness({ asked: [later], quiet: [], calm: [] });
+  h.add("x", "asked"); h.add("y", "quiet"); h.add("z", "calm");
+  await h.start("x");
+  assert.deepEqual(h.pane("x").now, [LINE]);
+  // The focus goes to a session with nothing waiting, and its questions take a while to read:
+  // nothing is drawn under it meanwhile, or after; the first pane keeps its line.
+  const release = h.held();
+  const started = h.start("y");
+  assert.equal(h.pane("y").now, undefined, "nothing of another session's while its own are read");
+  // The first pane's look-again comes due while the second's questions are on their way.
+  const ticked = h.tick();
+  release();
+  await started; await ticked;
+  assert.deepEqual(h.pane("y").drawn, [], "a session with nothing waiting never says /choices");
+  assert.deepEqual(h.pane("x").now, [LINE], "the session that has one keeps its line, without the focus");
+  await h.start("z");
+  await h.emit("tool_execution_end");
+  await h.emit("agent_end");
+  assert.deepEqual(h.pane("z").drawn, []);
+  assert.equal(h.clientWidget.now, undefined, "nothing is set as the client's, which is drawn wherever the focus is");
+  // /choices typed where nothing waits says so, and leaves the other pane's line.
+  await h.run("choices");
+  assert.deepEqual(h.notices.at(-1), ["z", "No questions are waiting for you.", "info"]);
+  assert.deepEqual(h.pane("x").now, [LINE]);
+});
+
+test("a pane's line goes when its question is answered elsewhere, though the focus is on another pane", async () => {
+  const sessions = { asked: [later], quiet: [] };
+  const h = panesHarness(sessions);
+  h.add("x", "asked"); h.add("y", "quiet");
+  await h.start("x");
+  await h.start("y");
+  assert.equal(h.timers.length, 1, "the session with a question waiting is looked at again; the other is not");
+  // The client stops: nothing looks again. (Started again, it does.)
+  await h.emit("session_shutdown");
+  assert.equal(h.timers.length, 0);
+  await h.start("x");
+  h.focus("y");
+  assert.equal(h.timers.length, 1);
+  await h.tick();
+  assert.deepEqual(h.pane("x").now, [LINE]);
+  assert.equal(h.timers.length, 1);
+  sessions.asked = [];
+  await h.tick();
+  assert.equal(h.pane("x").now, undefined, "answered from another client: its line goes, in its pane");
+  assert.equal(h.timers.length, 0, "and nothing looks again");
+  assert.deepEqual(h.pane("y").calls, ["session.questions"], "the pane with the focus was not asked for it");
+});
+
+test("a pane that comes to show another session does not keep the first one's line; one that closed is looked at no more", async () => {
+  const h = panesHarness({ asked: [later], quiet: [], other: [{ ...later, id: 9 }] });
+  h.add("x", "asked"); h.add("y", "other");
+  await h.start("x");
+  await h.start("y");
+  assert.equal(h.timers.length, 2);
+  // The first pane shows another session now: its line is not that session's.
+  h.pane("x").session = "quiet";
+  const release = h.held();
+  const started = h.start("x");
+  assert.equal(h.pane("x").now, undefined, "gone before the new session's questions are read");
+  release();
+  await started;
+  assert.equal(h.pane("x").now, undefined);
+  assert.equal(h.timers.length, 1, "only the pane with a question waiting is looked at again");
+  // The other pane closes with its question waiting: looked at once more, and no more.
+  h.pane("y").closed = true;
+  await h.tick();
+  assert.equal(h.timers.length, 0, "a closed pane is not looked at again");
+  // A session that changes under a read on its way: the answer is not taken for the new one.
+  const z = h.add("z", "asked");
+  const later2 = h.held();
+  const reading = h.start("z");
+  z.session = "quiet";
+  later2();
+  await reading;
+  assert.equal(z.now, undefined, "the first session's questions are not shown under the second");
+  assert.deepEqual(z.drawn, []);
+  assert.deepEqual(z.calls, ["session.questions", "session.questions"], "the new session's own were read");
+});
+
+test("in an earlier pi-client (every widget the client's) one line follows the focus, and goes at once from a session it is not of", async () => {
+  const h = panesHarness({ asked: [later], quiet: [] }, { scoped: false });
+  h.add("x", "asked"); h.add("y", "quiet");
+  await h.start("x");
+  assert.deepEqual(h.clientWidget.now, [LINE]);
+  const release = h.held();
+  const started = h.start("y");
+  assert.equal(h.clientWidget.now, undefined, "taken away before the other session's questions are read");
+  assert.equal(h.timers.length, 0, "and the first session is not looked at again under the second");
+  release();
+  await started;
+  assert.equal(h.clientWidget.now, undefined);
+  assert.deepEqual(h.pane("y").drawn, []);
+  await h.start("x");
+  assert.deepEqual(h.clientWidget.now, [LINE]);
+});
+
+test("an answer that arrives late does not overtake a later one; /choices acts on the pane it was typed in, wherever the focus goes", async () => {
+  const sessions = { asked: [later], quiet: [] };
+  const h = panesHarness(sessions, {
+    selects: [
+      // The list is open in the first pane, and the focus goes to the other one.
+      (_title, options) => (h.focus("y"), options[0]),
+      "green",
+      (_title, options) => options[0], // ➤ Send 1 answer
+    ],
+  });
+  h.add("x", "asked"); h.add("y", "quiet");
+  // Asked while the question waits, and answered late: by then it was answered elsewhere and a
+  // later read said so.
+  const release = h.held();
+  const first = h.start("x");
+  h.passing();
+  sessions.asked = [];
+  await h.emit("agent_end");
+  assert.equal(h.pane("x").now, undefined);
+  release();
+  await first;
+  assert.equal(h.pane("x").now, undefined, "the earlier read, arriving late, draws nothing");
+  assert.deepEqual(h.pane("x").drawn, []);
+  assert.equal(h.timers.length, 0);
+
+  sessions.asked = [later];
+  await h.start("x");
+  await h.run("choices");
+  assert.deepEqual(h.answers, [["x", "asked", 7, "green"]], "the answer goes to the session /choices was typed for");
+  assert.deepEqual(h.notices.at(-1), ["x", "No questions are waiting for you.", "info"], "and what it says, it says there");
+  assert.deepEqual(h.pane("y").drawn, []);
+});
