@@ -780,7 +780,12 @@ export function createDurableAgentAudio({
       session.reported.clear();
       session.lastError = null;
       await saveSettings(session, ctx);
-      return reply(ctx, ttsStatus(session, { check: true }));
+      // A live /call's sink wins until hang-up: say so, and how to move the call's speech.
+      const call = callOutput(session.sessionId);
+      const output = /(?:^|\s)(?:sink|device)=/.test(raw) && call?.sink !== undefined
+        ? `\nThis session is on a call: its speech stays on ${call.sink} until hang-up. /call sink=NAME moves it for the call; this /tts setting applies after.`
+        : "";
+      return reply(ctx, ttsStatus(session, { check: true }) + output);
     } catch (error) {
       return reply(ctx, `/tts: ${String(error?.message || error).replace(/^\/tts:\s*/, "")}`);
     }

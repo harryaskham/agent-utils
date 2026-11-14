@@ -723,14 +723,18 @@ test("a live /call's output: speech plays on its sink and pan past focus/solo, s
     assert.ok(lastSpeechActivity(session) >= before, "the call's hang-up timer sees the speech");
     await host.command(session, "/tts status");
     assert.match(host.notifications.at(-1).text, / · call:sink:vsink_agent_call · pan:0\.00 · tts:on \(until the call ends\) · /);
+    // /tts sink= during the call is kept for after it, and says how to move the call's speech.
+    await host.command(session, "/tts sink=vsink_other");
+    assert.match(host.notifications.at(-1).text, /\nThis session is on a call: its speech stays on vsink_agent_call until hang-up\. \/call sink=NAME moves it for the call; this \/tts setting applies after\.$/);
+    await host.command(session, "/tts off");
 
     // The call ends: speech is as /tts says (off).
     setCallOutput(session, null);
     await host.emit(session, assistantEnd([text("After the call.")]));
-    assert.equal(host.spoken.length, 1);
+    assert.deepEqual(host.spoken.filter((entry) => entry.text).map((entry) => entry.text), ["On the call."]);
     await host.command(session, "/tts on");
     await host.emit(session, assistantEnd([text("Back to normal.")]));
-    assert.equal(host.spoken.at(-1).overrides.device, undefined);
+    assert.equal(host.spoken.at(-1).overrides.device, undefined, "the session's own sink (vsink_other, in its speech settings)");
     assert.equal(host.spoken.at(-1).overrides.pan, undefined);
   } finally {
     setCallOutput(session, null);

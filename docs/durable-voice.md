@@ -75,7 +75,7 @@ while the call is live:
   default once `sink=` or `pan=` is given, as `/tts sink=` turns `/tts` on.
 
 `sink=` and `pan=` can also be typed on a plain `/call`, or on a live call to change them. They
-always last for that call only. Other settings typed without an alias are kept for the session, as
+always last for that call only. During a call, `/tts sink=` changes the session's own sink for after the call and says so; `/call sink=NAME` moves the call's speech. Other settings typed without an alias are kept for the session, as
 before. `/call status` and `/tts status` show the call's own settings while it lasts.
 
 Defaults come in order:
