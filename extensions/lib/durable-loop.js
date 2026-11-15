@@ -16,6 +16,7 @@
 
 import { parseAfterCommand } from "./after.js";
 import { localTimeZone, nextCronAt, parseCronArgs } from "./cron.js";
+import { watchedValue } from "./durable-watch.js";
 
 export const LOOP_TASK = "agent-utils.loop";
 /** A /goal's task (./durable-goal.js): its entries share the loops document and numbers. */
@@ -244,8 +245,8 @@ export function createLoopTask({ now = () => Date.now(), wait = sleep, timeZone 
             const wake = new AbortController();
             const onAbort = () => wake.abort(runtime.signal.reason);
             runtime.signal?.addEventListener?.("abort", onAbort, { once: true });
-            watch?.start(async (value) => {
-              if (stoppedIn(value, number)) {
+            watch?.start(async (call) => {
+              if (stoppedIn(watchedValue(call), number)) {
                 stopped = true;
                 wake.abort();
               }

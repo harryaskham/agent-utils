@@ -20,6 +20,7 @@
 // agent's, or a visiting registration's overrides). The first answer wins, from either side.
 import { createCacophonyChoiceBridge } from "./cacophony-choice.js";
 import { createCacophonyDecisionBridge } from "./cacophony-decision.js";
+import { watchedValue } from "./durable-watch.js";
 
 /** pi-daemon's question document (src/input.ts): any task may carry one. */
 export const INPUT_DOC = {
@@ -128,7 +129,7 @@ async function waitForAnswer(watchable, commit, taskId, context, { timeoutMs, si
         }, timeoutMs);
       }
       settle(watch.value);
-      watch.start(async (value) => settle(value));
+      watch.start(async (call) => settle(watchedValue(call)));
     });
   } finally {
     if (timer) clearTimeout(timer);

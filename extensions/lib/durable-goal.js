@@ -118,8 +118,10 @@ export function createGoalTask({ now = () => Date.now(), timeZone } = {}) {
           const submission = await conversation.submit({ type: "input", content, whenBusy: "followUp", requestId }, context);
           const settled = await submission.wait(context);
           const reason = String(settled?.reason ?? "");
-          if (settled?.status === "unanswered" && /abort|cancel|interrupt|withdr/i.test(reason)) {
-            // The operator stopped the agent: the goals stop too, rather than restarting it.
+          if (settled?.status === "unanswered" && /abort|cancel|withdr/i.test(reason)) {
+            // The operator stopped the agent: the goals stop too, rather than restarting it. Pi 1.5's
+            // `interrupted` is not that: the host stopped while the model answered, so it counts as
+            // a failed run below and the goal tries again.
             await endAll(runtime, context, { status: "completed", result: { nudges: nudges + 1, interrupted: true } });
             return;
           }

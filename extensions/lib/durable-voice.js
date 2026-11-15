@@ -27,6 +27,7 @@
 import { spawn } from "node:child_process";
 import { createAudioProviders, rejectSurfaceAuthKeys } from "./audio-providers.js";
 import { parseEnvStyleArgs } from "./env-args.js";
+import { watchedValue } from "./durable-watch.js";
 import { CHANNELS, SAMPLE_RATE, defaultRecordCommand } from "./realtime-audio.js";
 import { LocalVadController, describeLocalVadConfig, parseLocalVadConfig } from "./realtime-local-vad.js";
 import { resolveBatchSttTimeoutMs } from "./realtime-stt-batch.js";
@@ -434,7 +435,7 @@ export function createVoiceTask(options = {}) {
           runtime.signal?.addEventListener?.("abort", onAbort, { once: true });
           // Follow the document in order: the value read, then every change.
           let updates = call.apply(watch.value);
-          watch.start(async (value) => { updates = updates.then(() => call.apply(value)); await updates; });
+          watch.start(async (change) => { const value = watchedValue(change); updates = updates.then(() => call.apply(value)); await updates; });
           await updates;
           let reason;
           try {
