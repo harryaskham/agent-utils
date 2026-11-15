@@ -6,9 +6,13 @@ export const DEFAULT_PROMPT_MODEL = "github-copilot/gpt-6-luna";
 
 export const DEFAULTS = Object.freeze({
   enabled: false,
-  promptModel: DEFAULT_PROMPT_MODEL,
-  // Hosts without Pi's model registry (pi-client): an OpenAI-compatible chat model on baseUrl.
-  // In order: the next is asked when one fails or answers nothing (and passed over 10 min).
+  // Pi's own models (provider/id), asked in process through the host's model registry: a side
+  // completion, never a turn of the conversation. In order: the next is asked when one fails or
+  // answers nothing, and that one is passed over 10 min. `litellm/<model>` entries go to the
+  // OpenAI-compatible endpoint instead.
+  promptModel: `${DEFAULT_PROMPT_MODEL},github-copilot/claude-haiku-5.5,github-copilot/gemini-3.8-flash`,
+  // Only where there is no model registry (a pi-client pane painting on its own): chat models on
+  // the OpenAI-compatible endpoint (baseUrl, LiteLLM), in order as above.
   clientPromptModel: "deepseek-v4-flash,claude-haiku-5.5,gemini-3.8-flash",
   provider: "litellm",
   imageModel: "gpt-image-2.5-flare",

@@ -1410,42 +1410,80 @@ test("pi-daemon module: paintings out of the ring are released (pi-daemon ui.rel
   }
 });
 
-test("chat prompts: clientPromptModel's models in turn; one that fails or answers nothing rests 10 minutes", async () => {
-  const { createChatPrompter, chatModels, CHAT_MODEL_COOLDOWN_MS } = await import("../extensions/lib/visual-thoughts/litellm-chat.js");
+test("prompt models: Pi's own models in turn where there is a registry; one that fails or answers nothing rests 10 minutes", async () => {
+  const { createModelChain, promptModelsFor, describePromptModels, MODEL_REST_MS } = await import("../extensions/lib/visual-thoughts/model-chain.js");
   const { DEFAULTS } = await import("../extensions/lib/visual-thoughts/config.js");
-  assert.deepEqual(chatModels(DEFAULTS.clientPromptModel), ["deepseek-v4-flash", "claude-haiku-5.5", "gemini-3.8-flash"]);
-  assert.deepEqual(chatModels(" a, b  c,,a "), ["a", "b", "c"]);
+  // In process where Pi's registry is; LiteLLM only without one (a pi-client pane).
+  assert.deepEqual(promptModelsFor(DEFAULTS, true), ["github-copilot/gpt-6-luna", "github-copilot/claude-haiku-5.5", "github-copilot/gemini-3.8-flash"]);
+  assert.deepEqual(promptModelsFor(DEFAULTS, false), ["litellm/deepseek-v4-flash", "litellm/claude-haiku-5.5", "litellm/gemini-3.8-flash"]);
+  assert.deepEqual(promptModelsFor({ promptModel: "litellm/x, github-copilot/y", clientPromptModel: "z" }, false), ["litellm/x"]);
+  assert.deepEqual(promptModelsFor({ promptModel: " a/b, a/b ,c/d", clientPromptModel: "z" }, true), ["a/b", "c/d"]);
+  assert.equal(describePromptModels(["a/b", "c/d"], "c/d"), "c/d (of a/b, c/d, in turn)");
+  assert.equal(describePromptModels(["litellm/x"]), "x (LiteLLM)");
   let at = 0;
   const asked = [];
   const behaviour = { gone: "gone", empty: "empty", ok: "ok" };
-  const fetchImpl = async (url, init) => {
-    const model = JSON.parse(init.body).model;
+  const ask = async (model) => {
     asked.push(model);
-    if (behaviour[model] === "gone") return new Response(JSON.stringify({ error: { message: `no such model ${model}` } }), { status: 400 });
-    if (behaviour[model] === "empty") return new Response(JSON.stringify({ choices: [{ message: { content: "  " } }] }));
-    return new Response(JSON.stringify({ choices: [{ message: { content: `a scene from ${model}` } }] }));
+    if (behaviour[model] === "gone") throw new Error(`prompt model not available: ${model}`);
+    return behaviour[model] === "empty" ? "  " : `a scene from ${model}`;
   };
-  const chat = createChatPrompter({ models: "gone,empty,ok", baseUrl: "http://proxy:4000", apiKey: "k", fetchImpl, now: () => at });
-  const request = { systemPrompt: "s", messages: [{ role: "user", content: "x" }] };
-  assert.equal(await chat.prompt(request), "a scene from ok");
+  const chain = createModelChain({ now: () => at });
+  assert.equal(await chain.run(["gone", "empty", "ok"], ask), "a scene from ok");
   assert.deepEqual(asked, ["gone", "empty", "ok"]);
-  assert.equal(chat.lastModel, "ok");
-  assert.deepEqual(Object.keys(chat.resting()), ["gone", "empty"]);
+  assert.equal(chain.lastModel, "ok");
+  assert.deepEqual(Object.keys(chain.resting()), ["gone", "empty"]);
   // Passed over while they rest...
   asked.length = 0;
-  at += CHAT_MODEL_COOLDOWN_MS - 1;
-  assert.equal(await chat.prompt(request), "a scene from ok");
+  at += MODEL_REST_MS - 1;
+  assert.equal(await chain.run(["gone", "empty", "ok"], ask), "a scene from ok");
   assert.deepEqual(asked, ["ok"]);
   // ...and asked first again after.
   asked.length = 0;
   at += 2;
   behaviour.gone = "ok";
-  assert.equal(await chat.prompt(request), "a scene from gone");
+  assert.equal(await chain.run(["gone", "empty", "ok"], ask), "a scene from gone");
   assert.deepEqual(asked, ["gone"]);
-  // All gone: each is still tried, in order, and the last error says why.
-  const none = createChatPrompter({ models: "x,y", fetchImpl: async () => new Response("{}", { status: 404 }), now: () => at });
-  await assert.rejects(() => none.prompt(request), /prompt model y: HTTP 404/);
-  await assert.rejects(() => none.prompt(request), /prompt model y: HTTP 404/);
+  // All failing: each is still tried, in order, and the last error says why.
+  await assert.rejects(() => chain.run(["x", "y"], async (model) => { throw new Error(`no ${model}`); }), /no y/);
+  await assert.rejects(() => chain.run(["x", "y"], async (model) => { throw new Error(`no ${model}`); }), /no y/);
+});
+
+test("pi-daemon module: prompts come from the worker's own models in process, falling through a missing one, never LiteLLM", async () => {
+  const { createVisualThoughtsModule } = await import("../extensions/lib/durable-visual-thoughts.js");
+  const requests = [];
+  const { ui, slots } = fakeSlotsUi({ watchers: 1 });
+  const module = createVisualThoughtsModule({
+    env: { LITELLM_BASE_URL: "http://proxy:4000" },
+    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minIntervalMs: 0, budgetPerMinute: 60 } } },
+    fetchImpl: paintingFetch(requests),
+    log: () => {},
+  });
+  try {
+    const { info, notices } = moduleInfo(ui);
+    // pi-daemon's side completions (bd-f85aa2): luna withdrawn, haiku answers.
+    const completions = [];
+    info.modelRegistry = {
+      find: (provider, id) => (id === "gpt-6-luna" ? undefined : { provider, id }),
+      complete: async (model, context) => {
+        completions.push(`${model.provider}/${model.id}`);
+        assert.ok(context.systemPrompt && context.messages.length, "a side completion of its own, not the conversation");
+        return { role: "assistant", stopReason: "stop", content: [{ type: "text", text: `a lantern-lit workshop from ${model.id}` }] };
+      },
+    };
+    await module.observe({ type: "agent_start" }, info);
+    await module.observe({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "the harbour ".repeat(20) }] } }, info);
+    for (let i = 0; i < 200 && !slots.get("backdrop")?.images.length; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(slots.get("backdrop").images.length, 1, "painted all the same");
+    assert.deepEqual(completions, ["github-copilot/claude-haiku-5.5"]);
+    assert.equal(requests.filter((r) => r.url.endsWith("/chat/completions")).length, 0, "no LiteLLM chat");
+    assert.match(requests.at(-1).body.prompt, /lantern-lit workshop from claude-haiku-5\.5/);
+    await module.commands.thoughts.run("status", info);
+    assert.match(notices.at(-1), /prompts from github-copilot\/claude-haiku-5\.5 \(of github-copilot\/gpt-6-luna, github-copilot\/claude-haiku-5\.5, github-copilot\/gemini-3\.8-flash, in turn\), in process/);
+    assert.match(notices.at(-1), /passed over \(failed or answered nothing\): github-copilot\/gpt-6-luna 10 min/);
+  } finally {
+    module.dispose();
+  }
 });
 
 test("pi-daemon module: with no model registry, a missing first chat model falls through to the next", async () => {
@@ -1473,7 +1511,7 @@ test("pi-daemon module: with no model registry, a missing first chat model falls
     assert.equal(slots.get("backdrop").images.length, 1, "painted all the same");
     assert.deepEqual(requests.filter((r) => r.url.endsWith("/chat/completions")).map((r) => r.body.model), ["deepseek-v4-flash", "claude-haiku-5.5"]);
     await module.commands.thoughts.run("status", info);
-    assert.match(notices.at(-1), /passed over \(failed or answered nothing\): deepseek-v4-flash 10 min/);
+    assert.match(notices.at(-1), /passed over \(failed or answered nothing\): litellm\/deepseek-v4-flash 10 min/);
   } finally {
     module.dispose();
   }
