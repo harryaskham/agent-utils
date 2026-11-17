@@ -242,3 +242,87 @@ test("pi-daemon (bd-da24a9): /context measures an idle session from its transcri
   await commands.context.run("100k", { ...ctx, sessionId: "failing" });
   assert.match(notices.at(-1), /passes 100k tokens \(now 900k\)\. \/context off/);
 });
+
+test("pi-daemon on Pi 1.5.2: /context is the conversation's own compaction setting, lower or higher than the profile's", async () => {
+  const { commands, observe } = await import("../extensions/durable/context-limit.mjs");
+  const { compactionWithLimit } = await import("../extensions/lib/context-limit.js");
+  const OPUS = "github-copilot/claude-opus-5.5";
+  const state = moduleState();
+  const notices = [];
+  const configured = [];
+  let model = { provider: "github-copilot", modelId: "claude-opus-5.5" };
+  // The conversation already has settings of its own; they are kept.
+  let compaction = { keepRecentTokens: 30_000, modelOverrides: { "other/model": { reserveTokens: 5 }, [OPUS]: { backgroundTokens: 100_000 } } };
+  const conversation = {
+    async agent() { return { model, ...(compaction === undefined ? {} : { compaction }) }; },
+    async configure(change) { configured.push(change); if ("compaction" in change) compaction = change.compaction ?? undefined; },
+    async context() { return { entries: [answer({ input: 1, cacheRead: 200_000 })] }; },
+    async compact() { return 1; },
+  };
+  const windows = { [OPUS]: 1_000_000, "github-copilot/gpt-6-astra": 272_000 };
+  const ctx = {
+    sessionId: "native",
+    conversationId: 1,
+    context: {},
+    state,
+    notify: (text) => notices.push(text),
+    harness: { async conversation() { return conversation; } },
+    modelRegistry: { find: (provider, id) => (windows[`${provider}/${id}`] === undefined ? undefined : { contextWindow: windows[`${provider}/${id}`] }) },
+  };
+
+  // 700k on a 1M model: reserveTokens 300k for that model, above a profile that compacts it at 500k.
+  await commands.context.run("700k", ctx);
+  assert.deepEqual(compaction, { keepRecentTokens: 30_000, modelOverrides: { "other/model": { reserveTokens: 5 }, [OPUS]: { backgroundTokens: 100_000, reserveTokens: 300_000 } } });
+  assert.equal(await state.get("limit"), 700_000);
+  assert.equal(await state.get("native"), OPUS);
+  assert.match(notices.at(-1), /kept under 700k tokens \(now 200k\), whatever the profile's own threshold/);
+
+  // Durable keeps it for that model, so the observer does not also ask; for another model it still does.
+  let asked = 0;
+  const info = { sessionId: "native", conversationId: 1, state, compact: async () => { asked += 1; return true; } };
+  const response = (provider, id, cacheRead) => ({ type: "message_end", entry: { kind: "pi.assistant", model: [{ role: "assistant", provider, model: id, usage: { input: 1, cacheRead, output: 1 } }] } });
+  await observe(response("github-copilot", "claude-opus-5.5", 800_000), info);
+  assert.equal(asked, 0);
+  await observe(response("github-copilot", "claude-fable-5.2", 800_000), info);
+  assert.equal(asked, 1);
+
+  // A limit at or over the window is refused and nothing changes.
+  await commands.context.run("1m", ctx);
+  assert.match(notices.at(-1), /must be under its window of 1M tokens/);
+  assert.equal(await state.get("limit"), 700_000);
+  assert.equal(compaction.modelOverrides[OPUS].reserveTokens, 300_000);
+
+  // The session changed model: the limit moves to the new one.
+  model = { provider: "github-copilot", modelId: "gpt-6-astra" };
+  await commands.context.run("200k", ctx);
+  assert.deepEqual(compaction.modelOverrides, { "other/model": { reserveTokens: 5 }, [OPUS]: { backgroundTokens: 100_000 }, "github-copilot/gpt-6-astra": { reserveTokens: 72_000 } });
+  assert.equal(await state.get("native"), "github-copilot/gpt-6-astra");
+
+  // Off takes it out again and leaves the rest.
+  await commands.context.run("off", ctx);
+  assert.deepEqual(compaction, { keepRecentTokens: 30_000, modelOverrides: { "other/model": { reserveTokens: 5 }, [OPUS]: { backgroundTokens: 100_000 } } });
+  assert.equal(await state.get("limit"), undefined);
+  assert.equal(await state.get("native"), undefined);
+  assert.match(notices.at(-1), /^No context limit for this session/);
+
+  // Nothing of its own left: the settings are cleared, not stored empty.
+  assert.equal(compactionWithLimit({ modelOverrides: { [OPUS]: { reserveTokens: 1 } } }, OPUS, 0, null), null);
+  assert.deepEqual(compactionWithLimit(undefined, OPUS, 1_000_000, 400_000), { modelOverrides: { [OPUS]: { reserveTokens: 600_000 } } });
+
+  // An earlier Durable ignores the field: the module keeps the limit itself, as before.
+  const old = moduleState();
+  const earlier = { ...conversation, async agent() { return { model: { provider: "github-copilot", modelId: "claude-opus-5.5" } }; }, async configure() {} };
+  await commands.context.run("500k", { ...ctx, sessionId: "earlier", state: old, harness: { async conversation() { return earlier; } } });
+  assert.equal(await old.get("limit"), 500_000);
+  assert.equal(await old.get("native"), undefined);
+  assert.match(notices.at(-1), /compacts when its context passes 500k tokens/);
+  let fallback = 0;
+  await observe(response("github-copilot", "claude-opus-5.5", 800_000), { sessionId: "earlier", conversationId: 1, state: old, compact: async () => { fallback += 1; return true; } });
+  assert.equal(fallback, 1);
+  // A model the registry does not know: the same.
+  model = { provider: "local", modelId: "unknown" };
+  const unknown = moduleState();
+  await commands.context.run("300k", { ...ctx, sessionId: "unknown", state: unknown });
+  assert.equal(await unknown.get("native"), undefined);
+  assert.equal(await unknown.get("limit"), 300_000);
+});

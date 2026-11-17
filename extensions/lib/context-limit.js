@@ -1,19 +1,25 @@
-// Per-session context limits: compact before Pi's own threshold.
+// Per-session context limits: compact before, or after, the profile's own threshold.
 //
 // Pi compacts when the context nears the model's window (contextWindow - reserveTokens), so on a
 // 1M-token model a long session sits at 400-900k tokens and every request re-reads all of it. A
-// global lower threshold would cost the sessions that need the whole window. `/context 500k`
-// sets a limit for one session; when the context passes it, the session compacts. The plugin
-// does nothing until a limit is set, and it is not loaded unless listed:
+// profile can lower that for a model (settings.json compaction.modelOverrides); `/context 500k`
+// sets a limit for one session, lower or higher than the profile's. The plugin does nothing
+// until a limit is set, and it is not loaded unless listed:
 // - TUI Pi: extensions/context-limit.js (compacts once the agent has settled: Pi's compact()
 //   stops a running agent);
-// - pi-daemon: extensions/durable/context-limit.mjs (Durable's background compaction, as soon as
-//   a response passes the limit; the run goes on).
+// - pi-daemon: extensions/durable/context-limit.mjs. On Pi 1.5.2 and later the limit is the
+//   conversation's own compaction setting (Durable's configure({ compaction }), an override for
+//   its model): Durable keeps every request under it, compacting in the background shortly
+//   before, and it holds over the profile's threshold, so a session that needs the whole window
+//   can have it. On earlier hosts the module asks for a background compaction when a response
+//   passes the limit, which can only lower the threshold.
 
 /** TUI Pi: the custom session entry holding a session's limit (`{ limit }`, null when off). */
 export const CONTEXT_LIMIT_ENTRY = "agent-utils:context-limit";
 /** pi-daemon: the module state key holding a session's limit. */
 export const CONTEXT_LIMIT_KEY = "limit";
+/** pi-daemon: the module state key naming the model ("provider/modelId") whose Durable compaction override holds the limit. */
+export const CONTEXT_NATIVE_KEY = "native";
 /** pi-daemon: the module's per-session state document (context-limit.mjs), as pi-client follows it. */
 export const CONTEXT_LIMIT_DOC = Object.freeze({ kind: "pi-daemon.module-state", version: 1, scope: "session", key: "context-limit" });
 
@@ -112,12 +118,38 @@ export function storedLimit(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= MIN_CONTEXT_LIMIT ? value : null;
 }
 
-/** What `/context` says about a session; `compacting`: it is over the limit and compacts now. */
-export function describeLimit(limit, tokens, { compacting = false } = {}) {
+/**
+ * What `/context` says about a session; `compacting`: it is over the limit and compacts now;
+ * `native`: the limit is the conversation's own compaction setting, which Durable keeps.
+ */
+export function describeLimit(limit, tokens, { compacting = false, native = false } = {}) {
   const now = Number.isFinite(tokens) && tokens > 0 ? ` (now ${formatTokens(tokens)})` : "";
   if (limit === null) {
     return `No context limit for this session${now}: it compacts at the model's own threshold. Set one with /context 500k.`;
   }
   const action = compacting ? " It is over that now, so it is compacting in the background." : "";
+  if (native) {
+    return `This session's context is kept under ${formatTokens(limit)} tokens${now}, whatever the profile's own threshold: it compacts in the background shortly before.${action} /context off removes the limit.`;
+  }
   return `This session compacts when its context passes ${formatTokens(limit)} tokens${now}.${action} /context off removes the limit.`;
+}
+
+/**
+ * A conversation's Durable compaction settings with `limit` for `model` ("provider/modelId",
+ * of context window `window`): its override's `reserveTokens` is the window less the limit, so
+ * requests stay under the limit. `limit` null takes that field out again. Other settings and
+ * other models' overrides are kept. Null when nothing is left to store.
+ */
+export function compactionWithLimit(current, model, window, limit) {
+  const { modelOverrides, ...general } = current && typeof current === "object" ? current : {};
+  const overrides = { ...(modelOverrides && typeof modelOverrides === "object" ? modelOverrides : {}) };
+  const { reserveTokens: _reserve, ...rest } = overrides[model] ?? {};
+  if (limit === null) {
+    if (Object.keys(rest).length > 0) overrides[model] = rest;
+    else delete overrides[model];
+  } else {
+    overrides[model] = { ...rest, reserveTokens: window - limit };
+  }
+  const next = { ...general, ...(Object.keys(overrides).length > 0 ? { modelOverrides: overrides } : {}) };
+  return Object.keys(next).length > 0 ? next : null;
 }
