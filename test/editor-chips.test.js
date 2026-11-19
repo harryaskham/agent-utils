@@ -802,6 +802,30 @@ test("the context chip shows a /context limit: the share of it, then ≤LIMIT in
   assert.match(client.draw(), /25\.6%▌1\.0M/, "cleared (/context off): the window again");
   assert.equal(limits().length, 1, "followed once");
   await client.stop();
+
+  // pi-client says where the conversation compacts (a limit set for its model in the profile's
+  // compaction settings, or its own): the chip is of that limit, with no /context limit set.
+  const reported = { tokens: 250_000, contextWindow: 1_000_000, percent: 25, compactAt: 500_000 };
+  const capped = await mount({
+    ...usage,
+    getContextUsage: () => reported,
+    sessionManager: { getEntries: () => [], getSessionId: () => "s2" },
+    chord: { watchDocument: async (address, onValue) => { if (address.key === "context-limit") send = onValue; return () => {}; } },
+  });
+  assert.match(capped.draw(), /50\.0%▌≤500k/, "the share of the limit, not 25.0% of 1.0M");
+  // A /context limit of the session's own is the one shown.
+  await new Promise((resolve) => setImmediate(resolve));
+  send({ values: { limit: 300_000 } });
+  assert.match(capped.draw(), /83\.3%▌≤300k/);
+  send({ values: {} });
+  assert.match(capped.draw(), /50\.0%▌≤500k/);
+  await capped.stop();
+  // A limit that is no limit (at or over the window, or none): the window, as before.
+  for (const compactAt of [1_000_000, 1_200_000, 0, undefined]) {
+    const plain = await mount({ ...usage, getContextUsage: () => ({ tokens: 250_000, contextWindow: 1_000_000, percent: 25, compactAt }), sessionManager: { getEntries: () => [], getBranch: () => [] } });
+    assert.match(plain.draw(), /25\.0%▌1\.0M/, String(compactAt));
+    await plain.stop();
+  }
 });
 
 test("the directory chip is under ~ by the session's host's home (pi-client's ctx.home), else this machine's", async () => {

@@ -326,8 +326,11 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       const contextMax = Number(usage.contextWindow ?? usage.contextWindowSize ?? ctx.model?.contextWindow ?? 0);
       const contextTokens = Number(usage.tokens ?? usage.contextTokens ?? 0);
       const windowPct = Number(usage.percent ?? usage.usedPercentage ?? (contextMax > 0 ? (contextTokens / contextMax) * 100 : 0));
-      // A /context limit: the share of it, and the chip says the limit, not the model's window.
-      const contextLimit = contextLimitFor(ctx);
+      // A /context limit, else the limit the client says the conversation compacts at (pi-client:
+      // one set for its model in the profile's compaction settings, or its own): the share of it,
+      // and the chip says the limit, not the model's window.
+      const compactAt = Number(usage.compactAt ?? 0);
+      const contextLimit = contextLimitFor(ctx) || (compactAt > 0 && compactAt < contextMax ? compactAt : 0);
       const used = contextTokens > 0 ? contextTokens : (windowPct / 100) * contextMax;
       const contextPct = contextLimit > 0 ? (used / contextLimit) * 100 : windowPct;
       const provider = String(ctx.model?.provider || "model");
