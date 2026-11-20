@@ -250,6 +250,12 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
           onClose: () => disposePane(holder.current),
         });
       }
+      // A terminal that cannot show kitty graphics (or is told not to: PI_IMAGE_PROTOCOL=none, as a
+      // host without graphics sets for its panes) gets no paintings: nothing would show them.
+      const protocol = typeof host?.imageProtocol === "function" ? host.imageProtocol() : undefined;
+      if (/^(none|0)$/i.test(String(env.PI_IMAGE_PROTOCOL || "")) || (protocol !== undefined && protocol !== "kitty")) {
+        throw new Error(`this terminal shows no kitty graphics (${protocol || "PI_IMAGE_PROTOCOL=none, or not a kitty-graphics terminal"})`);
+      }
       const tui = captureTuiFromUi(ctx?.ui);
       if (!tui?.terminal) throw new Error("visual thoughts need Pi's interactive TUI, or pi-client with pane backdrops");
       if (tui.mode !== undefined && tui.mode !== "fullscreen") throw new Error("visual thoughts need Pi's fullscreen TUI mode (/settings → TUI mode)");

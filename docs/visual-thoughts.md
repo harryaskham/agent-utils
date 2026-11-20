@@ -57,7 +57,7 @@ TUI Pi in fullscreen mode (`tuiMode: fullscreen`) on a Kitty-graphics terminal (
 
 - **Pi's redraws are handled.** Pi deletes every placement when its own images change and frees images on full redraws; the extension watches Pi's output and puts the backdrop back inside the same frame, uploading again what was freed.
 
-tmux is not supported yet (`PI_VISUAL_THOUGHTS_TMUX=1` to try). `PI_VISUAL_THOUGHTS_TRACE=<file>` logs transitions, frames and main-thread stalls.
+Only a terminal that shows kitty graphics paints: where pi-tui detects none, or is told none (`PI_IMAGE_PROTOCOL=none`, as a host without graphics such as `caco tui --no-gfx` should give its panes), TUI Pi paints nothing and pi-client has no pane backdrop, so no prompt or image is requested. tmux is not supported yet (`PI_VISUAL_THOUGHTS_TMUX=1` to try). `PI_VISUAL_THOUGHTS_TRACE=<file>` logs transitions, frames and main-thread stalls.
 
 ## Settings
 

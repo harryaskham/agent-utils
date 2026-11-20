@@ -1516,3 +1516,34 @@ test("pi-daemon module: with no model registry, a missing first chat model falls
     module.dispose();
   }
 });
+
+test("extension: a terminal without kitty graphics gets no paintings, so no prompt or image is paid for", async () => {
+  const { createVisualThoughtsExtension } = await import("../extensions/lib/visual-thoughts-extension.js");
+  for (const [what, options] of [
+    ["pi-tui sees no images", { host: { imageProtocol: () => null }, env: {} }],
+    ["iTerm2's protocol only", { host: { imageProtocol: () => "iterm2" }, env: {} }],
+    ["told so (PI_IMAGE_PROTOCOL=none)", { env: { PI_IMAGE_PROTOCOL: "none" } }],
+  ]) {
+    const handlers = new Map();
+    const commands = new Map();
+    const pi = { on: (name, fn) => handlers.set(name, [...(handlers.get(name) || []), fn]), registerCommand: (name, def) => commands.set(name, def) };
+    const requests = [];
+    const extension = createVisualThoughtsExtension({
+      settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minIntervalMs: 0 } } },
+      env: { LITELLM_BASE_URL: "http://proxy:4000", ...options.env },
+      ...(options.host ? { host: options.host } : {}),
+      fetchImpl: async (url) => { requests.push(url); return new Response("{}"); },
+    });
+    extension(pi);
+    const notices = [];
+    const ctx = { ui: { notify: (message) => notices.push(message), setStatus() {} }, sessionManager: { getSessionId: () => "s", getEntries: () => [], getBranch: () => [] } };
+    const emit = async (name, event) => { for (const fn of handlers.get(name) || []) await fn(event, ctx); };
+    await emit("session_start", {});
+    await emit("agent_start", {});
+    await emit("message_end", { message: { role: "assistant", content: [{ type: "text", text: "the harbour ".repeat(40) }] } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(requests, [], `${what}: nothing requested`);
+    await commands.get("thoughts").handler("on", ctx);
+    assert.match(notices.at(-1), /visual thoughts unavailable: this terminal shows no kitty graphics/, what);
+  }
+});

@@ -2,11 +2,19 @@
 // through the host bridge (lib/pi-host.js), whose static imports Pi's extension loader maps to
 // Pi's modules (pi-client maps them to its own). The behaviour lives in
 // lib/visual-thoughts-extension.js, which tests load without the host packages.
-import { getCellDimensions } from "./lib/pi-host.js";
+import { getCapabilities, getCellDimensions } from "./lib/pi-host.js";
 import { createVisualThoughtsExtension as createCore } from "./lib/visual-thoughts-extension.js";
 
 export function createVisualThoughtsExtension(options = {}) {
-  return createCore({ ...options, host: options.host || { cellSize: getCellDimensions } });
+  return createCore({
+    ...options,
+    host: options.host || {
+      cellSize: getCellDimensions,
+      // What the running Pi's terminal draws ("kitty", "iterm2" or null), as pi-tui detected it
+      // (PI_IMAGE_PROTOCOL overrides): no kitty graphics, no paintings to pay for.
+      imageProtocol: () => getCapabilities().images ?? null,
+    },
+  });
 }
 
 export default createVisualThoughtsExtension();
