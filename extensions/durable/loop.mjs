@@ -3,7 +3,8 @@
 // toward whenever it goes idle until it calls goal_done (../lib/durable-goal.js).
 // Commands as the TUI /loop: /loop <interval> [--steer] <prompt> (several at once, numbered),
 // /loop list (or /loops), /loop stop [id|all] (off and end too); the agent manages its own loops
-// with the TUI's tools, create_loop, list_loops and stop_loop, sharing the same numbers.
+// with the TUI's tools, create_loop, list_loops and stop_loop, and its own crons with create_cron,
+// list_crons, update_cron and delete_cron, all sharing the same numbers.
 //
 // List this file in a pi-daemon profile's `extensions:`. It exports the extension-module
 // contract's `extension` (the loop task) and `commands` (/loop); the behaviour lives in
@@ -12,7 +13,7 @@
 //
 // Environment: PI_LOOP_MIN_INTERVAL_SECS (default 30), PI_LOOP_DEFAULT_DELIVERY (steer, else
 // follow-up while busy), PI_LOOP_TZ (time zone of the delivered timestamp; default the worker's).
-import { DEFAULT_MIN_INTERVAL_SECS, createLoopCommands, createLoopTask, createLoopTools } from "../lib/durable-loop.js";
+import { DEFAULT_MIN_INTERVAL_SECS, createCronTools, createLoopCommands, createLoopTask, createLoopTools } from "../lib/durable-loop.js";
 import { createGoalCommands, createGoalTask, createGoalTools, goalSection } from "../lib/durable-goal.js";
 
 const minSecs = Number.parseInt(process.env.PI_LOOP_MIN_INTERVAL_SECS ?? "", 10);
@@ -27,12 +28,12 @@ const options = {
 
 const goalTask = createGoalTask({ timeZone: process.env.PI_LOOP_TZ });
 
-// The loop and goal tasks, the agent's own tools (create_loop, list_loops, stop_loop, goal_done)
-// and the live goal's system prompt section.
+// The loop and goal tasks, the agent's own tools (create_loop, list_loops, stop_loop; create_cron,
+// list_crons, update_cron, delete_cron; goal_done) and the live goal's system prompt section.
 export const extension = {
   name: "agent-utils-loop",
   tasks: [task, goalTask],
-  tools: [...createLoopTools(options), ...createGoalTools({ task: goalTask })],
+  tools: [...createLoopTools(options), ...createCronTools(options), ...createGoalTools({ task: goalTask })],
   sections: [goalSection()],
 };
 

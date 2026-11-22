@@ -191,7 +191,7 @@
               if (caco.extension?.sections?.[0]?.key !== 'cacophony' || typeof caco.commands?.['caco-agent-register']?.run !== 'function' || typeof caco.observe !== 'function') process.exit(1);
               const loopTools = (loop.extension?.tools ?? []).map((tool) => tool.name).join(',');
               const loopTasks = (loop.extension?.tasks ?? []).map((task) => task.definition?.name).join(',');
-              if (loopTasks !== 'agent-utils.loop,agent-utils.goal' || typeof loop.commands?.loop?.run !== 'function' || typeof loop.commands?.loops?.run !== 'function' || typeof loop.commands?.goal?.run !== 'function' || loop.extension?.sections?.[0]?.key !== 'goal' || loopTools !== 'create_loop,list_loops,stop_loop,goal_done') process.exit(1);
+              if (loopTasks !== 'agent-utils.loop,agent-utils.goal' || typeof loop.commands?.loop?.run !== 'function' || typeof loop.commands?.loops?.run !== 'function' || typeof loop.commands?.goal?.run !== 'function' || loop.extension?.sections?.[0]?.key !== 'goal' || loopTools !== 'create_loop,list_loops,stop_loop,create_cron,list_crons,update_cron,delete_cron,goal_done') process.exit(1);
             "
           '';
           uncheckedJoin = pkgs.symlinkJoin {

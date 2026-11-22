@@ -233,7 +233,7 @@ test("aborting the loop task removes its entry and commits an aborted outcome", 
   const store = durable();
   (await store.tx.doc(LOOPS_DOC)).loops["7"] = { taskId: "t7" };
   const commits = [];
-  await createLoopTask().definition.abort({ input: { number: 7 } }, { commit: async (change) => commits.push(await change(store.tx)) }, {});
+  await createLoopTask().definition.abort({ input: { number: 7 } }, { taskId: "t7", commit: async (change) => commits.push(await change(store.tx)) }, {});
   assert.deepEqual(commits, [{ status: "terminal", outcome: { status: "aborted", reason: "loop stopped" } }]);
   assert.equal(store.registry().loops["7"], undefined);
 });
