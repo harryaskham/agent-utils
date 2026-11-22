@@ -1,6 +1,6 @@
 // Visual thoughts: one painting budget for a whole process (a pi-daemon worker's sessions, a
-// pi-client's panes). Paintings take a turn: at most `concurrent` at once and `perMinute` started
-// in any minute, first come first served (each session queues at most one, so sessions alternate).
+// pi-client's panes). Paintings take a turn: at most `concurrent` at once, `perMinute` started in
+// any minute and `perHour` in any hour, first come first served (each session queues at most one, so sessions alternate).
 // A rate limit, a server error or a dropped connection pauses everyone: the provider is struggling,
 // not one session (15 s doubling to 5 min; a rate limit's own reset when it gives one).
 
@@ -15,10 +15,11 @@ export function isTransientPaintError(error) {
 export function createPaintBudget({
   concurrent = 1,
   perMinute = 4,
+  perHour = Infinity,
   now = () => Date.now(),
   timers = { setTimeout, clearTimeout },
 } = {}) {
-  const limits = { concurrent, perMinute };
+  const limits = { concurrent, perMinute, perHour };
   const waiting = [];
   const started = [];
   let active = 0;
@@ -35,8 +36,14 @@ export function createPaintBudget({
   function pump() {
     while (waiting.length && active < Math.max(1, limits.concurrent)) {
       const at = now();
-      while (started.length && at - started[0] >= 60_000) started.shift();
-      const wait = Math.max(pausedUntil - at, started.length >= Math.max(1, limits.perMinute) ? started[0] + 60_000 - at : 0);
+      while (started.length && at - started[0] >= 3_600_000) started.shift();
+      const lastMinute = started.filter((time) => at - time < 60_000);
+      const perHour = Number.isFinite(limits.perHour) ? Math.max(1, limits.perHour) : Infinity;
+      const wait = Math.max(
+        pausedUntil - at,
+        lastMinute.length >= Math.max(1, limits.perMinute) ? lastMinute[0] + 60_000 - at : 0,
+        started.length >= perHour ? started[started.length - perHour] + 3_600_000 - at : 0,
+      );
       if (wait > 0) return wake(wait);
       const entry = waiting.shift();
       entry.cleanup?.();
@@ -78,9 +85,10 @@ export function createPaintBudget({
       pausedUntil = Math.max(pausedUntil, now() + ms);
     },
     succeeded() { failures = 0; },
-    configure({ concurrent: nextConcurrent, perMinute: nextPerMinute } = {}) {
+    configure({ concurrent: nextConcurrent, perMinute: nextPerMinute, perHour: nextPerHour } = {}) {
       if (Number.isFinite(nextConcurrent)) limits.concurrent = nextConcurrent;
       if (Number.isFinite(nextPerMinute)) limits.perMinute = nextPerMinute;
+      if (Number.isFinite(nextPerHour)) limits.perHour = nextPerHour;
       pump();
     },
     status() {
@@ -89,6 +97,7 @@ export function createPaintBudget({
         active,
         waiting: waiting.length,
         lastMinute: started.filter((time) => at - time < 60_000).length,
+        lastHour: started.filter((time) => at - time < 3_600_000).length,
         pausedMs: Math.max(0, pausedUntil - at),
         ...limits,
       };

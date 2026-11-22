@@ -38,17 +38,34 @@ export const OWNER = "visual-thoughts";
 /** ui.image's limit (2 MiB), with room to spare. */
 export const MAX_IMAGE_BYTES = 2 * 1024 * 1024 - 16 * 1024;
 const SETTINGS_KEY = "settings";
+/**
+ * Sessions' own `/thoughts <setting>` changes stored before this were dropped (the defaults moved:
+ * MAI-Image-2.7-Flash, gpt-6.1-terra, painting every 5 min at most). Settings' `overridesEpoch`
+ * raised above it drops them again, everywhere.
+ */
+export const OVERRIDES_EPOCH = 1;
+/** How often settings.json is looked at again (a change applies to every session's own-less keys). */
+export const SETTINGS_CHECK_MS = 30_000;
 /** After the session's media store refused a painting (full), how long before trying again. */
 export const MEDIA_FULL_RETRY_MS = 30 * 60_000;
 /** Session-scoped settings `/thoughts <key> <value>` may change (persisted per session). */
 const SESSION_KEYS = new Set(["promptModel", "clientPromptModel", "imageModel", "size", "quality", "style", "opacity", "fit", "feather", "holdMs", "minIntervalMs", "firstChars", "minChars", "maxPerRun", "slotImages", "provider"]);
 const HINT_KEYS = new Set(["opacity", "fit", "feather", "holdMs"]);
 
-/** The agent-utils settings slice from Pi's settings.json. */
-export function readVisualThoughtsSettings(env = process.env) {
+/** Pi's settings.json as text ("" when it cannot be read). */
+export function readVisualThoughtsSettingsText(env = process.env) {
   try {
     const dir = env.PI_CODING_AGENT_DIR?.trim() || join(env.HOME || homedir(), ".pi", "agent");
-    return JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+    return readFileSync(join(dir, "settings.json"), "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/** Pi's settings.json (its agentUtils.visualThoughts slice is ours). */
+export function readVisualThoughtsSettings(env = process.env) {
+  try {
+    return JSON.parse(readVisualThoughtsSettingsText(env)) || {};
   } catch {
     return {};
   }
@@ -79,17 +96,63 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.()
 
 export function createVisualThoughtsModule({
   env = process.env,
-  settings = readVisualThoughtsSettings(env),
+  // Fixed settings (tests), or settings.json, read again when it changes.
+  settings,
+  readSettingsText = settings === undefined ? () => readVisualThoughtsSettingsText(env) : null,
+  settingsCheckMs = SETTINGS_CHECK_MS,
   fetchImpl,
   now = () => Date.now(),
   timers = { setTimeout, clearTimeout },
   createRenderer = defaultCreateRenderer,
   log = (line) => { try { process.stderr.write(`${line}\n`); } catch {} },
 } = {}) {
-  const base = resolveVisualThoughtsConfig(settings, env);
-  if (!Number.isFinite(base.slotImages)) base.slotImages = 8;
+  let settingsText = readSettingsText ? readSettingsText() : "";
+  const resolveBase = (value) => {
+    const resolved = resolveVisualThoughtsConfig(value, env);
+    if (!Number.isFinite(resolved.slotImages)) resolved.slotImages = 8;
+    return resolved;
+  };
+  let base = resolveBase(settings ?? parseSettings(settingsText));
+  let settingsCheckedAt = now();
   const sessions = new Map(); // sessionId → session
-  const budget = createPaintBudget({ concurrent: base.budgetConcurrent, perMinute: base.budgetPerMinute, now, timers });
+  const budget = createPaintBudget({ concurrent: base.budgetConcurrent, perMinute: base.budgetPerMinute, perHour: base.budgetPerHour, now, timers });
+  const epoch = () => Math.max(OVERRIDES_EPOCH, Number(base.overridesEpoch) || 0);
+
+  function parseSettings(text) {
+    try { return JSON.parse(text) || {}; } catch { return {}; }
+  }
+
+  /** A session's settings: settings.json's, under its own `/thoughts <setting>` changes. In place (its painter holds them). */
+  function applyConfig(session) {
+    for (const key of Object.keys(session.config)) delete session.config[key];
+    Object.assign(session.config, base, session.overrides);
+    session.painter?.setProvider(createImageProvider(session.config, { env: session.env, ...(fetchImpl ? { fetchImpl } : {}) }));
+  }
+
+  /**
+   * settings.json changed (a switch, an edit): every session takes the new values but its own
+   * changes; a raised `overridesEpoch` drops those too. Looked at every settingsCheckMs at most.
+   */
+  function refreshSettings() {
+    if (!readSettingsText || now() - settingsCheckedAt < settingsCheckMs) return false;
+    settingsCheckedAt = now();
+    const text = readSettingsText();
+    if (!text || text === settingsText) return false;
+    let parsed;
+    try { parsed = JSON.parse(text) || {}; } catch { return false; }
+    settingsText = text;
+    const before = epoch();
+    base = resolveBase(parsed);
+    budget.configure({ concurrent: base.budgetConcurrent, perMinute: base.budgetPerMinute, perHour: base.budgetPerHour });
+    const reset = epoch() > before;
+    for (const session of sessions.values()) {
+      if (reset && Object.keys(session.overrides).length) { session.overrides = {}; void save(session); }
+      applyConfig(session);
+      update(session);
+    }
+    log(`visual thoughts: settings changed; ${sessions.size} session(s) follow them${reset ? " (their own changes dropped)" : ""}`);
+    return true;
+  }
   // The prompt models, in turn; one that fails or answers nothing rests 10 min, for every
   // session (they share the worker's models).
   const chain = createModelChain({ now });
@@ -224,6 +287,9 @@ export function createVisualThoughtsModule({
     let stored = {};
     try { stored = (await info.state?.get?.(SETTINGS_KEY)) || {}; } catch {}
     session.overrides = stored.overrides && typeof stored.overrides === "object" ? stored.overrides : {};
+    // Changes made before the last reset are dropped: the session follows settings again.
+    const stale = (Number(stored.epoch) || 0) < epoch() && Object.keys(session.overrides).length > 0;
+    if (stale) session.overrides = {};
     session.config = { ...base, ...session.overrides };
     // on | off | auto (the `daemon` setting decides); sessions saved by 0.x kept `enabled`.
     session.choice = ["on", "off", "auto"].includes(stored.choice) ? stored.choice : typeof stored.enabled === "boolean" ? (stored.enabled ? "on" : "off") : "auto";
@@ -252,13 +318,14 @@ export function createVisualThoughtsModule({
       warn: (message) => log(`${message} (${id})`),
     });
     for (const ref of session.images) session.painter.remember(ref.alt);
+    if (stale || ((Number(stored.epoch) || 0) < epoch() && stored.choice)) await save(session);
     await countWatchers(session);
     update(session);
     return session;
   }
 
   async function save(session) {
-    try { await session.info?.state?.set?.(SETTINGS_KEY, { choice: session.choice, overrides: session.overrides }); } catch {}
+    try { await session.info?.state?.set?.(SETTINGS_KEY, { choice: session.choice, overrides: session.overrides, epoch: epoch() }); } catch {}
   }
 
   /**
@@ -316,6 +383,7 @@ export function createVisualThoughtsModule({
     if (disposed || !event || typeof event !== "object") return;
     const type = event.type;
     if (!["agent_start", "agent_end", "message_end", "tool_execution_start", "ui_watchers"].includes(type)) return;
+    refreshSettings();
     let session;
     try { session = await load(info); } catch (error) { log(`visual thoughts: session load failed: ${error?.message || error}`); return; }
     if (!session) return;
@@ -356,7 +424,8 @@ export function createVisualThoughtsModule({
       `visual thoughts here, painted once for every client: ${decision.paint ? "on" : "off"} — ${decision.why}`,
       `  ${session.images.length} image${session.images.length === 1 ? "" : "s"} in the backdrop slot; ${status.activity}${status.waitMs > 1_000 && status.activity === "idle" && decision.paint ? `, next in ${Math.round(status.waitMs / 1000)}s` : ""}`,
       `  painting with ${status.provider || session.config.imageModel}; prompts from ${describePromptModels(promptModelsFor(session.config, hasRegistry(session)), chain.lastModel)}${hasRegistry(session) ? ", in process" : ""}`,
-      `  this worker's budget: ${budgetNow.concurrent} at a time, ${budgetNow.perMinute} a minute (${budgetNow.lastMinute} in the last minute${budgetNow.waiting ? `, ${budgetNow.waiting} waiting` : ""}${budgetNow.pausedMs > 1_000 ? `, paused ${Math.ceil(budgetNow.pausedMs / 1000)}s: the provider is struggling` : ""})`,
+      `  ${Object.keys(session.overrides).length ? `its own settings (/thoughts reset to follow settings.json): ${Object.entries(session.overrides).map(([key, value]) => `${key} ${value}`).join(", ")}` : "following settings.json"}`,
+      `  this worker's budget: ${budgetNow.concurrent} at a time, ${budgetNow.perMinute} a minute, ${budgetNow.perHour} an hour (${budgetNow.lastMinute} in the last minute, ${budgetNow.lastHour} in the last hour${budgetNow.waiting ? `, ${budgetNow.waiting} waiting` : ""}${budgetNow.pausedMs > 1_000 ? `, paused ${Math.ceil(budgetNow.pausedMs / 1000)}s: the provider is struggling` : ""})`,
     ];
     if (status.generated) lines.push(`  ${status.generated} painted here since the worker started; the last took ${(status.lastMs / 1000).toFixed(1)}s`);
     const resting = describeResting(chain.resting(), now());
@@ -368,12 +437,22 @@ export function createVisualThoughtsModule({
 
   async function run(args, ctx = {}) {
     const reply = (text) => { try { ctx.notify?.(text); } catch {} return text; };
+    refreshSettings();
     const session = await load(ctx);
     if (!session) return reply("visual thoughts: no session");
     const words = String(args ?? "").trim().split(/\s+/).filter(Boolean);
     const verb = (words[0] || "status").toLowerCase();
     try {
       if (verb === "status") return reply(describe(session));
+      if (verb === "reset") {
+        const dropped = Object.keys(session.overrides);
+        session.overrides = {};
+        applyConfig(session);
+        if (session.images.length) await publish(session);
+        await save(session);
+        update(session);
+        return reply(dropped.length ? `visual thoughts: this session follows settings again (dropped its ${dropped.join(", ")})` : "visual thoughts: this session already follows settings");
+      }
       if (verb === "on" || verb === "off" || verb === "auto" || verb === "toggle") {
         session.choice = verb === "toggle" ? (decide(session).paint ? "off" : "on") : verb;
         update(session);
@@ -415,7 +494,7 @@ export function createVisualThoughtsModule({
         await save(session);
         return reply(`visual thoughts: ${change.key} = ${change.value} (this session)`);
       }
-      return reply("Usage: /thoughts [on|off|auto|toggle|status|now|next|clear|<setting> <value>]");
+      return reply("Usage: /thoughts [on|off|auto|toggle|status|now|next|clear|reset|<setting> <value>]");
     } catch (error) {
       report(session, error);
       return reply(`visual thoughts: ${session.lastError}`);
@@ -425,7 +504,7 @@ export function createVisualThoughtsModule({
   return {
     commands: {
       thoughts: {
-        description: "Visual thoughts: paint the agent's work into this session's backdrop, for every client (on|off|auto|now|next|clear|status|<setting> <value>)",
+        description: "Visual thoughts: paint the agent's work into this session's backdrop, for every client (on|off|auto|now|next|clear|reset|status|<setting> <value>)",
         run,
       },
     },

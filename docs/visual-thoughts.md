@@ -19,12 +19,12 @@ It is off by default. Enable it at startup with `agentUtils.visualThoughts.enabl
 
 - **What feeds it.** The run's prompt, streamed reasoning and reply text, and tool calls (names and redacted arguments) go into a bounded digest. Secrets are redacted as for `/narrate`.
 - **When it paints.** The first image of a run needs `firstChars` of new output, later ones `minChars`, at least `minIntervalMs` apart, at most `maxPerRun` per run, one at a time. When the run ends, what is left paints once more. Rate limits wait for the provider's reset; other failures back off (15 s doubling to 5 min) and warn once.
-- **The prompt.** `promptModel` (default `github-copilot/gpt-6-luna`, then `claude-haiku-5.5`, then `gemini-3.8-flash`: Pi's own models, asked in process through the host's model registry as a side completion, never a turn of the conversation and never a fork) gets the task (the latest prompt, kept however much output follows) and the output tail, and writes one 20–45 word scene of the work's actual subject: its real objects, places and people, or a close, legible analogy (a plugin system as instruments slotting into a great machine), never an unrelated mood piece; no readable text, code or literal values; when one answers nothing (a reasoning model that spent its tokens thinking) or fails (withdrawn, an outage), the next is asked and that one is passed over for 10 minutes; soft, low-contrast and mostly dark so text stays readable; the same subject while the work is the same. `style` is appended as a house style.
-- **The image.** `provider: "litellm"` posts to an OpenAI-compatible `/v1/images/generations` (`LITELLM_BASE_URL`, key from `LITELLM_MASTER_KEY`); `provider: "mai"` posts to `<maiEndpoint>/mai/images/generations` with an Entra token from `az` (or `maiAuth: "key"`).
+- **The prompt.** `promptModel` (default `github-copilot/gpt-6.1-terra`, then `gpt-6-luna`, then `claude-haiku-5.5`: Pi's own models, asked in process through the host's model registry as a side completion, never a turn of the conversation and never a fork) gets the task (the latest prompt, kept however much output follows) and the output tail, and writes one 20–45 word scene of the work's actual subject: its real objects, places and people, or a close, legible analogy (a plugin system as instruments slotting into a great machine), never an unrelated mood piece; no readable text, code or literal values; when one answers nothing (a reasoning model that spent its tokens thinking) or fails (withdrawn, an outage), the next is asked and that one is passed over for 10 minutes; soft, low-contrast and mostly dark so text stays readable; the same subject while the work is the same. `style` is appended as a house style.
+- **The image.** `provider: "litellm"` posts to an OpenAI-compatible `/v1/images/generations` (`LITELLM_BASE_URL`, key from `LITELLM_MASTER_KEY`), with `width` and `height` for MAI models (which ignore `size` and `quality`: the shortest side 768, their least, the aspect of `size`); `provider: "mai"` posts to `<maiEndpoint>/mai/images/generations` with an Entra token from `az` (or `maiAuth: "key"`).
 - **The rotation.** Each run's images form a batch. The backdrop cycles the newest batch (each held `holdMs`, crossfaded over `fadeMs`); while it has fewer than `minSet` images the latest earlier ones join, so there is always recent imagery and a new run's images take over one by one. A new image is shown once the current one has had `minShowMs`.
 - **Where images go.** `~/.local/state/agent-utils/visual-thoughts/<session>/` keeps each PNG and an `index.jsonl` of prompts (the newest `keep`). A reloaded or resumed session starts from its recent images. Sessions untouched for 14 days go, and the oldest go while the store is over 1.5 GB.
 
-Measured on 2026-10-30 (sandbox deployments, ~30-word prompts): `gpt-image-2.5-flare` at 1536×1024 `quality=low` ~14 s through LiteLLM; `MAI-Image-2.5-Flash` / `2.6-Flash` ~10 s at 768×768 and ~13 s at 1344×768 (768 px minimum per side), limited to 2 requests a minute per deployment; `gpt-image-2` / `2.5-sunburst` ~22 s; `gpt-image-1.5` ~28 s. The prompt model adds 2–5 s.
+Measured on 2026-11-22: `mai-image-2.7-flash` (the default) 15–25 s through LiteLLM at 1152×768, about $0.009 a painting ($10 per million output tokens, 864 tokens), 6 requests a minute deployed and 12 allowed per subscription; `MAI-Image-2.7` 32 s and about $0.03; neither has a quality or step setting (`quality` is ignored, `num_inference_steps` refused), and smaller images are cheaper, not faster. `gpt-6.1-terra` writes a prompt in 3.5–9 s, `gpt-6-luna` in 3–5 s. Measured on 2026-10-30 (sandbox deployments, ~30-word prompts): `gpt-image-2.5-flare` at 1536×1024 `quality=low` ~14 s through LiteLLM; `MAI-Image-2.5-Flash` / `2.6-Flash` ~10 s at 768×768 and ~13 s at 1344×768 (768 px minimum per side), limited to 2 requests a minute per deployment; `gpt-image-2` / `2.5-sunburst` ~22 s; `gpt-image-1.5` ~28 s. The prompt model adds 2–5 s.
 
 ## pi-daemon sessions: painted once, for every client
 
@@ -34,7 +34,7 @@ List `extensions/durable/visual-thoughts.mjs` (the package's `visual-thoughts.mj
 - **Which sessions paint (`daemon`).** `watched` (the default): a session paints while a client shows it, on pi-daemon versions that tell modules how many clients watch (pi-daemon bd-046baf: `ui.watchers()`, `ui_watchers` events). Until then, and with `manual`, only sessions turned on with `/thoughts on` paint. `all`: every session that works. Sessions that never run a turn are never touched. `/thoughts auto` returns a session to the setting.
 - **One budget per worker.** Every painting of the worker's sessions waits its turn: `budgetConcurrent` (1) at a time, `budgetPerMinute` (4) started a minute, sessions alternating. A rate limit, server error, timeout or dropped connection pauses all of them (15 s doubling to 5 min, or the limit's own reset); a request over `timeoutMs` (120 s) is dropped. The daemon log has a line per painting (time, size, budget) and per session when it starts or stops painting, and why.
 - **Clients show it.** pi-client sees the module among the session's commands and follows the slot (`session.watchDocument`): images are fetched once by URI, the hints set the look and the cycle (every image in the slot, newest first shown, while idle too), a new `current` is shown once the shown image has had `minShowMs`, and the transitions (effect, fps, layer) stay the client's own. While the module has not painted a session, its panes stay plain: never a painting of their own as well. A session without the module and TUI Pi paint locally as before.
-- **`/thoughts` in pi-client goes to the session.** `on`, `off`, `auto`, `now`, `next`, `clear`, `status` and the painting settings run as the module's command, for every client: `off` empties the slot; `next` moves everyone on. The display settings (`effect`, `fps`, `layer`, `pixels`, `fade`, `min-show`, `canvas-opacity`, `transport`) stay with the pane. A session's choice and settings persist in the module's session state.
+- **`/thoughts` in pi-client goes to the session.** `on`, `off`, `auto`, `now`, `next`, `clear`, `status` and the painting settings run as the module's command, for every client: `off` empties the slot; `next` moves everyone on. The display settings (`effect`, `fps`, `layer`, `pixels`, `fade`, `min-show`, `canvas-opacity`, `transport`) stay with the pane. A session's choice and its own settings persist in the module's session state; everything else follows `settings.json`, read again when it changes. `/thoughts reset` drops the session's own settings.
 - **Prompts** are side completions over the worker's own models (pi-daemon's `info.modelRegistry`, bd-f85aa2): no fork, nothing committed, no LiteLLM. Only the image goes to LiteLLM; `LITELLM_BASE_URL` and `LITELLM_MASTER_KEY` come from the session's variables (the profile's `envFiles`).
 
 ![pi-client on a pi-daemon session: the session's own painting, from its backdrop slot](assets/visual-thoughts/pi-daemon-slot.jpg)
@@ -61,16 +61,16 @@ Only a terminal that shows kitty graphics paints: where pi-tui detects none, or 
 
 ## Settings
 
-`agentUtils.visualThoughts` in `settings.json` (startup policy; `/thoughts <key> <value>` changes the running session only; `hold`, `fade`, `interval` and `min-show` take seconds).
+`agentUtils.visualThoughts` in `settings.json`, read again within 30 s of a change by pi-daemon workers, Pi and pi-client: every session takes the new values except those it changed itself with `/thoughts <key> <value>` (the running session only; a pi-daemon session keeps them). `/thoughts reset` drops a session's own changes; raising `overridesEpoch` drops every session's at once. `hold`, `fade`, `interval` and `min-show` take seconds.
 
 | Key | Default | |
 |---|---|---|
 | `enabled` | `false` | paint from startup |
-| `promptModel` | `github-copilot/gpt-6-luna,github-copilot/claude-haiku-5.5,github-copilot/gemini-3.8-flash` | Pi models (`provider/id`, in process) or `litellm/<model>`, tried in order; one that fails or answers nothing is passed over for 10 minutes (`/thoughts status` names it) |
+| `promptModel` | `github-copilot/gpt-6.1-terra,github-copilot/gpt-6-luna,github-copilot/claude-haiku-5.5` | Pi models (`provider/id`, in process) or `litellm/<model>`, tried in order; one that fails or answers nothing is passed over for 10 minutes (`/thoughts status` names it) |
 | `clientPromptModel` | `deepseek-v4-flash,claude-haiku-5.5,gemini-3.8-flash` | only where there is no model registry (a pi-client pane painting on its own): LiteLLM chat models, in order as above |
 | `provider` | `litellm` | `litellm` or `mai` |
-| `imageModel` | `gpt-image-2.5-flare` | MAI: `MAI-Image-2.5-Flash` |
-| `size`, `quality` | `1536x1024`, `low` | MAI: `1344x768` |
+| `imageModel` | `mai-image-2.7-flash` | a LiteLLM image model (`gpt-image-2.6-flare`, `mai-image-2.7`); with `provider: mai`, the deployment |
+| `size`, `quality` | `1536x1024`, `low` | MAI models: the aspect only (1152×768); no quality |
 | `style` | | appended to every prompt |
 | `opacity` | `0.3` | backdrop alpha |
 | `canvasOpacity` | `0.45` | backdrop alpha blended into `/gfx full`'s background (`canvas-opacity` at runtime) |
@@ -83,13 +83,14 @@ Only a terminal that shows kitty graphics paints: where pi-tui detects none, or 
 | `effect` | `random` | `ripple`, `wave`, `dissolve`, `bloom`, `drift`, `fade` |
 | `fps` | `60` | transition frame rate |
 | `transitionPixels` | `400000` | transition frame size (`pixels` at runtime) |
-| `minIntervalMs` | `12000` | between paintings |
-| `firstChars`, `minChars` | `160`, `600` | new output needed |
-| `maxPerRun`, `maxImages`, `minSet` | `10`, `8`, `3` | |
+| `minIntervalMs` | `300000` | between a session's paintings (5 min; `interval` in seconds) |
+| `firstChars`, `minChars` | `160`, `2000` | new output needed: for a run's first painting, then for each next |
+| `maxPerRun`, `maxImages`, `minSet` | `3`, `8`, `3` | paintings an agent run may have |
 | `slotImages` | `8` | paintings a pi-daemon session's backdrop slot keeps (`images` at runtime) |
 | `slotImageBytes` | `900000` | each painting stored in the session's media at most this size (a scaled-down PNG); a painting that leaves the ring is given back with pi-daemon's `ui.release` once the slot no longer lists it (bd-8620a0; hosts without it keep the file). A session whose media store is full (pi-daemon keeps 256 MiB a session) stops painting for 30 minutes, then tries again |
 | `daemon` | `watched` | pi-daemon sessions that paint: `watched`, `manual`, `all` |
-| `budgetConcurrent`, `budgetPerMinute` | `1`, `4` | one process's painting budget (`concurrent`, `per-minute` at runtime) |
+| `budgetConcurrent`, `budgetPerMinute`, `budgetPerHour` | `1`, `4`, `12` | one process's painting budget, every session together (`concurrent`, `per-minute`, `per-hour` at runtime) |
+| `overridesEpoch` | `0` | raise it to drop every session's own `/thoughts` settings once |
 | `timeoutMs` | `120000` | a painting request taking longer is dropped |
 | `keep` | `24` | stored images per session |
 | `transport` | `auto` | `file` (`t=t`) or `stream` (inline) |

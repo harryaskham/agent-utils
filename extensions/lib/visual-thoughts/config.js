@@ -1,8 +1,9 @@
 // Visual thoughts: settings (`agentUtils.visualThoughts`), environment, and runtime changes.
 //
-// Startup settings are immutable policy; `/thoughts key value` changes the running session only.
+// Settings are policy, read again when they change (a session's own `/thoughts key value` changes
+// stay on top of them); `/thoughts key value` changes the running session only.
 
-export const DEFAULT_PROMPT_MODEL = "github-copilot/gpt-6-luna";
+export const DEFAULT_PROMPT_MODEL = "github-copilot/gpt-6.1-terra";
 
 export const DEFAULTS = Object.freeze({
   enabled: false,
@@ -10,12 +11,14 @@ export const DEFAULTS = Object.freeze({
   // completion, never a turn of the conversation. In order: the next is asked when one fails or
   // answers nothing, and that one is passed over 10 min. `litellm/<model>` entries go to the
   // OpenAI-compatible endpoint instead.
-  promptModel: `${DEFAULT_PROMPT_MODEL},github-copilot/claude-haiku-5.5,github-copilot/gemini-3.8-flash`,
+  promptModel: `${DEFAULT_PROMPT_MODEL},github-copilot/gpt-6-luna,github-copilot/claude-haiku-5.5`,
   // Only where there is no model registry (a pi-client pane painting on its own): chat models on
   // the OpenAI-compatible endpoint (baseUrl, LiteLLM), in order as above.
   clientPromptModel: "deepseek-v4-flash,claude-haiku-5.5,gemini-3.8-flash",
   provider: "litellm",
-  imageModel: "gpt-image-2.5-flare",
+  // MAI-Image-2.7-Flash: ~$0.009 a painting at 1152x768, 6 a minute deployed (12 allowed), 15-25 s.
+  // MAI models are asked for width and height (the shortest side 768, MAI's least), not size.
+  imageModel: "mai-image-2.7-flash",
   size: "1536x1024",
   quality: "low",
   baseUrl: "",
@@ -48,11 +51,13 @@ export const DEFAULTS = Object.freeze({
   // Each painting stored in the session's media at most this size (a scaled-down PNG): a soft
   // backdrop needs no more, and the media stays (pi-daemon has no way to release it yet).
   slotImageBytes: 900_000,
-  // Generation.
-  minIntervalMs: 12_000,
+  // Generation: how often a session paints. At most one painting every minIntervalMs (5 min), the
+  // first of an agent run once firstChars of output arrived, the next only after minChars more, at
+  // most maxPerRun a run; and every painting of a process within budgetPerHour.
+  minIntervalMs: 300_000,
   firstChars: 160,
-  minChars: 600,
-  maxPerRun: 10,
+  minChars: 2_000,
+  maxPerRun: 3,
   maxConcurrent: 1,
   // A painting request that takes longer is dropped (it would hold the budget).
   timeoutMs: 120_000,
@@ -60,6 +65,9 @@ export const DEFAULTS = Object.freeze({
   // panes): at most this many at once, and started per minute; struggling providers pause all.
   budgetConcurrent: 1,
   budgetPerMinute: 4,
+  budgetPerHour: 12,
+  // Raise it (any larger number) to drop every session's own `/thoughts <setting>` changes, once.
+  overridesEpoch: 0,
   // pi-daemon sessions (visual-thoughts.mjs): which paint. `watched`: while a client shows the
   // session (hosts that can tell; others paint only sessions turned on with /thoughts on);
   // `manual`: only sessions turned on; `all`: every session that works.
@@ -73,7 +81,7 @@ const NUMERIC = Object.freeze({
   holdMs: [1_000, 600_000], fadeMs: [0, 60_000], minShowMs: [0, 600_000],
   minSet: [1, 32], maxImages: [1, 64], slotImages: [1, 32], slotImageBytes: [200_000, 2_080_000], minIntervalMs: [0, 3_600_000], firstChars: [0, 100_000],
   minChars: [0, 100_000], maxPerRun: [0, 1_000], maxConcurrent: [1, 4], keep: [0, 10_000],
-  budgetConcurrent: [1, 8], budgetPerMinute: [1, 60], timeoutMs: [10_000, 600_000],
+  budgetConcurrent: [1, 8], budgetPerMinute: [1, 60], budgetPerHour: [1, 3_600], timeoutMs: [10_000, 600_000], overridesEpoch: [0, 1_000_000_000],
 });
 const CHOICES = Object.freeze({
   fit: ["cover", "contain", "stretch"],
@@ -89,7 +97,7 @@ const STRINGS = new Set(["promptModel", "clientPromptModel", "imageModel", "size
 /** Seconds-friendly aliases for the millisecond settings, and short names. */
 const ALIASES = Object.freeze({
   hold: ["holdMs", 1000], "canvas-opacity": ["canvasOpacity", 1], "canvas-blend": ["canvasBlend", 1], fade: ["fadeMs", 1000], interval: ["minIntervalMs", 1000], "min-show": ["minShowMs", 1000],
-  model: ["imageModel", 1], "image-model": ["imageModel", 1], "prompt-model": ["promptModel", 1], "client-prompt-model": ["clientPromptModel", 1], "chat-models": ["clientPromptModel", 1],
+  model: ["imageModel", 1], "image-model": ["imageModel", 1], "prompt-model": ["promptModel", 1], "per-hour": ["budgetPerHour", 1], "client-prompt-model": ["clientPromptModel", 1], "chat-models": ["clientPromptModel", 1],
   "max-images": ["maxImages", 1], images: ["slotImages", 1], "slot-images": ["slotImages", 1], "per-run": ["maxPerRun", 1], "per-minute": ["budgetPerMinute", 1], concurrent: ["budgetConcurrent", 1], "min-set": ["minSet", 1], pixels: ["transitionPixels", 1],
 });
 

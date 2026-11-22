@@ -13,7 +13,7 @@
 //   /thoughts next            crossfade to the next image
 //   /thoughts clear           drop the images (the files stay)
 //   /thoughts <key> <value>   change a setting for this session (opacity 0.4, fit contain, …)
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 
 import { readAgentSettings, agentSettingsPath } from "../pi-graphics/agent-io.js";
 import { captureTuiFromUi } from "../pi-graphics/host-components.js";
@@ -99,10 +99,26 @@ export function hostSurface(backdrop, { config, env = process.env, onResize, onL
   };
 }
 
-export function createVisualThoughtsExtension({ settings, env = process.env, fetchImpl, completeImpl, now, host } = {}) {
+/** How often settings.json is looked at again by a running Pi or pi-client. */
+export const SETTINGS_CHECK_MS = 30_000;
+
+export function createVisualThoughtsExtension({
+  settings, env = process.env, fetchImpl, completeImpl, now, host,
+  // settings.json as text, read again (at most every settingsCheckMs) to follow its changes.
+  readSettingsText = settings === undefined ? () => { try { return readFileSync(agentSettingsPath(), "utf8"); } catch { return ""; } } : null,
+  parseSettings = (text) => (settings === undefined ? readAgentSettings(agentSettingsPath(), { silent: true }) : JSON.parse(text)),
+  settingsCheckMs = SETTINGS_CHECK_MS,
+} = {}) {
   return function visualThoughtsExtension(pi) {
+    let settingsText = readSettingsText ? readSettingsText() : "";
     const startup = settings || readAgentSettings(agentSettingsPath()) || {};
     const config = resolveVisualThoughtsConfig(startup, env);
+    // settings.json's values alone (what /thoughts reset goes back to).
+    let settingsBase = { ...config };
+    // This session's own `/thoughts <setting>` changes (each pi-client pane keeps its own too):
+    // they stay on top of settings.json when it changes.
+    const overrides = {};
+    let settingsCheckedAt = Date.now();
     // One pane per backdrop: TUI Pi's screen ("tui"), or each pi-client pane (its backdrop).
     // A pane paints its session; switching a pane to another session starts it afresh.
     const panes = new Map(); // key → { key, sessionId, surface, engine }
@@ -127,7 +143,30 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
     // The prompt models, in turn; one that fails or answers nothing rests 10 min.
     const chain = createModelChain(now ? { now } : {});
     // pi-client's panes paint in turn: one budget for the whole client.
-    const budget = createPaintBudget({ concurrent: config.budgetConcurrent, perMinute: config.budgetPerMinute, ...(now ? { now } : {}) });
+    const budget = createPaintBudget({ concurrent: config.budgetConcurrent, perMinute: config.budgetPerMinute, perHour: config.budgetPerHour, ...(now ? { now } : {}) });
+
+    /** settings.json changed: every pane takes the new values but its own (and this session's) changes. */
+    function refreshSettings(ctx) {
+      const at = Date.now();
+      if (!readSettingsText || at - settingsCheckedAt < settingsCheckMs) return false;
+      settingsCheckedAt = at;
+      const text = readSettingsText();
+      if (!text || text === settingsText) return false;
+      let next;
+      try { next = resolveVisualThoughtsConfig(parseSettings(text) || {}, env); } catch { return false; }
+      settingsText = text;
+      settingsBase = { ...next };
+      const wasEnabled = config.enabled;
+      Object.assign(config, next, overrides);
+      budget.configure({ concurrent: config.budgetConcurrent, perMinute: config.budgetPerMinute, perHour: config.budgetPerHour });
+      for (const pane of panes.values()) {
+        Object.assign(pane.config, config, pane.overrides);
+        try { pane.engine?.configure({ provider: providerFor(pane.config) }); } catch {}
+      }
+      // Turned on or off in settings: followed here too.
+      if (next.enabled !== wasEnabled && !("enabled" in overrides)) setEnabled(ctx || lastCtx, next.enabled);
+      return true;
+    }
 
     const hasRegistry = (ctx) => typeof ctx?.modelRegistry?.find === "function";
 
@@ -306,7 +345,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         const paneConfig = { ...config };
         const surface = makeSurface(ctx, backdrop, holder, paneConfig);
         const store = createImageStore({ root: visualThoughtsStateDir(env), sessionId });
-        pane = { key, sessionId, surface, store, config: paneConfig, off: false, engine: null, host: false, stopWatch: null };
+        pane = { key, sessionId, surface, store, config: paneConfig, overrides: {}, off: false, engine: null, host: false, stopWatch: null };
         holder.current = pane;
         const made = pane;
         // pi-client: the pane's own ctx, so slot reads and media follow this pane's session.
@@ -488,6 +527,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
 
     pi.on("session_start", async (_event, ctx) => {
       lastCtx = ctx;
+      refreshSettings(ctx);
       // Enabled by settings where it cannot draw (tmux, no fullscreen, headless): quietly off;
       // /thoughts says why.
       if (config.enabled && !enabled) setEnabled(ctx, true);
@@ -504,6 +544,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
 
     pi.on("agent_start", async (_event, ctx) => {
       lastCtx = ctx || lastCtx;
+      refreshSettings(lastCtx);
       if (refollow(lastCtx)) return;
       current(lastCtx)?.runStart();
     });
@@ -557,6 +598,7 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
       description: "Visual thoughts: images of the agent's work crossfading behind the screen (on|off|now|next|clear|<setting> <value>)",
       handler: async (args, ctx) => {
         lastCtx = ctx;
+        refreshSettings(ctx);
         const words = String(args || "").trim().split(/\s+/).filter(Boolean);
         const verb = (words[0] || "status").toLowerCase();
         let pane = null;
@@ -599,13 +641,25 @@ export function createVisualThoughtsExtension({ settings, env = process.env, fet
         }
         if (verb === "next") { pane?.engine.next(); return; }
         if (verb === "clear") { pane?.engine.clear(); return notify("visual thoughts cleared", "info", ctx); }
+        if (verb === "reset") {
+          const dropped = new Set(own ? Object.keys(own.overrides) : [...Object.keys(overrides), ...[...panes.values()].flatMap((each) => Object.keys(each.overrides))]);
+          if (!own) for (const key of Object.keys(overrides)) delete overrides[key];
+          Object.assign(config, settingsBase, overrides);
+          for (const each of own ? [own] : [...panes.values()]) {
+            each.overrides = {};
+            Object.assign(each.config, config);
+            each.engine.configure({ provider: providerFor(each.config) });
+          }
+          return notify(dropped.size ? `visual thoughts: following settings again (dropped ${[...dropped].join(", ")})` : "visual thoughts: already following settings", "info", ctx);
+        }
         if (words.length >= 2) {
           const change = parseSettingChange(words[0], words.slice(1).join(" "));
           if (change.error) return notify(`/thoughts: ${change.error}`, "warning", ctx);
           const targets = own ? [own] : [...panes.values()];
-          if (!own) config[change.key] = change.value;
+          if (!own) { config[change.key] = change.value; overrides[change.key] = change.value; }
           for (const each of targets) {
             each.config[change.key] = change.value;
+            if (own) each.overrides[change.key] = change.value;
             each.engine.configure(PROVIDER_KEYS.has(change.key) ? { provider: providerFor(each.config) } : {});
           }
           return notify(`visual thoughts: ${change.key} = ${change.value} (${own ? "this pane" : "this session"})`, "info", ctx);

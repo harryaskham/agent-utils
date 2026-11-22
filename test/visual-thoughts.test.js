@@ -875,7 +875,7 @@ test("pi-daemon module: paints the session's backdrop slot once, for every clien
   const { ui, slots } = fakeSlotsUi({ watchers: 0 });
   const module = createVisualThoughtsModule({
     env: { LITELLM_BASE_URL: "http://proxy:4000" },
-    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minIntervalMs: 0, slotImages: 2, opacity: 0.4, budgetPerMinute: 60 } } },
+    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minChars: 600, minIntervalMs: 0, slotImages: 2, opacity: 0.4, budgetPerMinute: 60 } } },
     fetchImpl: paintingFetch(requests),
     log: () => {},
   });
@@ -1414,7 +1414,7 @@ test("prompt models: Pi's own models in turn where there is a registry; one that
   const { createModelChain, promptModelsFor, describePromptModels, MODEL_REST_MS } = await import("../extensions/lib/visual-thoughts/model-chain.js");
   const { DEFAULTS } = await import("../extensions/lib/visual-thoughts/config.js");
   // In process where Pi's registry is; LiteLLM only without one (a pi-client pane).
-  assert.deepEqual(promptModelsFor(DEFAULTS, true), ["github-copilot/gpt-6-luna", "github-copilot/claude-haiku-5.5", "github-copilot/gemini-3.8-flash"]);
+  assert.deepEqual(promptModelsFor(DEFAULTS, true), ["github-copilot/gpt-6.1-terra", "github-copilot/gpt-6-luna", "github-copilot/claude-haiku-5.5"]);
   assert.deepEqual(promptModelsFor(DEFAULTS, false), ["litellm/deepseek-v4-flash", "litellm/claude-haiku-5.5", "litellm/gemini-3.8-flash"]);
   assert.deepEqual(promptModelsFor({ promptModel: "litellm/x, github-copilot/y", clientPromptModel: "z" }, false), ["litellm/x"]);
   assert.deepEqual(promptModelsFor({ promptModel: " a/b, a/b ,c/d", clientPromptModel: "z" }, true), ["a/b", "c/d"]);
@@ -1461,10 +1461,10 @@ test("pi-daemon module: prompts come from the worker's own models in process, fa
   });
   try {
     const { info, notices } = moduleInfo(ui);
-    // pi-daemon's side completions (bd-f85aa2): luna withdrawn, haiku answers.
+    // pi-daemon's side completions (bd-f85aa2): terra and luna withdrawn, haiku answers.
     const completions = [];
     info.modelRegistry = {
-      find: (provider, id) => (id === "gpt-6-luna" ? undefined : { provider, id }),
+      find: (provider, id) => (id === "gpt-6.1-terra" || id === "gpt-6-luna" ? undefined : { provider, id }),
       complete: async (model, context) => {
         completions.push(`${model.provider}/${model.id}`);
         assert.ok(context.systemPrompt && context.messages.length, "a side completion of its own, not the conversation");
@@ -1479,8 +1479,8 @@ test("pi-daemon module: prompts come from the worker's own models in process, fa
     assert.equal(requests.filter((r) => r.url.endsWith("/chat/completions")).length, 0, "no LiteLLM chat");
     assert.match(requests.at(-1).body.prompt, /lantern-lit workshop from claude-haiku-5\.5/);
     await module.commands.thoughts.run("status", info);
-    assert.match(notices.at(-1), /prompts from github-copilot\/claude-haiku-5\.5 \(of github-copilot\/gpt-6-luna, github-copilot\/claude-haiku-5\.5, github-copilot\/gemini-3\.8-flash, in turn\), in process/);
-    assert.match(notices.at(-1), /passed over \(failed or answered nothing\): github-copilot\/gpt-6-luna 10 min/);
+    assert.match(notices.at(-1), /prompts from github-copilot\/claude-haiku-5\.5 \(of github-copilot\/gpt-6\.1-terra, github-copilot\/gpt-6-luna, github-copilot\/claude-haiku-5\.5, in turn\), in process/);
+    assert.match(notices.at(-1), /passed over \(failed or answered nothing\): github-copilot\/gpt-6\.1-terra 10 min, github-copilot\/gpt-6-luna 10 min/);
   } finally {
     module.dispose();
   }
@@ -1546,4 +1546,126 @@ test("extension: a terminal without kitty graphics gets no paintings, so no prom
     await commands.get("thoughts").handler("on", ctx);
     assert.match(notices.at(-1), /visual thoughts unavailable: this terminal shows no kitty graphics/, what);
   }
+});
+
+test("budget: perHour holds paintings back until the oldest of the hour is an hour old", async () => {
+  const { createPaintBudget } = await import("../extensions/lib/visual-thoughts/budget.js");
+  let at = 0;
+  const pending = [];
+  const timers = { setTimeout: (fn, ms) => { pending.push({ fn, due: at + ms }); return {}; }, clearTimeout() {} };
+  const budget = createPaintBudget({ concurrent: 4, perMinute: 60, perHour: 2, now: () => at, timers });
+  const got = [];
+  const take = (name) => budget.acquire().then((release) => { got.push(name); release(); });
+  await take("a");
+  at = 120_000;
+  await take("b");
+  const third = take("c");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(got, ["a", "b"], "the hour's two are used");
+  assert.equal(budget.status().lastHour, 2);
+  assert.ok(pending.at(-1).due >= 3_600_000, "woken when the first is an hour old");
+  at = 3_600_000;
+  pending.at(-1).fn();
+  await third;
+  assert.deepEqual(got, ["a", "b", "c"]);
+});
+
+test("image provider: MAI models through LiteLLM are asked for width and height (shortest side 768), not size", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => { calls.push(JSON.parse(init.body)); return new Response(JSON.stringify({ data: [{ b64_json: solidPng(4, 4, [1, 2, 3]).toString("base64") }] })); };
+  await createImageProvider({ provider: "litellm", imageModel: "mai-image-2.7-flash", size: "1536x1024", quality: "low" }, { fetchImpl, env: { LITELLM_BASE_URL: "http://proxy:4000" } }).generate("a harbour");
+  await createImageProvider({ provider: "litellm", imageModel: "gpt-image-2.6-flare", size: "1536x1024", quality: "low" }, { fetchImpl, env: { LITELLM_BASE_URL: "http://proxy:4000" } }).generate("a harbour");
+  assert.deepEqual(calls[0], { model: "mai-image-2.7-flash", prompt: "a harbour", n: 1, width: 1152, height: 768 });
+  assert.deepEqual(calls[1], { model: "gpt-image-2.6-flare", prompt: "a harbour", n: 1, size: "1536x1024", quality: "low" });
+  assert.deepEqual(maiDimensions("1536x1024"), { width: 1152, height: 768 });
+});
+
+test("pi-daemon module: settings changes reach every session but its own changes; an old or raised epoch drops those; /thoughts reset", async () => {
+  const { createVisualThoughtsModule, OVERRIDES_EPOCH } = await import("../extensions/lib/durable-visual-thoughts.js");
+  let text = JSON.stringify({ agentUtils: { visualThoughts: { enabled: true, imageModel: "model-a", opacity: 0.5 } } });
+  const module = createVisualThoughtsModule({
+    env: { LITELLM_BASE_URL: "http://proxy:4000" },
+    readSettingsText: () => text,
+    settingsCheckMs: 0,
+    fetchImpl: paintingFetch([]),
+    log: () => {},
+  });
+  try {
+    const one = fakeSlotsUi({ watchers: 0 });
+    const two = fakeSlotsUi({ watchers: 0 });
+    // A session saved before the reset with its own image model: dropped as it loads.
+    const stale = moduleInfo(two.ui, "s-stale");
+    await stale.info.state.set("settings", { choice: "on", overrides: { imageModel: "gpt-image-2.5-flare" } });
+    const fresh = moduleInfo(one.ui, "s-own");
+    await module.commands.thoughts.run("opacity 0.9", fresh.info);
+    await module.commands.thoughts.run("status", stale.info);
+    const sessionOf = (id) => module.sessions.get(id);
+    assert.equal(sessionOf("s-stale").config.imageModel, "model-a", "the stale override is gone");
+    assert.deepEqual((await stale.info.state.get("settings")).overrides, {});
+    assert.equal((await stale.info.state.get("settings")).epoch, OVERRIDES_EPOCH);
+    assert.equal((await stale.info.state.get("settings")).choice, "on", "on stays on");
+    // settings.json changes: both take the new model; the own opacity stays.
+    text = JSON.stringify({ agentUtils: { visualThoughts: { enabled: true, imageModel: "model-b", opacity: 0.2 } } });
+    await module.commands.thoughts.run("status", fresh.info);
+    assert.equal(sessionOf("s-own").config.imageModel, "model-b");
+    assert.equal(sessionOf("s-stale").config.imageModel, "model-b");
+    assert.equal(sessionOf("s-own").config.opacity, 0.9);
+    assert.equal(sessionOf("s-stale").config.opacity, 0.2);
+    assert.match(fresh.notices.at(-1), /its own settings \(\/thoughts reset to follow settings\.json\): opacity 0\.9/);
+    assert.match(fresh.notices.at(-1), /painting with model-b/);
+    // /thoughts reset: this session follows settings again.
+    await module.commands.thoughts.run("reset", fresh.info);
+    assert.match(fresh.notices.at(-1), /follows settings again \(dropped its opacity\)/);
+    assert.equal(sessionOf("s-own").config.opacity, 0.2);
+    // A raised epoch drops every session's own changes.
+    await module.commands.thoughts.run("style ink wash", fresh.info);
+    text = JSON.stringify({ agentUtils: { visualThoughts: { enabled: true, imageModel: "model-b", overridesEpoch: OVERRIDES_EPOCH + 1 } } });
+    await module.commands.thoughts.run("status", fresh.info);
+    assert.equal(sessionOf("s-own").config.style, "");
+    assert.deepEqual((await fresh.info.state.get("settings")).overrides, {});
+  } finally {
+    module.dispose();
+  }
+});
+
+test("extension: settings.json changes reach a running Pi but this session's own /thoughts changes; /thoughts reset", async () => {
+  const { createVisualThoughtsExtension } = await import("../extensions/lib/visual-thoughts-extension.js");
+  const dir = mkdtempSync(join(tmpdir(), "vt-ext-settings-"));
+  let text = JSON.stringify({ agentUtils: { visualThoughts: { enabled: true, imageModel: "model-a", opacity: 0.5, budgetPerHour: 5 } } });
+  const handlers = new Map();
+  const commands = new Map();
+  const pi = { on: (name, fn) => handlers.set(name, [...(handlers.get(name) || []), fn]), registerCommand: (name, def) => commands.set(name, def) };
+  const extension = createVisualThoughtsExtension({
+    env: { PI_VISUAL_THOUGHTS_DIR: dir, LITELLM_BASE_URL: "http://proxy:4000" },
+    readSettingsText: () => text,
+    parseSettings: (value) => JSON.parse(value),
+    settingsCheckMs: 0,
+    fetchImpl: async () => new Response("{}"),
+  });
+  extension(pi);
+  const notices = [];
+  const backdrop = fakeBackdrop("pane");
+  const ctx = {
+    ui: { backdrop: () => backdrop, notify: (message) => notices.push(message), setStatus() {} },
+    sessionManager: { getSessionId: () => "s", getEntries: () => [], getBranch: () => [] },
+  };
+  const emit = async (name, event) => { for (const fn of handlers.get(name) || []) await fn(event, ctx); };
+  const thoughts = (args) => commands.get("thoughts").handler(args, ctx);
+  await emit("session_start", {});
+  await thoughts("opacity 0.9");
+  assert.match(notices.at(-1), /opacity = 0\.9 \(this pane\)/);
+  text = JSON.stringify({ agentUtils: { visualThoughts: { enabled: true, imageModel: "model-b", opacity: 0.2 } } });
+  await emit("agent_start", {});
+  await thoughts("status");
+  assert.match(notices.at(-1), /painting with model-b/);
+  assert.match(notices.at(-1), /opacity 0\.9/, "the pane's own opacity stays");
+  await thoughts("reset");
+  assert.match(notices.at(-1), /following settings again \(dropped opacity\)/);
+  await thoughts("status");
+  assert.match(notices.at(-1), /opacity 0\.2/);
+  // Turned off in settings: followed.
+  text = JSON.stringify({ agentUtils: { visualThoughts: { enabled: false } } });
+  await emit("agent_start", {});
+  await thoughts("status");
+  assert.match(notices.at(-1), /visual thoughts: off/);
 });

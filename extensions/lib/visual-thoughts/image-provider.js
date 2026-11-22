@@ -33,12 +33,20 @@ function parseSize(size) {
   return match ? { width: Number(match[1]), height: Number(match[2]) } : { width: 1024, height: 1024 };
 }
 
-/** MAI's dimensions for a requested size: each side at least 768, aspect kept. */
+/**
+ * MAI's dimensions for a requested size: the shortest side 768 (MAI's least: a painting is stored
+ * scaled down anyway, and fewer pixels are fewer output tokens to pay for), aspect kept.
+ */
 export function maiDimensions(size) {
   const { width, height } = parseSize(size);
-  const scale = Math.max(1, 768 / Math.min(width, height));
+  const scale = 768 / Math.min(width, height);
   const round16 = (value) => Math.round(value / 16) * 16;
   return { width: round16(width * scale), height: round16(height * scale) };
+}
+
+/** Whether an image model is one of MAI's (width and height, not size). */
+export function isMaiImageModel(model) {
+  return /^mai[-_ ]?image/i.test(String(model || "").replace(/^.*\//, ""));
 }
 
 /** The caller's signal, and a deadline: a stuck request must not hold the painting budget. */
@@ -117,10 +125,10 @@ export function createImageProvider(config, { fetchImpl = globalThis.fetch, env 
         method: "POST",
         signal: withTimeout(signal, config.timeoutMs),
         headers: { "Content-Type": "application/json", ...(key ? { Authorization: `Bearer ${key}` } : {}) },
-        body: JSON.stringify({
-          model, prompt, n: 1, size: config.size || "1536x1024",
-          ...(config.quality ? { quality: config.quality } : {}),
-        }),
+        // MAI models (through LiteLLM) take width and height; they ignore size and quality.
+        body: JSON.stringify(isMaiImageModel(model)
+          ? { model, prompt, n: 1, ...maiDimensions(config.size || "1536x1024") }
+          : { model, prompt, n: 1, size: config.size || "1536x1024", ...(config.quality ? { quality: config.quality } : {}) }),
       });
       if (!response.ok) throw await failure(response, model);
       return { png: await readImage(response, fetchImpl, signal), model, ms: now() - started };
