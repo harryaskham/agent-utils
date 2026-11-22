@@ -1669,3 +1669,52 @@ test("extension: settings.json changes reach a running Pi but this session's own
   await thoughts("status");
   assert.match(notices.at(-1), /visual thoughts: off/);
 });
+
+test("extension in pi-client: a pane follows the host's slot only while thoughts show there (the host counts it as watching)", async () => {
+  const { createVisualThoughtsExtension } = await import("../extensions/lib/visual-thoughts-extension.js");
+  const dir = mkdtempSync(join(tmpdir(), "vt-watch-"));
+  let text = JSON.stringify({ agentUtils: { visualThoughts: { enabled: true } } });
+  const handlers = new Map();
+  const commands = new Map();
+  const pi = { on: (name, fn) => handlers.set(name, [...(handlers.get(name) || []), fn]), registerCommand: (name, def) => commands.set(name, def) };
+  const extension = createVisualThoughtsExtension({
+    env: { PI_VISUAL_THOUGHTS_DIR: dir, LITELLM_BASE_URL: "http://proxy:4000" },
+    readSettingsText: () => text,
+    parseSettings: (value) => JSON.parse(value),
+    settingsCheckMs: 0,
+    fetchImpl: paintingFetch([]),
+  });
+  extension(pi);
+  const backdrop = fakeBackdrop("pane");
+  let watches = 0;
+  const ctx = {
+    ui: { backdrop: () => backdrop, notify() {}, setStatus() {} },
+    sessionManager: { getSessionId: () => "s-hosted", getEntries: () => [], getBranch: () => [] },
+    chord: {
+      call: async (method) => (method === "session.commands" ? { items: [{ name: "thoughts", kind: "extension" }] } : null),
+      watchDocument: async () => { watches += 1; return () => { watches -= 1; }; },
+    },
+  };
+  ctx.pinned = () => ctx;
+  const emit = async (name, event) => { for (const fn of handlers.get(name) || []) await fn(event, ctx); };
+  const waitFor = async (what, check) => { for (let i = 0; i < 400; i += 1) { if (check()) return; await new Promise((resolve) => setTimeout(resolve, 10)); } throw new Error(`timed out: ${what}`); };
+  try {
+    await emit("session_start", {});
+    await waitFor("watching while on", () => watches === 1);
+    // Turned off (in settings here): the watch goes, so the host stops counting this client.
+    text = JSON.stringify({ agentUtils: { visualThoughts: { enabled: false } } });
+    await emit("agent_start", {});
+    assert.equal(watches, 0, "not watching while off");
+    await emit("agent_start", {});
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(watches, 0, "a run does not bring the watch back while off");
+    // On again: watching again.
+    text = JSON.stringify({ agentUtils: { visualThoughts: { enabled: true } } });
+    await emit("agent_start", {});
+    await waitFor("watching again", () => watches === 1);
+    await emit("session_shutdown", {});
+    assert.equal(watches, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

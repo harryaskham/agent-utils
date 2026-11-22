@@ -439,7 +439,9 @@ export function createVisualThoughtsExtension({
      * revision already shown changes nothing).
      */
     async function watchSlot(pane) {
-      if (!pane?.capable || panes.get(pane.key) !== pane) return;
+      // Only a pane showing thoughts follows the slot: the watch is what tells the host (pi-daemon's
+      // ui.watchers, bd-046baf) that a client shows the session, and it paints for those.
+      if (!pane?.capable || panes.get(pane.key) !== pane || !enabled || pane.off) return unwatch(pane);
       const generation = (pane.watchGeneration || 0) + 1;
       pane.watchGeneration = generation;
       try { pane.stopWatch?.(); } catch {}
@@ -453,6 +455,14 @@ export function createVisualThoughtsExtension({
       } catch (error) {
         warnOnce(`visual thoughts: cannot follow this session's backdrop: ${error?.message || error}`);
       }
+    }
+
+    /** Stop following a pane's slot (thoughts off there): the host no longer counts it as showing. */
+    function unwatch(pane) {
+      if (!pane) return;
+      pane.watchGeneration = (pane.watchGeneration || 0) + 1;
+      try { pane.stopWatch?.(); } catch {}
+      pane.stopWatch = null;
     }
 
     /** The focused pane, when its host can paint: refollow its slot; true when the host paints it. */
@@ -500,6 +510,7 @@ export function createVisualThoughtsExtension({
         enabled = false;
         for (const pane of panes.values()) {
           pane.engine.setEnabled(false);
+          unwatch(pane);
           if (paneStatuses(pane)) try { pane.statusCtx.ui.setStatus(STATUS_KEY, undefined); } catch {}
         }
         try { ctx?.ui?.setStatus?.(STATUS_KEY, undefined); } catch {}
@@ -508,7 +519,10 @@ export function createVisualThoughtsExtension({
       try {
         enabled = true;
         const pane = focus(ctx);
-        for (const other of panes.values()) other.engine.setEnabled(!other.off);
+        for (const other of panes.values()) {
+          other.engine.setEnabled(!other.off);
+          if (other.capable) void watchSlot(other);
+        }
         seedSoon(pane, ctx);
         unavailable = "";
         return true;
@@ -627,6 +641,7 @@ export function createVisualThoughtsExtension({
         if (own && enabled && (verb === "on" || verb === "off" || verb === "toggle")) {
           own.off = verb === "toggle" ? !own.off : verb === "off";
           own.engine.setEnabled(!own.off);
+          if (own.capable) void watchSlot(own);
           return notify(own.off ? "visual thoughts off in this pane" : `visual thoughts on in this pane: painting with ${own.config.imageModel}`, "info", ctx);
         }
         if (verb === "on" || verb === "off" || verb === "toggle") {
