@@ -38,11 +38,29 @@ No tool is wrapped to guess which repository the agent touched: the agent says s
 | `/git` (or `/git status`) | Refresh now and show the state in one line |
 | `/git wt list` | The repository's worktrees |
 | `/git wt fork NAME` | A worktree on a new branch `NAME` from HEAD (or on `NAME` if it exists), under `$XDG_STATE_HOME/pi-daemon/worktrees/<project>/<NAME>` (default `~/.local/state/...`) |
-| `/git wt fork NAME @node [--dirty omit]` | The same on another pi-daemon node, and this conversation continued there (below) |
+| `/git wt fork NAME --rebase[=BASE]` | The same, with branch `NAME` on `BASE` fetched just now (below) |
+| `/git wt fork NAME @node [--dirty omit]` | The same on another pi-daemon node, and this conversation continued there (below); `--rebase[=BASE]` works there too |
 | `/git @node` | This repository on that node: its branch, HEAD, ahead/behind its upstream, worktrees, and whether it has this HEAD |
 | `/repo` | pi-client: pick another session in this repository or its worktrees, and open it |
 
 After `/git wt fork`, the client part opens a session in the new worktree, carrying the conversation, where pi-client lets plugins open sessions. Elsewhere it tells you to `/cd` there.
+
+### A fresh base: `/git wt fork NAME --rebase[=BASE]` (bd-658ee5)
+
+The fork starts on the base as it is now, not as this checkout last saw it. Before any worktree is made:
+
+1. **Which base:** `BASE` is a branch of `origin` (`--rebase=main`, or `--rebase main` after `NAME`), or of another remote when it starts with that remote's name (`--rebase=upstream/main`). Plain `--rebase` takes origin's default branch (`refs/remotes/origin/HEAD`), else `main`.
+2. **Fetched:** `git fetch` of that branch into its remote-tracking ref (`origin/main`), within 5 minutes. A fetch that fails forks nothing.
+3. **Where the branch starts:** HEAD (or branch `NAME`, when it exists) rebased onto the base:
+   - HEAD is behind the base, or the base has HEAD's own changes already (merged, squash-merged or cherry-picked; `git merge-tree`): the base itself;
+   - HEAD contains the base already: HEAD as it is;
+   - otherwise HEAD's own commits are replayed onto the base, in a temporary detached worktree that writes no refs and runs no hooks. This checkout, its branch and its working tree stay as they are.
+4. **A conflict** aborts that rebase and is reported, naming the commit it stopped at and the conflicted files. Nothing is forked: no worktree, no branch made or moved, and no session opens on the old base.
+5. **The base is said:** this conversation keeps a note (a user message written with no turn, as `/splice` writes them) of the worktree, the branch's commit, and the base: its ref, full commit, subject, and when it was fetched. The note is written before the fork's record, so the session the client part opens there carries it as its first new message, before pi-daemon's note that the directory changed. The notice says the same, and the client part says the base as it opens the fork. While this conversation is working the note lands when its turn ends, so a session opened before then lacks it (the notice says so).
+
+An existing branch `NAME` is moved to its rebased commit (`git worktree add -B`), and the note says where it was.
+
+With `@node`, the rebase is done here, and the node gets the rebased commit as it gets HEAD otherwise (only the commits it lacks are sent). The node's peer protocol is unchanged, so a node on an older agent-utils takes it.
 
 ### Another node: `/git wt fork NAME @node` (bd-9fcd6a)
 

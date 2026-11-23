@@ -11,6 +11,7 @@
 // own git may want. The result is written in one state.set (one Durable commit).
 import { execFile } from "node:child_process";
 
+import { ForkBaseConflict, describeBase, forkBaseNote, forkOnBase } from "./git-fork-base.js";
 import { peerCall } from "./session-fork/core.js";
 import { forkWorktreeOnNode, repoStatusOnNode } from "./session-fork/worktree.js";
 import { mkdir, stat } from "node:fs/promises";
@@ -44,13 +45,13 @@ export function gitEnv(overrides = {}, base = process.env) {
   return env;
 }
 
-/** Run git in `cwd`: { code, stdout }, or a rejection when aborted or failing to start. */
+/** Run git in `cwd`: { code, stdout, stderr }, or a rejection when aborted or failing to start. */
 export function runGit(args, { cwd, env, signal }) {
   return new Promise((resolvePromise, reject) => {
-    execFile("git", ["--no-optional-locks", ...args], { cwd, env, signal, maxBuffer: MAX_GIT_OUTPUT, encoding: "utf8" }, (error, stdout) => {
+    execFile("git", ["--no-optional-locks", ...args], { cwd, env, signal, maxBuffer: MAX_GIT_OUTPUT, encoding: "utf8" }, (error, stdout, stderr) => {
       if (signal?.aborted) return reject(signal.reason ?? new Error("aborted"));
       if (error && typeof error.code !== "number") return reject(error);
-      resolvePromise({ code: error ? error.code : 0, stdout: String(stdout ?? "") });
+      resolvePromise({ code: error ? error.code : 0, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
     });
   });
 }
@@ -357,18 +358,91 @@ const BRANCH_NAME = /^(?!-)(?!.*\.\.)(?!.*\/\/)(?!.*@\{)[A-Za-z0-9._\/-]{1,100}(
 /**
  * `git worktree add` for `name` under the managed directory (<root>/<project>/<name>): on a new
  * branch `name` from HEAD, or on branch `name` when it exists. Returns { path, branch, created }.
+ *
+ * With `rebase` ({ base }, bd-658ee5): BASE is fetched first, and the branch starts on HEAD (or
+ * branch `name`) rebased onto it (./git-fork-base.js); the result adds `placed` (the base and how
+ * the branch sits on it) and `previous` (where an existing branch `name` was). A conflict throws
+ * ForkBaseConflict before any worktree or branch is made or moved.
  */
-export async function forkWorktree(cwd, name, { env, root = worktreesRoot(env), run = runGit, signal } = {}) {
+export async function forkWorktree(cwd, name, { env, root = worktreesRoot(env), run = runGit, signal, rebase, tmp } = {}) {
   if (!BRANCH_NAME.test(name)) throw new Error(`not a usable worktree/branch name: ${name}`);
   const workspace = await readWorkspace(cwd, { env, signal, run });
   if (!workspace.repo) throw new Error("this session's directory is not in a git repository");
   const path = join(root, workspace.project, name.replace(/\//g, "-"));
-  await mkdir(dirname(path), { recursive: true });
   const options = { cwd: workspace.root, env, signal };
-  const exists = (await run(["rev-parse", "--verify", "--quiet", `refs/heads/${name}`], options)).code === 0;
-  const added = await run(exists ? ["worktree", "add", path, name] : ["worktree", "add", "-b", name, path, "HEAD"], options);
+  const previous = (await run(["rev-parse", "--verify", "--quiet", `refs/heads/${name}^{commit}`], options)).stdout.trim() || undefined;
+  const exists = previous !== undefined;
+  const placed = rebase === undefined ? undefined : await forkOnBase(workspace.root, exists ? `refs/heads/${name}` : "HEAD", rebase.base, { run, env, signal, ...(tmp ? { tmp } : {}) });
+  await mkdir(dirname(path), { recursive: true });
+  const args =
+    placed === undefined ? (exists ? ["worktree", "add", path, name] : ["worktree", "add", "-b", name, path, "HEAD"])
+    : exists && placed.commit === previous ? ["worktree", "add", path, name]
+    : ["worktree", "add", exists ? "-B" : "-b", name, path, placed.commit];
+  const added = await run(args, options);
   if (added.code !== 0) throw new Error(`git worktree add failed for ${path} (is ${name} checked out elsewhere, or the path taken?)`);
-  return { path, branch: name, created: !exists };
+  return { path, branch: name, created: !exists, ...(placed === undefined ? {} : { placed, ...(exists ? { previous } : {}) }) };
+}
+
+/** `--rebase[=BASE]` among `/git` words (bd-658ee5): { words without it, rebase: { base } }, or no `rebase`. */
+export function takeRebase(words) {
+  const at = words.findIndex((word) => word === "--rebase" || word.startsWith("--rebase="));
+  if (at < 0) return { words };
+  const rest = [...words];
+  const [flag] = rest.splice(at, 1);
+  if (flag.startsWith("--rebase=")) return { words: rest, rebase: { base: flag.slice("--rebase=".length) || undefined } };
+  // `--rebase BASE`: the word after it, when it is no option and NAME is there besides it (`wt fork NAME`).
+  const next = rest[at];
+  if (next !== undefined && !next.startsWith("-") && rest.length - 1 >= 3) {
+    rest.splice(at, 1);
+    return { words: rest, rebase: { base: next } };
+  }
+  return { words: rest, rebase: { base: undefined } };
+}
+
+/**
+ * Keep `text` in this conversation as a user message (pi-daemon's own entry kind, as /splice writes
+ * them), with no turn: a fork carries it, so its first message says where it starts. "written", or
+ * "queued" while the conversation works (it lands at its next boundary), or "unsupported" on a
+ * pi-daemon whose module commands lack the harness.
+ */
+export async function keepNote(ctx, text, data, requestId) {
+  if (ctx.conversationId === undefined || typeof ctx.harness?.conversation !== "function") return "unsupported";
+  const conversation = await ctx.harness.conversation(ctx.conversationId, ctx.context);
+  if (!conversation) return "unsupported";
+  const message = { role: "user", content: [{ type: "text", text }], timestamp: Date.now() };
+  const submission = await conversation.submit({ type: "write", requestId, entry: { kind: "pi.user", model: [message], data: { piGit: data } } }, ctx.context);
+  const record = typeof submission?.status === "function" ? await submission.status(ctx.context).catch(() => undefined) : undefined;
+  return record && record.status !== "done" ? "queued" : "written";
+}
+
+/** The forked record's `base` (the client part says it as it opens the fork). */
+const baseRecord = (placed) => ({ ref: placed.base.ref, commit: placed.base.commit, subject: placed.base.subject, how: placed.how, own: placed.own, replayed: placed.replayed, head: placed.commit, fetchedAt: placed.base.fetchedAt });
+
+/** Keep the fork's base note in this conversation (keepNote's answer, or "failed"). */
+async function keepForkNote(ctx, { name, path, host, placed, previous, at }) {
+  const text = forkBaseNote({ name, path, host, placed, previous });
+  const data = { fork: { name, path, ...(host ? { host } : {}), base: baseRecord(placed), ...(previous ? { previous } : {}) } };
+  return keepNote(ctx, text, data, `pi-git.fork-base:${host ?? ""}:${name}:${placed.commit}:${at}`).catch(() => "failed");
+}
+
+/** What the notice adds about the note: nothing when it is in the conversation, as it should be. */
+function noteSaid(noted) {
+  if (noted === undefined) return "";
+  if (noted === "failed") return " (The note of its base could not be kept in this conversation.)";
+  if (noted === "queued") return " This conversation is working: the note of its base lands here when its turn ends, too late for the fork's copy of it.";
+  if (noted === "unsupported") return " (This pi-daemon gives module commands no harness, so the base is not noted in the conversation.)";
+  return "";
+}
+
+/** A rebase that could not be done, as /git wt fork says it: nothing forked. */
+function rebaseRefusal(name, node, error, existed) {
+  const where = node === undefined ? "" : ` @${node}`;
+  if (error instanceof ForkBaseConflict) {
+    const base = error.details.base.ref;
+    const branch = existed ? `branch ${name} is as it was` : `no branch ${name} made`;
+    return `/git wt fork ${name}${where} --rebase: ${error.message}. Nothing was forked (the rebase was aborted; no worktree, ${branch}). Resolve it in this checkout (git rebase ${base}), or fork without --rebase.`;
+  }
+  return `/git wt fork ${name}${where} --rebase: ${error?.message ?? error}`;
 }
 
 /** `git worktree list --porcelain`: [{ path, branch, head, detached }]. */
@@ -403,33 +477,38 @@ export function nodeStatusText(node, status) {
   return lines.join("\n");
 }
 
-/** The module's commands: /git (status), /git wt list, /git wt fork NAME [@node], /git @node. */
-export function createGitCommands(refresher, { run = runGit, root, peerFor = (node) => (payload) => peerCall({ remote: node }, payload) } = {}) {
+/** The module's commands: /git (status), /git wt list, /git wt fork NAME [--rebase[=BASE]] [@node], /git @node. */
+export function createGitCommands(refresher, { run = runGit, root, tmp, peerFor = (node) => (payload) => peerCall({ remote: node }, payload) } = {}) {
   const envOf = async (ctx) => gitEnv(typeof ctx.env?.get === "function" ? await ctx.env.get().catch(() => ({})) : {});
   return {
     git: {
-      description: "Git for this session's directory: /git (status, refreshed now), /git wt list, /git wt fork NAME (a worktree and branch NAME, under ~/.local/state/pi-daemon/worktrees), /git wt fork NAME @node (there, with this conversation), /git @node",
+      description: "Git for this session's directory: /git (status, refreshed now), /git wt list, /git wt fork NAME (a worktree and branch NAME, under ~/.local/state/pi-daemon/worktrees), /git wt fork NAME @node (there, with this conversation), --rebase[=BASE] (the fork on freshly fetched BASE, default origin's default branch), /git @node",
       // Pi's argument completions (pi-daemon reads them; older hosts ignore them).
       getArgumentCompletions(prefix) {
         const text = String(prefix ?? "").trimStart().toLowerCase();
         return [
           { value: "status", label: "status", description: "Refresh now and show the state" },
           { value: "wt list", label: "wt list", description: "The repository's worktrees" },
-          { value: "wt fork ", label: "wt fork NAME [@node]", description: "A worktree on a new branch, and a session there (on another node with @node)" },
+          { value: "wt fork ", label: "wt fork NAME [--rebase[=BASE]] [@node]", description: "A worktree on a new branch, and a session there (on another node with @node; on freshly fetched BASE, else origin's default branch, with --rebase)" },
           { value: "@", label: "@node", description: "This repository on another node" },
         ].filter((item) => item.value.startsWith(text));
       },
       async run(args, ctx) {
-        // `@node` (bd-9fcd6a): another pi-daemon node, reached over SSH by its name; `--dirty omit`.
+        // `@node` (bd-9fcd6a): another pi-daemon node, reached over SSH by its name; `--dirty omit`;
+        // `--rebase[=BASE]` (bd-658ee5): the fork's branch on freshly fetched BASE.
         let words = String(args ?? "").trim().split(/\s+/).filter(Boolean);
         const node = words.find((word) => word.startsWith("@"))?.slice(1);
         words = words.filter((word) => !word.startsWith("@"));
         const dirtyAt = words.indexOf("--dirty");
         const dirty = dirtyAt >= 0 ? words[dirtyAt + 1] : undefined;
         if (dirtyAt >= 0) words.splice(dirtyAt, 2);
+        const taken = takeRebase(words);
+        const rebase = taken.rebase;
+        words = taken.words;
         const [sub = "status", ...rest] = words;
         if (!ctx.cwd) return ctx.notify("/git: this session's directory is not known.");
         if (node !== undefined && !/^[a-zA-Z0-9_][a-zA-Z0-9_.@:%-]*$/.test(node)) return ctx.notify(`/git: not a node name: @${node}`);
+        if (rebase !== undefined && !((sub === "wt" || sub === "worktree") && rest[0] === "fork")) return ctx.notify("/git: --rebase[=BASE] is for /git wt fork NAME.");
         if (node !== undefined && (sub === "status" || sub === "st")) {
           try {
             return ctx.notify(nodeStatusText(node, await repoStatusOnNode(ctx.cwd, node, { call: peerFor(node) })));
@@ -453,25 +532,50 @@ export function createGitCommands(refresher, { run = runGit, root, peerFor = (no
           if (action === "fork" && node !== undefined) {
             if (!name) return ctx.notify(`/git wt fork NAME @${node}: a name for the worktree and its branch.`);
             let forked;
+            let placed;
+            let refused;
+            // With --rebase, the commit put there is this HEAD rebased onto BASE, fetched here first.
+            const commitFor = async (repo) => {
+              try {
+                placed = await forkOnBase(repo.root, repo.commit, rebase.base, { run, env, ...(tmp ? { tmp } : {}) });
+                return placed.commit;
+              } catch (error) {
+                refused = error;
+                throw error;
+              }
+            };
             try {
-              forked = await forkWorktreeOnNode(ctx.cwd, name, node, { dirty, call: peerFor(node) });
+              forked = await forkWorktreeOnNode(ctx.cwd, name, node, { dirty, call: peerFor(node), ...(rebase ? { commitFor } : {}) });
             } catch (error) {
+              if (refused !== undefined) return ctx.notify(rebaseRefusal(name, node, refused, false));
               return ctx.notify(`/git wt fork @${node}: ${nodeError(node, error)}`);
             }
+            const at = Date.now();
+            const noted = placed === undefined ? undefined : await keepForkNote(ctx, { name, path: forked.path, host: node, placed, at });
             // The client part opens a session there with this conversation (pi-daemon's cross-host clone).
-            await ctx.state.set("forked", { path: forked.path, branch: forked.branch, created: forked.created, host: node, from: ctx.cwd, at: Date.now() });
-            const how = [forked.cloned ? "cloned there" : "", forked.sent ? "with this repository's unpushed commits" : ""].filter(Boolean).join(", ");
-            return ctx.notify(`Worktree ${forked.path} on ${node}, on ${forked.created ? "new " : ""}branch ${forked.branch}${how ? ` (${how})` : ""}.`);
+            await ctx.state.set("forked", { path: forked.path, branch: forked.branch, created: forked.created, host: node, from: ctx.cwd, at, ...(placed ? { base: baseRecord(placed) } : {}) });
+            const sent = forked.sent ? (placed !== undefined && placed.how === "rebased" ? "with its rebased commits" : "with this repository's unpushed commits") : "";
+            const how = [forked.cloned ? "cloned there" : "", sent].filter(Boolean).join(", ");
+            return ctx.notify(`Worktree ${forked.path} on ${node}, on ${forked.created ? "new " : ""}branch ${forked.branch}${placed ? `, ${describeBase(placed)}` : ""}${how ? ` (${how})` : ""}.${noteSaid(noted)}`);
           }
           if (action === "fork") {
             if (!name) return ctx.notify("/git wt fork NAME: a name for the worktree and its branch.");
-            const forked = await forkWorktree(ctx.cwd, name, { env, run, ...(root ? { root } : {}) });
+            let forked;
+            try {
+              forked = await forkWorktree(ctx.cwd, name, { env, run, ...(root ? { root } : {}), ...(rebase ? { rebase } : {}), ...(tmp ? { tmp } : {}) });
+            } catch (error) {
+              if (rebase === undefined) throw error;
+              return ctx.notify(rebaseRefusal(name, undefined, error, String(error?.details?.from ?? "").startsWith("refs/heads/")));
+            }
+            const at = Date.now();
+            const { placed, previous, ...made } = forked;
+            const noted = placed === undefined ? undefined : await keepForkNote(ctx, { name, path: forked.path, placed, previous, at });
             // The client part opens a session there (pi-client), from this record.
-            await ctx.state.set("forked", { ...forked, from: ctx.cwd, at: Date.now() });
-            return ctx.notify(`Worktree ${forked.path} on ${forked.created ? "new " : ""}branch ${forked.branch}.`);
+            await ctx.state.set("forked", { ...made, from: ctx.cwd, at, ...(placed ? { base: baseRecord(placed) } : {}) });
+            return ctx.notify(`Worktree ${forked.path} on ${forked.created ? "new " : ""}branch ${forked.branch}${placed ? `, ${describeBase(placed)}` : ""}.${noteSaid(noted)}`);
           }
         }
-        return ctx.notify("/git: status, wt list, wt fork NAME [@node], @node");
+        return ctx.notify("/git: status, wt list, wt fork NAME [--rebase[=BASE]] [@node], @node");
       },
     },
   };

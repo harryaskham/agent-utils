@@ -189,14 +189,22 @@ export function worktreeRequestId(parts) {
  * `/git wt fork NAME @node`, at the source: the repository here (refused when dirty unless
  * `dirty: 'omit'`), its worktree on branch NAME on `node`, cloned there when missing, with the
  * commits the node lacks. `call(payload)` reaches the node's peer (session-fork's peerCall).
+ * `commitFor(repo)`, once the source is checked, gives another commit of this repository to put
+ * the branch on instead of HEAD (pi-git's --rebase, bd-658ee5: HEAD rebased onto a fresh base);
+ * the node takes it as it takes HEAD, so its peer protocol is the same.
  */
-export async function forkWorktreeOnNode(cwd, name, node, { dirty, call }) {
+export async function forkWorktreeOnNode(cwd, name, node, { dirty, call, commitFor }) {
   if (!BRANCH_NAME.test(name)) fail('worktree-name', `Not a usable worktree/branch name: ${name}`);
-  const repo = await repository(cwd);
+  let repo = await repository(cwd);
   if (!repo) fail('source', "This session's directory is not in a git repository");
   if (repo.dirty && dirty !== 'omit') fail('source-dirty', `${repo.root} has uncommitted changes: commit them, or /git wt fork ${name} @${node} --dirty omit (they stay here)`);
   if (repo.homeRelativeRoot === null) fail('destination-repo', `${repo.root} is outside HOME: ${node} cannot put it at the same place`);
   if (!repo.commit) fail('source', 'The repository has no commit yet');
+  if (commitFor) {
+    const commit = await commitFor(repo);
+    if (!COMMIT.test(commit || '')) fail('source', `Not a commit to fork onto: ${commit}`);
+    repo = { ...repo, commit };
+  }
   const id = worktreeRequestId([hostname(), repo.root, repo.commit, name, node]);
   const base = { version: VERSION, id, repository: repo, branch: name };
   const planned = await call({ ...base, action: 'worktree-plan', remoteHeads: await originHeads(repo) });

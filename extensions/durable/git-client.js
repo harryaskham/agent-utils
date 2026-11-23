@@ -120,12 +120,14 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
     const sessionsApi = here?.sessions;
     const host = typeof forked.host === "string" && forked.host !== "" ? forked.host : undefined;
     const cd = host === undefined ? `/cd ${forked.path}` : `/cd @${host} ${forked.path}`;
+    // --rebase (bd-658ee5): the base it starts on, fetched just now (the conversation has a note of it).
+    const base = typeof forked.base?.ref === "string" && typeof forked.base?.commit === "string" ? `, on ${forked.base.ref} ${forked.base.commit.slice(0, 12)}` : "";
     if (typeof sessionsApi?.create !== "function") {
-      tell?.ui?.notify?.(`Worktree ${forked.branch} ready${host === undefined ? "" : ` on ${host}`}: ${cd} continues this conversation there.`, "info");
+      tell?.ui?.notify?.(`Worktree ${forked.branch} ready${host === undefined ? "" : ` on ${host}`}${base}: ${cd} continues this conversation there.`, "info");
       return;
     }
     // Copying a long conversation takes a while: say so at once, rather than nothing until it opens.
-    here.ui?.notify?.(`Opening ${forked.branch}${host === undefined ? "" : ` on ${host}`}: copying this conversation into a session there…`, "info");
+    here.ui?.notify?.(`Opening ${forked.branch}${host === undefined ? "" : ` on ${host}`}${base}: copying this conversation into a session there…`, "info");
     try {
       await sessionsApi.create({ ...(host === undefined ? {} : { host }), cwd: forked.path, title: forked.branch, carry: true });
     } catch (error) {
