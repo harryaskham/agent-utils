@@ -11,7 +11,8 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "pi-session": "scripts/pi-session.mjs"
+    "pi-session": "scripts/pi-session.mjs",
+    "pi-fleet": "scripts/pi-fleet.mjs"
   },
   "files": [
     ".claude-plugin",
@@ -92,6 +93,7 @@
       "./extensions/compaction-continue-guard.js",
       "./extensions/compact-next.js",
       "./extensions/session-splice.js",
+      "./extensions/fleet.js",
       "./extensions/endless.js",
       "./extensions/after.js",
       "./extensions/cron.js",

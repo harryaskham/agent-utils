@@ -98,8 +98,33 @@
             '';
             meta.mainProgram = "pi-session";
           };
+          # pi-fleet (bd-1da117): /fleet models from a shell, for agents and scripts.
+          piFleet = pkgs.stdenvNoCC.mkDerivation {
+            pname = "pi-fleet";
+            version = "1.0.0";
+            src = ./.;
+            nativeBuildInputs = [ pkgs.nodejs_22 pkgs.makeWrapper ];
+            dontBuild = true;
+            doCheck = true;
+            checkPhase = ''
+              runHook preCheck
+              export HOME=$(mktemp -d)
+              node --test test/fleet-models.test.js
+              runHook postCheck
+            '';
+            installPhase = ''
+              mkdir -p $out/lib/pi-fleet/extensions/lib $out/lib/pi-fleet/scripts $out/bin
+              echo '{ "type": "module" }' > $out/lib/pi-fleet/package.json
+              cp extensions/lib/fleet-models.js extensions/lib/session-splice-sources.js $out/lib/pi-fleet/extensions/lib/
+              cp scripts/pi-fleet.mjs $out/lib/pi-fleet/scripts/
+              makeWrapper ${pkgs.nodejs_22}/bin/node $out/bin/pi-fleet \
+                --add-flags "$out/lib/pi-fleet/scripts/pi-fleet.mjs"
+            '';
+            meta.mainProgram = "pi-fleet";
+          };
           allPackages = [
             piSession
+            piFleet
             web-search.packages.${system}.web-search-mcp
             linear-extra.packages.${system}.linear-extra-mcp
             skillServer
@@ -114,6 +139,7 @@
           agUnchecked = withoutChecks ag.packages.${system}.ag;
           uncheckedPackages = [
             (withoutChecks piSession)
+            (withoutChecks piFleet)
             webSearchUnchecked
             linearExtraUnchecked
             skillServerUnchecked
@@ -158,6 +184,8 @@
             echo 'export * from "./extensions/durable/visual-thoughts.mjs";' > $out/visual-thoughts.mjs
             # /splice: copy turns of another session (any host's pi-daemon, or TUI Pi) into this one.
             echo 'export * from "./extensions/durable/splice.mjs";' > $out/splice.mjs
+            # /fleet models: which sessions across the fleet use a model; --switch moves them (bd-1da117).
+            echo 'export * from "./extensions/durable/fleet.mjs";' > $out/fleet.mjs
             # The modules must load with nothing but Node built-ins.
             HOME=$TMPDIR node --input-type=module -e "
               const m = await import('$out/tts.mjs');
@@ -182,6 +210,8 @@
               if (typeof contextLimit.observe !== 'function' || typeof contextLimit.commands?.context?.run !== 'function') process.exit(1);
               const splice = await import('$out/splice.mjs');
               if (typeof splice.commands?.splice?.run !== 'function') process.exit(1);
+              const fleet = await import('$out/fleet.mjs');
+              if (typeof fleet.commands?.fleet?.run !== 'function') process.exit(1);
               const git = await import('$out/git.mjs');
               if (typeof git.observe !== 'function' || typeof git.commands?.git?.run !== 'function') process.exit(1);
               const gitClient = await import('$out/extensions/durable/git-client.js');
@@ -209,6 +239,8 @@
           };
           pi-session = piSession;
           pi-session-unchecked = withoutChecks piSession;
+          pi-fleet = piFleet;
+          pi-fleet-unchecked = withoutChecks piFleet;
           ag = ag.packages.${system}.ag;
           ag-unchecked = agUnchecked;
           all = self.packages.${system}.default;
@@ -237,6 +269,7 @@
       in {
         agent-utils = packages.unchecked;
         pi-session = packages.pi-session-unchecked;
+        pi-fleet = packages.pi-fleet-unchecked;
         ag = packages.ag-unchecked;
         web-search-mcp = packages.web-search-mcp-unchecked;
         linear-extra-mcp = packages.linear-extra-mcp-unchecked;
@@ -257,6 +290,10 @@
         pi-session = {
           type = "app";
           program = "${self.packages.${system}.pi-session}/bin/pi-session";
+        };
+        pi-fleet = {
+          type = "app";
+          program = "${self.packages.${system}.pi-fleet}/bin/pi-fleet";
         };
         web-search-mcp = self.apps.${system}.default;
         linear-extra-mcp = {
@@ -279,6 +316,7 @@
 
       checks = forAllSystems (system: {
         pi-session = self.packages.${system}.pi-session;
+        pi-fleet = self.packages.${system}.pi-fleet;
         ag = ag.packages.${system}.ag;
         ag-dash-module = ag.checks.${system}.ag-dash-module;
       });
