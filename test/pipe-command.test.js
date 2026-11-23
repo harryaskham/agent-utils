@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -10,7 +11,9 @@ import pipeExtension, {
   applyPipeUpdate,
   formatPipeStatus,
   handlePipeInput,
+  localPipeCwd,
   normalizePipeMode,
+  pipeSessionKey,
   parsePipeArguments,
   resolvePipeTimeoutMs,
   runPipeCommand,
@@ -227,7 +230,7 @@ test("mode=auto transforms interactive text immediately and preserves images", a
       assert.equal(text, "teh message");
       assert.equal(options.cwd, "/work/project");
       return "the message";
-    } },
+    }, isDirectory: (dir) => dir === "/work/project" },
   );
   assert.deepEqual(result, { action: "transform", text: "the message", images: [image] });
   assert.equal(harness.selections.length, 0);
@@ -374,4 +377,85 @@ test("pipe loads before /read and downstream input handlers see exactly the sele
   assert.equal(cancelledResult.result.action, "handled");
   assert.equal(cancelled.editor, "restore me");
   assert.deepEqual(cancelledSpoken, [], "/read must not speak a cancelled send");
+});
+
+test("the command runs in the session's cwd only where it exists here (pi-client's remote sessions)", async () => {
+  assert.equal(localPipeCwd(root), root);
+  // A session on another host: its cwd is not a path here, which Node reports as
+  // "spawn /bin/sh ENOENT"; the command runs in this process's directory instead.
+  assert.equal(localPipeCwd("/home/nobody/no-such-project"), process.cwd());
+  assert.equal(localPipeCwd(undefined), process.cwd());
+  // Neither the session's nor this process's directory: home.
+  assert.equal(localPipeCwd("/elsewhere", { isDirectory: (dir) => dir === homedir() }), homedir());
+
+  const harness = makeCtx();
+  harness.ctx.cwd = "/home/nobody/no-such-project";
+  let seen;
+  const result = await handlePipeInput(
+    { command: "fix", mode: "auto" },
+    { text: "teh", source: "interactive" },
+    harness.ctx,
+    { runCommand: async (_command, _text, options) => { seen = options.cwd; return "the"; } },
+  );
+  assert.equal(result.action, "transform");
+  assert.equal(seen, process.cwd());
+
+  // End to end through a real shell: a missing cwd no longer fails the spawn.
+  assert.equal(await runPipeCommand("tr a-z A-Z", "fixed", { cwd: localPipeCwd("/home/nobody/no-such-project") }), "FIXED");
+});
+
+function sessionCtx(id, pane) {
+  const harness = makeCtx();
+  harness.ctx.sessionManager = { getSessionId: () => id };
+  if (pane !== undefined) harness.ctx.pinned = () => pane;
+  return harness;
+}
+
+test("/pipe and /fix are per session: pi-client's one copy keeps each pane's own", async () => {
+  const handlers = new Map();
+  const commands = new Map();
+  const pi = {
+    on(event, handler) {
+      if (!handlers.has(event)) handlers.set(event, []);
+      handlers.get(event).push(handler);
+    },
+    registerCommand(name, definition) { commands.set(name, definition); },
+  };
+  const ran = [];
+  pipeExtension(pi, { runCommand: async (command, text) => { ran.push(command); return text.toUpperCase(); }, isDirectory: () => true });
+  assert.equal(pipeSessionKey({ sessionManager: { getSessionId: () => "a" } }), "a");
+  assert.equal(pipeSessionKey({}), "");
+
+  // Each pane's pinned ctx owns its footer statuses.
+  const paneA = makeCtx();
+  const paneB = makeCtx();
+  const a = sessionCtx("chord-a", paneA.ctx);
+  const b = sessionCtx("chord-b", paneB.ctx);
+
+  await commands.get("fix").handler("auto", a.ctx);
+  assert.deepEqual(pi.agentUtilsPipe.getConfig(a.ctx), { command: "fix", mode: "auto" });
+  assert.deepEqual(pi.agentUtilsPipe.getConfig(b.ctx), { command: "", mode: "off" });
+  assert.equal(paneA.statuses.get("pipe"), "/pipe · auto · fix");
+  assert.equal(paneB.statuses.has("pipe"), false, "the other pane's footer shows no /pipe");
+  assert.equal(a.statuses.has("pipe"), false, "the status is the pane's, not the client's");
+
+  const input = handlers.get("input")[0];
+  assert.deepEqual(await input({ text: "hello", source: "interactive" }, b.ctx), { action: "continue" });
+  assert.deepEqual(ran, []);
+  assert.equal((await input({ text: "hello", source: "interactive" }, a.ctx)).text, "HELLO");
+  assert.deepEqual(ran, ["fix"]);
+
+  // Focus moving to a pane (session_start) shows that pane's session's setting.
+  const start = handlers.get("session_start")[0];
+  paneB.statuses.set("pipe", "stale");
+  await start({ reason: "attach" }, b.ctx);
+  assert.equal(paneB.statuses.has("pipe"), false);
+  paneA.statuses.delete("pipe");
+  await start({ reason: "attach" }, a.ctx);
+  assert.equal(paneA.statuses.get("pipe"), "/pipe · auto · fix");
+
+  await commands.get("pipe").handler("status", b.ctx);
+  assert.match(b.notifications.at(-1).message, /^pipe:off/);
+  await commands.get("fix").handler("off", a.ctx);
+  assert.equal(paneA.statuses.has("pipe"), false);
 });

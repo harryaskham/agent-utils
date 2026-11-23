@@ -9,9 +9,18 @@
 // raw input, or cancel. `auto` sends stdout immediately. The original text is
 // restored to the editor on cancellation or command failure.
 //
+// The setting is the session's: in pi-client, where one copy of this extension
+// serves every pane, /fix in one pane leaves the others' sessions alone, and its
+// footer status shows in that pane only (`ctx.pinned()`). The command runs on
+// the machine this extension runs on, in the session's cwd when that directory
+// exists here (a pi-client session's cwd may be another host's path).
+//
 // This extension must load before read-aloud.js. Pi chains input transforms in
 // extension order, so /read's on-send hook then speaks the final text selected
 // here (transformed for "send", original for "send raw", and nothing on cancel).
+
+import { statSync } from "node:fs";
+import { homedir } from "node:os";
 
 import { parseEnvStyleArgs } from "./lib/env-args.js";
 import { runBoundedSubprocess } from "./lib/bounded-exec.js";
@@ -39,6 +48,43 @@ export function stripPipeOutputTerminator(value) {
   if (text.endsWith("\r\n")) return text.slice(0, -2);
   if (text.endsWith("\n")) return text.slice(0, -1);
   return text;
+}
+
+function isLocalDirectory(path) {
+  try { return statSync(path).isDirectory(); } catch { return false; }
+}
+
+/**
+ * The directory to run the command in: the session's cwd when it is a directory
+ * on this machine, else this process's, else home. pi-client runs /pipe locally
+ * while its session's cwd is its host's, perhaps a path that does not exist here,
+ * and Node reports a missing cwd as "spawn /bin/sh ENOENT".
+ */
+export function localPipeCwd(cwd, { isDirectory = isLocalDirectory } = {}) {
+  const candidates = [cwd];
+  try { candidates.push(process.cwd()); } catch {}
+  candidates.push(homedir());
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate !== "" && isDirectory(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+/** The session a ctx acts for: pi-client's ctx is the focused pane's; TUI Pi has one. */
+export function pipeSessionKey(ctx) {
+  try {
+    const id = ctx?.sessionManager?.getSessionId?.();
+    if (id !== undefined && id !== null && id !== "") return String(id);
+  } catch {}
+  return "";
+}
+
+/** The ctx whose statuses are this pane's (pi-client's `ctx.pinned()`); TUI Pi's own ctx. */
+function paneContext(ctx) {
+  try {
+    if (typeof ctx?.pinned === "function") return ctx.pinned() ?? ctx;
+  } catch {}
+  return ctx;
 }
 
 function boundedDiagnostic(value, maxChars = 2000) {
@@ -158,13 +204,14 @@ function restoreEditor(ctx, text) {
 }
 
 function setPipeStatus(ctx, config, running = false) {
+  const ui = paneContext(ctx)?.ui;
   try {
     if (running) {
-      ctx?.ui?.setStatus?.("pipe", `/pipe · running ${config.command}`);
+      ui?.setStatus?.("pipe", `/pipe · running ${config.command}`);
     } else if (config.mode === "off") {
-      ctx?.ui?.setStatus?.("pipe", undefined);
+      ui?.setStatus?.("pipe", undefined);
     } else {
-      ctx?.ui?.setStatus?.("pipe", `/pipe · ${config.mode} · ${config.command}`);
+      ui?.setStatus?.("pipe", `/pipe · ${config.mode} · ${config.command}`);
     }
   } catch {}
 }
@@ -173,7 +220,7 @@ function setPipeStatus(ctx, config, running = false) {
  * Apply the active pipe configuration to one Pi input event. Exported so the
  * transform/send-raw/cancel contracts can be tested without a live TUI.
  */
-export async function handlePipeInput(config, event, ctx, { runCommand = runPipeCommand } = {}) {
+export async function handlePipeInput(config, event, ctx, { runCommand = runPipeCommand, isDirectory } = {}) {
   if (config?.mode === "off") return { action: "continue" };
   if (event?.source && event.source !== "interactive") return { action: "continue" };
 
@@ -190,7 +237,7 @@ export async function handlePipeInput(config, event, ctx, { runCommand = runPipe
   setPipeStatus(ctx, config, true);
   try {
     output = String(await runCommand(config.command, raw, {
-      cwd: ctx?.cwd || process.cwd(),
+      cwd: localPipeCwd(ctx?.cwd, isDirectory ? { isDirectory } : {}),
       env: process.env,
       timeoutMs: resolvePipeTimeoutMs(process.env),
     }));
@@ -242,23 +289,33 @@ function modeCompletions(prefix, { assignment = false } = {}) {
     });
 }
 
+const PIPE_OFF = Object.freeze({ command: "", mode: "off" });
+
 export default function pipeExtension(pi, options = {}) {
-  let config = { command: "", mode: "off" };
+  // By session (pipeSessionKey): pi-client's one copy serves every pane's session.
+  const configs = new Map();
+  const configFor = (ctx) => configs.get(pipeSessionKey(ctx)) ?? PIPE_OFF;
   const runCommand = typeof options.runCommand === "function" ? options.runCommand : runPipeCommand;
+  const isDirectory = typeof options.isDirectory === "function" ? options.isDirectory : undefined;
 
   const update = (partial, ctx) => {
-    config = applyPipeUpdate(config, partial);
+    const config = applyPipeUpdate(configFor(ctx), partial);
+    const key = pipeSessionKey(ctx);
+    if (config.mode === "off" && !config.command) configs.delete(key);
+    else configs.set(key, config);
     setPipeStatus(ctx, config, false);
     notify(ctx, formatPipeStatus(config), "info");
     return { ...config };
   };
 
-  pi.on?.("session_start", (_event, ctx) => setPipeStatus(ctx, config, false));
+  // pi-client says session_start as a pane gains focus or a session: its footer
+  // then shows that session's setting.
+  pi.on?.("session_start", (_event, ctx) => setPipeStatus(ctx, configFor(ctx), false));
 
   // Keep this handler before read-aloud's input handler in package.json. Pi
   // passes our transformed result to later input handlers, so /read speaks the
   // exact text that will be sent to the model.
-  pi.on?.("input", async (event, ctx) => handlePipeInput(config, event, ctx, { runCommand }));
+  pi.on?.("input", async (event, ctx) => handlePipeInput(configFor(ctx), event, ctx, { runCommand, isDirectory }));
 
   pi.registerCommand?.("pipe", {
     description: `${PIPE_USAGE} mode=on previews send/send raw/cancel; mode=auto sends transformed output directly.`,
@@ -276,7 +333,7 @@ export default function pipeExtension(pi, options = {}) {
       try {
         const parsed = parsePipeArguments(args);
         if (parsed.kind === "status") {
-          notify(ctx, `${formatPipeStatus(config)}. ${PIPE_USAGE}`, "info");
+          notify(ctx, `${formatPipeStatus(configFor(ctx))}. ${PIPE_USAGE}`, "info");
           return;
         }
         update(parsed, ctx);
@@ -309,7 +366,7 @@ export default function pipeExtension(pi, options = {}) {
 
   try {
     pi.agentUtilsPipe = {
-      getConfig: () => ({ ...config }),
+      getConfig: (ctx) => ({ ...configFor(ctx) }),
       configure: (partial, ctx) => update(partial, ctx),
     };
   } catch {}
