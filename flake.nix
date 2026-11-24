@@ -194,7 +194,7 @@
               const names = (media.extension?.tools ?? []).map((tool) => tool.name).join(',');
               if (media.extension?.name !== 'agent-utils-media' || names !== 'image_share,audio_share,tendril_capture') process.exit(1);
               const budget = await import('$out/image-budget.mjs');
-              if (budget.extension?.name !== 'agent-utils-image-budget' || budget.extension.hooks?.[0]?.task !== 'pi.generation') process.exit(1);
+              if (budget.extension?.name !== 'agent-utils-image-budget' || budget.extension.hooks?.length !== 0) process.exit(1);
               const loop = await import('$out/loop.mjs');
               const tuiTools = await import('$out/tools.mjs');
               if (!tuiTools.extension?.tools?.some((tool) => tool.name === 'search_web')) process.exit(1);
