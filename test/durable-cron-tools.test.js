@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { LOOPS_DOC, LOOP_TASK, MAX_LOOP_ENTRIES, createCronTools, createLoopCommands, createLoopTask, createLoopTools, formatWhen } from "../extensions/lib/durable-loop.js";
+import { LOOPS_DOC, cacheNote, cronGapMs, promptCacheKept, LOOP_TASK, MAX_LOOP_ENTRIES, createCronTools, createLoopCommands, createLoopTask, createLoopTools, formatWhen } from "../extensions/lib/durable-loop.js";
 import { liveLoopSchedules } from "../extensions/lib/loop-indicator.js";
 import { loopStatus } from "../extensions/durable/loop-client.js";
 
@@ -280,4 +280,80 @@ test("a time is told as a clock in the cron's zone shows it", () => {
   assert.equal(formatWhen(Date.parse("2026-07-01T08:00:00Z"), "Europe/London"), "Wed 1 Jul 2026 09:00 BST");
   assert.equal(formatWhen(Date.parse("2026-11-23T09:00:00Z"), "UTC"), "Mon 23 Nov 2026 09:00 UTC");
   assert.equal(formatWhen(0, "Not/AZone"), "1970-01-01T00:00:00.000Z");
+});
+
+// pi-daemon says how long a conversation's prompt cache is kept (globalThis[Symbol.for("pi-daemon.promptCache")],
+// pi-daemon bd-92a068): a loop or a cron whose prompts come further apart is made, with a note.
+const BRIDGE = Symbol.for("pi-daemon.promptCache");
+function hostKeeps(t, kept) {
+  const asked = [];
+  globalThis[BRIDGE] = { kept: async (reader, conversationId, context) => (asked.push({ reader, conversationId, context }), typeof kept === "function" ? kept() : kept) };
+  t.after(() => delete globalThis[BRIDGE]);
+  return asked;
+}
+const NEON = { provider: "github-copilot", model: "gemini-4-neon", lifetimeMs: 100_000, keptMs: 820_000 };
+const NOTE = " Note: gemini-4-neon's prompt cache is kept for about 13m after a request here. A prompt that comes later sends the whole conversation again at the full input price; prompts at most 13m apart read it from cache.";
+
+test("a loop or a cron slower than the conversation's prompt cache is kept is made with a note, from the agent's tools and the commands", async (t) => {
+  const { tools, api, ctx, notices, commands } = setup();
+  api.snapshot = async () => undefined;
+  const asked = hostKeeps(t, NEON);
+  const context = {};
+
+  // The agent's loop every 30 minutes: 13 minutes are kept.
+  const slow = await tools.create_loop.execute({ interval: "30m", prompt: "Watch the queue" }, api, context);
+  assert.equal(texts(slow), `Loop #1 started: "Watch the queue" every 30m. Stop with stop_loop {"id": 1}.${NOTE}`);
+  assert.equal(slow.isError, undefined, "it is made all the same");
+  assert.deepEqual(asked, [{ reader: api, conversationId: 1, context }], "asked through the tool's api, for its conversation");
+  // One every 10 minutes reads the cache: nothing to say. At the limit too.
+  assert.equal(texts(await tools.create_loop.execute({ interval: "10m", prompt: "Watch the queue" }, api, context)), 'Loop #2 started: "Watch the queue" every 10m. Stop with stop_loop {"id": 2}.');
+  assert.equal(cacheNote(820_000, NEON), "");
+  assert.equal(cacheNote(820_001, NEON), NOTE);
+
+  // A cron: the shortest time between its next prompts counts.
+  const daily = await tools.create_cron.execute({ schedule: "0 9 * * 1-5", timeZone: "UTC", prompt: "Write the standup notes" }, api, context);
+  assert.ok(texts(daily).endsWith(`delete it with delete_cron {"id": 3}.${NOTE}`), texts(daily));
+  const often = await tools.create_cron.execute({ schedule: "*/10 * * * *", timeZone: "UTC", prompt: "Check" }, api, context);
+  assert.ok(texts(often).endsWith('delete it with delete_cron {"id": 4}.'), texts(often));
+  assert.equal(cronGapMs("0 9 * * 1-5", "UTC", NOW), 24 * 3_600_000, "a weekday morning: a day, not the weekend");
+  assert.equal(cronGapMs("*/10 * * * *", "UTC", NOW), 600_000);
+  assert.equal(cronGapMs("0 9,10 * * *", "UTC", NOW), 3_600_000, "the shortest of them");
+
+  // The commands ask through the session's harness.
+  asked.length = 0;
+  await commands.loop.run("30m Watch the queue", ctx);
+  assert.equal(notices.at(-1), `Loop #5 started: "Watch the queue" every 30m. Stop with /loop stop 5.${NOTE}`);
+  assert.deepEqual(asked, [{ reader: ctx.harness, conversationId: 1, context: ctx.context }]);
+  await commands.loop.run("5m Watch the queue", ctx);
+  assert.equal(notices.at(-1), 'Loop #6 started: "Watch the queue" every 5m. Stop with /loop stop 6');
+  await commands.cron.run("@daily tidy the notes", ctx);
+  assert.ok(notices.at(-1).endsWith(`Stop with /cron stop 7.${NOTE}`), notices.at(-1));
+  await commands.cron.run("*/5 * * * * tidy the notes", ctx);
+  assert.ok(notices.at(-1).endsWith("Stop with /cron stop 8."), notices.at(-1));
+});
+
+test("without a host that says how long the cache is kept, or when it cannot say, nothing is noted", async (t) => {
+  const { tools, api, ctx, notices, commands } = setup();
+  api.snapshot = async () => undefined;
+  const plain = 'Loop #1 started: "Watch the queue" every 30m. Stop with stop_loop {"id": 1}.';
+  // No bridge: an older pi-daemon.
+  assert.equal(globalThis[BRIDGE], undefined);
+  assert.equal(texts(await tools.create_loop.execute({ interval: "30m", prompt: "Watch the queue" }, api, {})), plain);
+  assert.equal(await promptCacheKept(api, 1, {}), undefined);
+  // A model without a cache lifetime, an answer that is no time, and a bridge that throws.
+  for (const kept of [undefined, {}, { model: "x", keptMs: 0 }, { model: "x", keptMs: Number.NaN }, { model: "x", keptMs: "soon" }, () => Promise.reject(new Error("no")), () => { throw new Error("no"); }]) {
+    hostKeeps(t, kept);
+    assert.equal(await promptCacheKept(api, 1, {}), undefined, JSON.stringify(kept));
+  }
+  hostKeeps(t, () => { throw new Error("no"); });
+  await commands.loop.run("30m Watch the queue", ctx);
+  assert.equal(notices.at(-1), 'Loop #2 started: "Watch the queue" every 30m. Stop with /loop stop 2');
+  // A reader that cannot read documents is not asked with.
+  const asked = hostKeeps(t, NEON);
+  assert.equal(await promptCacheKept({ conversationId: 1 }, 1, {}), undefined);
+  assert.deepEqual(asked, []);
+  assert.deepEqual(await promptCacheKept(api, 1, {}), NEON);
+  // The note names what it knows.
+  assert.equal(cacheNote(900_000, undefined), "");
+  assert.match(cacheNote(9 * 3_600_000, { keptMs: 8.2 * 3_600_000 }), /^ Note: the model's prompt cache is kept for about 8h after a request here\./);
 });
