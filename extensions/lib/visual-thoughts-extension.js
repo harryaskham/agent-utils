@@ -105,13 +105,27 @@ export const SETTINGS_CHECK_MS = 30_000;
 export function createVisualThoughtsExtension({
   settings, env = process.env, fetchImpl, completeImpl, now, host,
   // settings.json as text, read again (at most every settingsCheckMs) to follow its changes.
-  readSettingsText = settings === undefined ? () => { try { return readFileSync(agentSettingsPath(), "utf8"); } catch { return ""; } } : null,
-  parseSettings = (text) => (settings === undefined ? readAgentSettings(agentSettingsPath(), { silent: true }) : JSON.parse(text)),
+  readSettingsText: givenReadSettingsText,
+  parseSettings: givenParseSettings,
   settingsCheckMs = SETTINGS_CHECK_MS,
 } = {}) {
+  const readSettingsText = givenReadSettingsText !== undefined
+    ? givenReadSettingsText
+    : settings === undefined ? () => { try { return readFileSync(agentSettingsPath(), "utf8"); } catch { return ""; } } : null;
+  const parseSettings = givenParseSettings !== undefined
+    ? givenParseSettings
+    : (text) => (settings === undefined ? readAgentSettings(agentSettingsPath(), { silent: true }) : JSON.parse(text));
+  // A caller that reads and parses the settings itself (a host with its own file, a test) has them
+  // from the start too, not the agent's settings.json: a machine without one (a CI runner) started
+  // with visual thoughts off whatever the caller's settings said (bd-096f6e).
+  const callersSettings = settings === undefined && typeof givenReadSettingsText === "function" && typeof givenParseSettings === "function";
   return function visualThoughtsExtension(pi) {
     let settingsText = readSettingsText ? readSettingsText() : "";
-    const startup = settings || readAgentSettings(agentSettingsPath()) || {};
+    let startup = settings;
+    if (startup === undefined && callersSettings) {
+      try { startup = givenParseSettings(settingsText); } catch { startup = {}; }
+    }
+    startup = startup || (callersSettings ? {} : readAgentSettings(agentSettingsPath())) || {};
     const config = resolveVisualThoughtsConfig(startup, env);
     // settings.json's values alone (what /thoughts reset goes back to).
     let settingsBase = { ...config };

@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import screenshotExtension, { deliverScreenshot } from "../extensions/screenshot.js";
+import { HOST_NOT_INSTALLED, optionalHostModule } from "./helpers/pi-host.js";
 import {
   captureScreenshot,
   normalizeScreenshotSend,
@@ -143,6 +144,17 @@ test("capture end to end through a real shell and a configured command", async (
   }
 });
 
+// Pi's own package is there on a machine with Pi installed beside this repository, not on a CI runner (which
+// installs none): the test of the real resizer is skipped there, as the other tests of the real host are (bd-096f6e).
+const piSdk = await optionalHostModule("@earendil-works/pi-coding-agent");
+
+test("Pi's real resizer leaves a small image as it is, with no note", { skip: !piSdk && HOST_NOT_INSTALLED }, async () => {
+  const real = await prepareScreenshotImage(PNG, "image/png");
+  assert.equal(real.mimeType, "image/png");
+  assert.equal(real.width, 1);
+  assert.equal(real.note, undefined);
+});
+
 test("the image is sized by Pi's own resizer, with its scale note", async () => {
   const calls = [];
   const fakePi = {
@@ -159,11 +171,6 @@ test("the image is sized by Pi's own resizer, with its scale note", async () => 
   // Without Pi's resizer the image goes as it is.
   assert.deepEqual(await prepareScreenshotImage(PNG, "image/png", { loadPi: async () => { throw new Error("no pi"); } }), { data: PNG.toString("base64"), mimeType: "image/png" });
 
-  // Pi's real resizer: a small image stays as it is, with no note.
-  const real = await prepareScreenshotImage(PNG, "image/png");
-  assert.equal(real.mimeType, "image/png");
-  assert.equal(real.width, 1);
-  assert.equal(real.note, undefined);
 
   assert.deepEqual(screenshotContent({ data: "AA==", mimeType: "image/png", note: "[scaled]" }, { mode: "full" }), [
     { type: "text", text: "Screenshot of my screen.\n[scaled]" },
