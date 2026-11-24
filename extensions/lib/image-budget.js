@@ -14,11 +14,25 @@
 //   in Pi's catalog or models.json), which Pi itself does not act on yet;
 // - what the provider refused in this process (a 413, or "too many images"): a request that
 //   large is not sent to that model again;
-// - or what the operator sets (PI_IMAGE_BUDGET_IMAGES, PI_IMAGE_BUDGET_MB).
-// When a limit is met, the oldest images become short notes naming their files, down to half
-// of the limit, and the cut then stays where it is until a limit is met again: the request's
-// earlier messages change once per many images. Where the cut falls depends only on the
-// messages and the limits, so every request of a conversation computes the same one.
+// - or what the operator sets: for every model (PI_IMAGE_BUDGET_IMAGES, PI_IMAGE_BUDGET_MB),
+//   or for the models that declare none (PI_IMAGE_BUDGET_DEFAULT_IMAGES,
+//   PI_IMAGE_BUDGET_DEFAULT_MB). All unset by default.
+// A model that declares nothing and has refused nothing then has no limit.
+//
+// When a limit is met, the images that leave are the newest the model has already answered,
+// not the oldest (bd-dd9e44): each becomes a short note naming its file. A provider caches a
+// request by its beginning, so a message changed deep in the conversation sends all after it
+// again; the newest answered image is in the round before, and only that tail changes. The
+// images the conversation began with stay as they were sent, and the ones not answered yet (the
+// round the model is about to see) are the last to go. Which images leave depends only on the
+// messages and the limits, so every request of a conversation works out the same, and an image
+// that left does not come back before the conversation is compacted. (After a compaction the
+// request is new in any case; the images of the messages it kept are counted afresh.)
+//
+// The limits are those of the model the request goes to: the one the host names
+// (`request.model`, pi-daemon bd-c397f5), else the one this conversation's last request went
+// to, else the one of its last answer. On the first request after a model switch the last two
+// are the model before.
 //
 // A 408 ("timed out reading request body", a slow link more than a size) halves the limits
 // for the retries of that request only. Only the request changes; the transcript keeps every
@@ -41,6 +55,15 @@ export function imageBudgetFromEnv(env = process.env) {
     maxImages: Number.isSafeInteger(images) && images > 0 ? images : Infinity,
     maxBytes: Number.isFinite(megabytes) && megabytes > 0 ? Math.round(megabytes * 1024 * 1024) : Infinity,
   };
+}
+
+/**
+ * The limits of a model that declares none, if the operator sets any
+ * (`PI_IMAGE_BUDGET_DEFAULT_IMAGES`, `PI_IMAGE_BUDGET_DEFAULT_MB`). Each stands in only for
+ * the limit of its kind that the model does not declare. Unset means none.
+ */
+export function imageBudgetDefaultsFromEnv(env = process.env) {
+  return imageBudgetFromEnv({ PI_IMAGE_BUDGET_IMAGES: env.PI_IMAGE_BUDGET_DEFAULT_IMAGES, PI_IMAGE_BUDGET_MB: env.PI_IMAGE_BUDGET_DEFAULT_MB });
 }
 
 /** The limits a model declares for one request (Pi's `inputLimits`); Infinity where it declares none. */
@@ -125,41 +148,60 @@ export function requestWeight(messages) {
 }
 
 /**
- * How many of the oldest images of `messages` are left out so each request stays within
- * `maxImages` and `maxBytes`. The messages are walked in order, as the conversation grew: when
- * the request up to a message passes a limit, the oldest images go until half of the limit
- * remains (the newest image always stays), and nothing moves again until a limit is passed
- * again. A longer conversation repeats the same steps, so the cut only ever moves forward.
+ * Which images of `messages` are left out so each request stays within `maxImages` and
+ * `maxBytes`: their places among the conversation's images, counted from 0. The messages are
+ * walked in order, as the conversation grew. When the request up to a message passes a limit,
+ * the newest images the model has answered (an assistant message follows them) go first, one at
+ * a time, until it fits; then, of the round it has not answered yet, the later ones. One image
+ * always stays. A longer conversation repeats the same steps, so what left stays out.
  */
-export function imageCut(messages, { maxImages = Infinity, maxBytes = Infinity } = {}) {
-  if (maxImages === Infinity && maxBytes === Infinity) return 0;
+export function droppedImages(messages, { maxImages = Infinity, maxBytes = Infinity } = {}) {
+  const dropped = new Set();
+  if (maxImages === Infinity && maxBytes === Infinity) return dropped;
+  const paths = toolPaths(messages);
   const sizes = [];
-  let cut = 0;
+  /** The bytes of the note that takes each image's place. */
+  const notes = [];
+  /** Kept images the model has answered, oldest first; and the ones of the round it has not. */
+  const answered = [];
+  let fresh = [];
+  let kept = 0;
   let keptBytes = 0;
   let other = 0;
+  const over = () => kept > maxImages || other + keptBytes > maxBytes;
+  const drop = (index) => {
+    dropped.add(index);
+    kept -= 1;
+    keptBytes -= sizes[index];
+    other += notes[index];
+  };
   for (const message of messages) {
     const weight = measure(message);
+    if (message?.role === "assistant" && fresh.length > 0) {
+      answered.push(...fresh);
+      fresh = [];
+    }
     other += weight.other;
     for (const image of weight.images) {
+      fresh.push(sizes.length);
       sizes.push(image.bytes);
+      notes.push(Buffer.byteLength(note(message, paths)));
+      kept += 1;
       keptBytes += image.bytes;
     }
-    if (sizes.length - cut <= maxImages && other + keptBytes <= maxBytes) continue;
-    while (cut < sizes.length - 1 && (sizes.length - cut > maxImages / 2 || other + keptBytes > maxBytes / 2)) {
-      keptBytes -= sizes[cut];
-      cut += 1;
-    }
+    while (over() && answered.length > 0) drop(answered.pop());
+    while (over() && fresh.length > 1) drop(fresh.pop());
   }
-  return cut;
+  return dropped;
 }
 
 /**
- * `messages` with the oldest images replaced by notes so the request stays within the limits
- * (see {@link imageCut}). Returns the same array when nothing changes.
+ * `messages` with the images a limit leaves no room for replaced by notes (see
+ * {@link droppedImages}). Returns the same array when nothing changes.
  */
 export function budgetImages(messages, limits = NO_LIMITS) {
-  const cut = imageCut(messages, limits);
-  if (cut === 0) return messages;
+  const dropped = droppedImages(messages, limits);
+  if (dropped.size === 0) return messages;
   const paths = toolPaths(messages);
   let seen = 0;
   return messages.map((message) => {
@@ -167,9 +209,9 @@ export function budgetImages(messages, limits = NO_LIMITS) {
     if (images.length === 0) return message;
     const first = seen;
     seen += images.length;
-    if (first >= cut) return message;
-    const dropped = new Set(images.filter((_, index) => first + index < cut).map((image) => image.b));
-    return { ...message, content: message.content.map((block, b) => (dropped.has(b) ? { type: "text", text: note(message, paths) } : block)) };
+    const out = new Set(images.filter((_, index) => dropped.has(first + index)).map((image) => image.b));
+    if (out.size === 0) return message;
+    return { ...message, content: message.content.map((block, b) => (out.has(b) ? { type: "text", text: note(message, paths) } : block)) };
   });
 }
 
@@ -184,15 +226,58 @@ function lastModel(messages) {
   return undefined;
 }
 
+const modelRef = (provider, id) => (typeof provider === "string" && typeof id === "string" ? { provider, id, key: `${provider}/${id}` } : undefined);
+
+/** The number a provider's refusal names as the most images it takes ("maximum allowed for model x is 10", "601 + 0 > 600"). */
+export function statedImageLimit(message) {
+  const text = String(message?.errorMessage ?? "");
+  const found = /maximum allowed.*?(?:\bis|:)\s*(\d+)/i.exec(text) ?? /\d+\s*\+\s*\d+\s*>\s*(\d+)/.exec(text);
+  const limit = found === null ? NaN : Number.parseInt(found[1], 10);
+  return Number.isSafeInteger(limit) && limit > 0 ? limit : undefined;
+}
+
+/**
+ * What a refusal of a request of `weight` teaches about a model, given what it was known to
+ * refuse (`known`) and the largest it has taken (`accepted`). For too many images: the number
+ * the provider names, else half of what was refused. For its size: half of what was refused,
+ * since a request refused at three times a provider's limit says little of where the limit is.
+ * Never under what the provider has taken, and always under what it refused.
+ */
+export function learnedLimits(message, weight, known = NO_LIMITS, accepted = { images: 0, bytes: 0 }) {
+  if (isTooManyImagesError(message)) {
+    const stated = statedImageLimit(message);
+    const guess = stated ?? Math.max(accepted.images, Math.floor(weight.images / 2));
+    return { maxImages: Math.max(1, Math.min(known.maxImages, weight.images - 1, guess)), maxBytes: known.maxBytes };
+  }
+  const guess = Math.max(accepted.bytes, Math.floor(weight.bytes / 2));
+  return { maxImages: known.maxImages, maxBytes: Math.max(1, Math.min(known.maxBytes, weight.bytes - 1, guess)) };
+}
+
+/** Most conversations whose model, and most models whose largest request, are remembered. */
+const MAX_REMEMBERED = 256;
+function remember(map, key, value) {
+  map.delete(key);
+  map.set(key, value);
+  for (const oldest of map.keys()) {
+    if (map.size <= MAX_REMEMBERED) break;
+    map.delete(oldest);
+  }
+}
+
 /**
  * The Durable extension: generation hooks around every request. `operator` are the operator's
  * own limits (the environment's by default; none unless set).
  */
-export function createImageBudgetExtension(operator = imageBudgetFromEnv()) {
+export function createImageBudgetExtension(operator = imageBudgetFromEnv(), defaults = imageBudgetDefaultsFromEnv()) {
   /** What a provider refused in this process, by `provider/model`: no request that large goes there again. */
   const refused = new Map();
+  /** The largest request with images each model has answered in this process, by `provider/model`. */
+  const accepted = new Map();
+  /** The model each conversation's last request went to, by conversation. */
+  const current = new Map();
   /** The request each attempt sent, by the hook API it was sent through. */
   const sent = new WeakMap();
+  const conversationOf = (api) => (typeof api === "object" && api !== null && api.conversationId !== undefined ? api.conversationId : undefined);
   return {
     name: "agent-utils-image-budget",
     hooks: [
@@ -200,13 +285,22 @@ export function createImageBudgetExtension(operator = imageBudgetFromEnv()) {
         task: "pi.generation",
         handlers: {
           async beforeRequest(request, api, context) {
-            const model = lastModel(request.messages);
+            const conversation = conversationOf(api);
+            // The model the request goes to: the host's word for it, else where this conversation's last request went, else its last answer's.
+            const named = modelRef(request.model?.provider, request.model?.id);
+            const model = named ?? (conversation === undefined ? undefined : current.get(conversation)) ?? lastModel(request.messages);
             let declared = NO_LIMITS;
             try {
-              if (model !== undefined) declared = modelRequestLimits(api?.models?.getModel?.(model.provider, model.id));
+              if (named !== undefined) declared = modelRequestLimits(request.model);
+              else if (model !== undefined) declared = modelRequestLimits(api?.models?.getModel?.(model.provider, model.id));
             } catch {
               declared = NO_LIMITS;
             }
+            // The operator's defaults stand in for what the model does not declare.
+            declared = {
+              maxImages: declared.maxImages === Infinity ? defaults.maxImages : declared.maxImages,
+              maxBytes: declared.maxBytes === Infinity ? defaults.maxBytes : declared.maxBytes,
+            };
             let limits = tighter(tighter(declared, operator), refused.get(model?.key) ?? NO_LIMITS);
             const shrinks = await countShrinks(api, context);
             let weight;
@@ -223,8 +317,25 @@ export function createImageBudgetExtension(operator = imageBudgetFromEnv()) {
             if (typeof api === "object" && api !== null) sent.set(api, { key: model?.key, messages });
             return messages === request.messages ? undefined : { messages };
           },
+          beforeProviderRequest(request, api) {
+            // Where this conversation's request goes: its next is built to this model's limits, whatever answered last.
+            const conversation = conversationOf(api);
+            const model = modelRef(request?.model?.provider, request?.model?.id);
+            if (conversation !== undefined && model !== undefined) remember(current, conversation, model);
+            return undefined;
+          },
           async afterResponse(message, api, context) {
-            if (!isOversizeError(message)) return;
+            const attempt = typeof api === "object" && api !== null ? sent.get(api) : undefined;
+            const key = modelRef(message?.provider, message?.model)?.key ?? attempt?.key;
+            if (!isOversizeError(message)) {
+              // An answer: the provider takes a request of this many images and bytes.
+              if (message?.stopReason === "error" || message?.stopReason === "aborted" || attempt === undefined || key === undefined) return;
+              const weight = requestWeight(attempt.messages);
+              if (weight.images === 0) return;
+              const most = accepted.get(key) ?? { images: 0, bytes: 0 };
+              if (weight.images > most.images || weight.bytes > most.bytes) remember(accepted, key, { images: Math.max(most.images, weight.images), bytes: Math.max(most.bytes, weight.bytes) });
+              return;
+            }
             if (isBodyTimeoutError(message)) {
               // Memos are first-write-wins per task: each timeout records the next one.
               const shrinks = await countShrinks(api, context);
@@ -232,19 +343,11 @@ export function createImageBudgetExtension(operator = imageBudgetFromEnv()) {
               return;
             }
             // A refusal for size is a fact about the provider: remember what it refused.
-            const attempt = typeof api === "object" && api !== null ? sent.get(api) : undefined;
-            const key = typeof message.provider === "string" && typeof message.model === "string" ? `${message.provider}/${message.model}` : attempt?.key;
             if (attempt === undefined || key === undefined) return;
             const weight = requestWeight(attempt.messages);
             // A refused request without images says nothing that leaving images out could mend.
             if (weight.images === 0) return;
-            const known = refused.get(key) ?? NO_LIMITS;
-            refused.set(
-              key,
-              isTooManyImagesError(message)
-                ? { maxImages: Math.min(known.maxImages, Math.max(1, weight.images - 1)), maxBytes: known.maxBytes }
-                : { maxImages: known.maxImages, maxBytes: Math.min(known.maxBytes, Math.max(1, weight.bytes - 1)) },
-            );
+            refused.set(key, learnedLimits(message, weight, refused.get(key) ?? NO_LIMITS, accepted.get(key)));
           },
         },
       },
