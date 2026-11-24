@@ -329,6 +329,48 @@ function formatRunning(ms) {
 }
 
 /**
+ * What the host says of a conversation's prompt cache: pi-daemon's
+ * `globalThis[Symbol.for("pi-daemon.promptCache")]`, asked through `reader` (a tool's api, a
+ * command's harness). `{ model, keptMs, … }`: how long after a request the cache is kept, the
+ * keep-warm refreshes included. Nothing on a host without it, or when it cannot say.
+ */
+export async function promptCacheKept(reader, conversationId, context) {
+  try {
+    const bridge = globalThis[Symbol.for("pi-daemon.promptCache")];
+    if (typeof bridge?.kept !== "function" || typeof reader?.snapshot !== "function") return undefined;
+    const kept = await bridge.kept(reader, conversationId, context);
+    return Number.isFinite(kept?.keptMs) && kept.keptMs > 0 ? kept : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A note for a loop or a cron whose prompts come further apart (`gapMs`) than the conversation's
+ * prompt cache is kept (`kept`, from {@link promptCacheKept}): each prompt then sends the whole
+ * conversation at the full input price. "" when they come in time, or the host does not say. It
+ * is advice: the loop is made all the same.
+ */
+export function cacheNote(gapMs, kept) {
+  if (kept === undefined || !(gapMs > kept.keptMs)) return "";
+  const span = formatRunning(kept.keptMs);
+  return ` Note: ${kept.model ?? "the model"}'s prompt cache is kept for about ${span} after a request here. A prompt that comes later sends the whole conversation again at the full input price; prompts at most ${span} apart read it from cache.`;
+}
+
+/** The shortest time between a cron's next few prompts. */
+export function cronGapMs(expression, timeZone, from, count = 8) {
+  let shortest = Infinity;
+  let at = nextCronAt(expression, timeZone, from);
+  for (let i = 0; i < count; i += 1) {
+    const next = nextCronAt(expression, timeZone, at);
+    if (!Number.isFinite(next) || !Number.isFinite(at)) break;
+    shortest = Math.min(shortest, next - at);
+    at = next;
+  }
+  return shortest;
+}
+
+/**
  * Loop operations over a Durable commit (a module command's harness, or a tool's api): start,
  * list and stop, sharing the session's registry.
  */
@@ -581,7 +623,8 @@ export function createLoopCommands({ task, now = () => Date.now(), minSecs = DEF
         }
         await prune(ctx);
         const number = await ops.start(commitOf(ctx), ctx.conversationId, { prompt, intervalSecs, deliverAs });
-        ctx.notify(`Loop #${number} started: "${summarize(prompt)}" every ${formatInterval(intervalSecs)}${deliverAs === "steer" ? " (steer while busy)" : ""}. Stop with /loop stop ${number}`);
+        const note = cacheNote(intervalSecs * 1000, await promptCacheKept(ctx.harness, ctx.conversationId, ctx.context));
+        ctx.notify(`Loop #${number} started: "${summarize(prompt)}" every ${formatInterval(intervalSecs)}${deliverAs === "steer" ? " (steer while busy)" : ""}. Stop with /loop stop ${number}${note === "" ? "" : `.${note}`}`);
       },
     },
     after: {
@@ -642,7 +685,8 @@ export function createLoopCommands({ task, now = () => Date.now(), minSecs = DEF
           return ctx.notify(error?.message ?? String(error));
         }
         const next = nextCronAt(cron.expression, cron.timeZone, now());
-        ctx.notify(`Cron #${number}: "${summarize(parsed.prompt)}" at ${cron.expression} (${cron.timeZone}), next in ${formatRunning(next - now())}. Stop with /cron stop ${number}.`);
+        const note = cacheNote(cronGapMs(cron.expression, cron.timeZone, now()), await promptCacheKept(ctx.harness, ctx.conversationId, ctx.context));
+        ctx.notify(`Cron #${number}: "${summarize(parsed.prompt)}" at ${cron.expression} (${cron.timeZone}), next in ${formatRunning(next - now())}. Stop with /cron stop ${number}.${note}`);
       },
     },
     loops: {
@@ -686,7 +730,8 @@ export function createLoopTools({ task, now = () => Date.now(), minSecs = DEFAUL
         if (prompt === "") return { ...text("Loop prompt cannot be empty."), isError: true };
         const deliverAs = args.steer === true ? "steer" : args.steer === false ? "followUp" : defaultDelivery === "steer" ? "steer" : "followUp";
         const number = await ops.start(commitOf(api, context), api.conversationId, { prompt, intervalSecs, deliverAs });
-        return text(`Loop #${number} started: "${summarize(prompt)}" every ${formatInterval(intervalSecs)}. Stop with stop_loop {"id": ${number}}.`, { id: number, intervalSecs, deliverAs });
+        const note = cacheNote(intervalSecs * 1000, await promptCacheKept(api, api.conversationId, context));
+        return text(`Loop #${number} started: "${summarize(prompt)}" every ${formatInterval(intervalSecs)}. Stop with stop_loop {"id": ${number}}.${note}`, { id: number, intervalSecs, deliverAs });
       },
     },
     {
@@ -816,7 +861,8 @@ export function createCronTools({ task, now = () => Date.now(), defaultDelivery 
         }
         const nextAt = nextCronAt(cron.expression, cron.timeZone, now());
         const made = { number, cron, prompt, deliverAs, nextAt };
-        return text(`Cron #${number} created: ${describe(made, 60)}. Change it with update_cron, delete it with delete_cron {"id": ${number}}.`, details(made));
+        const note = cacheNote(cronGapMs(cron.expression, cron.timeZone, now()), await promptCacheKept(api, api.conversationId, context));
+        return text(`Cron #${number} created: ${describe(made, 60)}. Change it with update_cron, delete it with delete_cron {"id": ${number}}.${note}`, details(made));
       },
     },
     {
