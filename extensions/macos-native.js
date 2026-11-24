@@ -57,8 +57,5 @@ export default function macosNativeExtension(pi) {
     async execute(_id, _params, _signal, _onUpdate, ctx) { return screenshot(ctx); },
   });
 
-  pi.registerCommand("screenshot", {
-    description: "Select a screen area with the native macOS crosshair and share it with the agent.",
-    handler: async (_args, ctx) => { await screenshot(ctx); },
-  });
+  // /screenshot is screenshot.js's (every platform, and pi-client too).
 }

@@ -111,6 +111,7 @@
       "./extensions/xvfb.js",
       "./extensions/nix-devshell.js",
       "./extensions/macos-native.js",
+      "./extensions/screenshot.js",
       "./extensions/cd.js"
     ],
     "prompts": [
