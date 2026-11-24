@@ -1670,6 +1670,41 @@ test("extension: settings.json changes reach a running Pi but this session's own
   assert.match(notices.at(-1), /visual thoughts: off/);
 });
 
+test("extension: a caller that reads the settings itself starts from them, not from the agent's settings.json", async () => {
+  // The two cases together fail on any machine that starts from its own settings.json: one where it turns visual
+  // thoughts on (a developer's), and one with none (a CI runner), where they start off (bd-096f6e).
+  const { createVisualThoughtsExtension } = await import("../extensions/lib/visual-thoughts-extension.js");
+  const dir = mkdtempSync(join(tmpdir(), "vt-ext-start-"));
+  try {
+    for (const [enabled, said] of [[true, /^visual thoughts: on/], [false, /^visual thoughts: off/]]) {
+      const handlers = new Map();
+      const commands = new Map();
+      const pi = { on: (name, fn) => handlers.set(name, [...(handlers.get(name) || []), fn]), registerCommand: (name, def) => commands.set(name, def) };
+      createVisualThoughtsExtension({
+        env: { PI_VISUAL_THOUGHTS_DIR: dir, LITELLM_BASE_URL: "http://proxy:4000" },
+        readSettingsText: () => JSON.stringify({ agentUtils: { visualThoughts: { enabled, opacity: 0.35 } } }),
+        parseSettings: (value) => JSON.parse(value),
+        // The settings are not read again in this test: what shows is what the extension started with.
+        settingsCheckMs: 3_600_000,
+        fetchImpl: async () => new Response("{}"),
+      })(pi);
+      const notices = [];
+      const backdrop = fakeBackdrop("pane");
+      const ctx = {
+        ui: { backdrop: () => backdrop, notify: (message) => notices.push(message), setStatus() {} },
+        sessionManager: { getSessionId: () => `start-${enabled}`, getEntries: () => [], getBranch: () => [] },
+      };
+      for (const fn of handlers.get("session_start") || []) await fn({}, ctx);
+      await commands.get("thoughts").handler("status", ctx);
+      assert.match(notices.at(-1), said, `enabled: ${enabled}`);
+      assert.match(notices.at(-1), /opacity 0\.35/, "the caller's own values too");
+      for (const fn of handlers.get("session_shutdown") || []) await fn({}, ctx);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("extension in pi-client: a pane follows the host's slot only while thoughts show there (the host counts it as watching)", async () => {
   const { createVisualThoughtsExtension } = await import("../extensions/lib/visual-thoughts-extension.js");
   const dir = mkdtempSync(join(tmpdir(), "vt-watch-"));
