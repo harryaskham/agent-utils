@@ -14,7 +14,7 @@
 // Environment: PI_LOOP_MIN_INTERVAL_SECS (default 30), PI_LOOP_DEFAULT_DELIVERY (steer, else
 // follow-up while busy), PI_LOOP_TZ (time zone of the delivered timestamp; default the worker's).
 import { DEFAULT_MIN_INTERVAL_SECS, createCronTools, createLoopCommands, createLoopTask, createLoopTools } from "../lib/durable-loop.js";
-import { createGoalCommands, createGoalTask, createGoalTools, goalSection } from "../lib/durable-goal.js";
+import { createGoalCommands, createGoalResumeTask, createGoalTask, createGoalTools, goalResumeHook, goalSection } from "../lib/durable-goal.js";
 
 const minSecs = Number.parseInt(process.env.PI_LOOP_MIN_INTERVAL_SECS ?? "", 10);
 const task = createLoopTask({ timeZone: process.env.PI_LOOP_TZ });
@@ -27,14 +27,18 @@ const options = {
 };
 
 const goalTask = createGoalTask({ timeZone: process.env.PI_LOOP_TZ });
+// Goals an interruption paused are nudged again once a run is answered: the hook asks for this task.
+const goalResumeTask = createGoalResumeTask({ goalTask });
 
 // The loop and goal tasks, the agent's own tools (create_loop, list_loops, stop_loop; create_cron,
-// list_crons, update_cron, delete_cron; goal_done) and the live goal's system prompt section.
+// list_crons, update_cron, delete_cron; goal_done), the live goal's system prompt section, and the
+// hook that starts paused goals again.
 export const extension = {
   name: "agent-utils-loop",
-  tasks: [task, goalTask],
+  tasks: [task, goalTask, goalResumeTask],
   tools: [...createLoopTools(options), ...createCronTools(options), ...createGoalTools({ task: goalTask })],
   sections: [goalSection()],
+  hooks: [goalResumeHook({ resumeTask: goalResumeTask })],
 };
 
 // /loop, /loops, /after and /cron (a 5-field schedule in PI_LOOP_TZ or tz=, else the worker's

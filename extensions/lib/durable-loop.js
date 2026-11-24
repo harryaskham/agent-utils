@@ -428,7 +428,18 @@ export function loopOperations({ task, now = () => Date.now() }) {
       return commit(async (tx) => {
         const doc = await tx.doc(LOOPS_DOC);
         const ids = new Set(liveTasks.map((entry) => String(entry.id)));
-        for (const [number, entry] of Object.entries(doc.loops ?? {})) if (!ids.has(entry.taskId)) delete doc.loops[number];
+        for (const [number, entry] of Object.entries(doc.loops ?? {})) {
+          if (ids.has(entry.taskId)) continue;
+          // A goal outlives its task (durable-goal.js): an open one is paused, and nudged again later.
+          if (entry.kind === "goal" && entry.stopped !== true) {
+            if (entry.paused === undefined) {
+              entry.paused = "its task ended";
+              entry.pausedAt = now();
+            }
+            continue;
+          }
+          delete doc.loops[number];
+        }
         const known = new Set(Object.values(doc.loops ?? {}).map((entry) => entry.taskId));
         for (const entry of liveTasks) {
           const input = entry.input ?? {};
@@ -449,10 +460,15 @@ export function loopOperations({ task, now = () => Date.now() }) {
   };
 }
 
+/** What a list says after a paused goal ("" for one that is being nudged). */
+export function pausedNote(goal) {
+  return goal?.paused === undefined ? "" : ` — paused (${goal.paused}): nudged again once a message is answered`;
+}
+
 function describeLoop(loop, now) {
   if (loop.kind === "goal") {
     const nudges = Number(loop.nudges) || 0;
-    return `#${loop.number}: goal — "${summarize(loop.prompt)}" (${nudges} nudge${nudges === 1 ? "" : "s"} of ${Number(loop.maxNudges) || DEFAULT_GOAL_MAX_NUDGES}, running ${formatRunning(now - (loop.startedAt ?? now))})`;
+    return `#${loop.number}: goal — "${summarize(loop.prompt)}" (${nudges} nudge${nudges === 1 ? "" : "s"} of ${Number(loop.maxNudges) || DEFAULT_GOAL_MAX_NUDGES}, running ${formatRunning(now - (loop.startedAt ?? now))})${pausedNote(loop)}`;
   }
   if (loop.kind === "after") return `#${loop.number}: once, in ${formatRunning(Math.max(0, Number(loop.nextAt) - now))} — "${summarize(loop.prompt)}"`;
   if (loop.kind === "cron") {

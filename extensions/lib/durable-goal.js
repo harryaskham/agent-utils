@@ -9,17 +9,28 @@
 // `/goal done N`, `/goal stop N` (or `all`), or `/loop stop N`. The `goal` system prompt section
 // lists the open goals, so the agent knows them between nudges and after a compaction.
 //
-// Bounds: each goal has at most `maxNudges` nudges (default DEFAULT_GOAL_MAX_NUDGES) and ends at
-// its limit; a nudge the operator interrupts (aborts) ends the conversation's goals rather than
-// fighting them; a failed run waits GOAL_FAILURE_BACKOFF_MS before the next nudge, and
-// GOAL_MAX_FAILURES in a row end them. Nothing here imports Durable or Pi.
+// A goal ends only when it is ended: by goal_done, by the operator, or at its nudge limit
+// (`maxNudges`, default DEFAULT_GOAL_MAX_NUDGES, told when it is added). Nothing else ends one:
+// - A nudge the operator interrupts (Esc) pauses the conversation's goals rather than fighting
+//   the interruption: they stay, listed as paused, and their task ends. They are nudged again
+//   once a later run of the conversation is answered (the `onYield` hook asks for the resume
+//   task, which gives them a new goal task), or when a goal is added.
+// - A failed run waits GOAL_FAILURE_BACKOFF_MS before the next nudge, twice as long after each
+//   further failure up to GOAL_MAX_FAILURE_BACKOFF_MS, for as long as it takes; failed nudges do
+//   not count toward the limit.
+// - A goal whose task is gone without having ended it (the task was lost) is paused, not forgotten.
+// Nothing here imports Durable or Pi.
 
-import { DEFAULT_GOAL_MAX_NUDGES, GOAL_TASK, LOOPS_DOC, MAX_LOOPS, timestampPrefix } from "./durable-loop.js";
+import { DEFAULT_GOAL_MAX_NUDGES, GOAL_TASK, LOOPS_DOC, MAX_LOOPS, pausedNote, timestampPrefix } from "./durable-loop.js";
 
 export { DEFAULT_GOAL_MAX_NUDGES, GOAL_TASK };
 export const MAX_GOAL_NUDGES = 1000;
 export const GOAL_FAILURE_BACKOFF_MS = 60_000;
-export const GOAL_MAX_FAILURES = 3;
+export const GOAL_MAX_FAILURE_BACKOFF_MS = 30 * 60_000;
+/** The task that starts a conversation's paused goals again, asked for when a run is answered. */
+export const GOAL_RESUME_TASK = "agent-utils.goal-resume";
+/** Durable's task that runs the model: its `onYield` hook is asked at each final answer. */
+const GENERATION_TASK = "pi.generation";
 /** The longest goal text kept (each nudge repeats it). */
 export const MAX_GOAL_CHARS = 4000;
 
@@ -57,6 +68,42 @@ export function liveGoals(doc, conversationId, taskId) {
     .sort((a, b) => a.number - b.number);
 }
 
+/** The conversation's open goals that are paused: kept, with no task nudging for them. */
+export function pausedGoals(doc, conversationId) {
+  return liveGoals(doc, conversationId).filter((goal) => goal.paused !== undefined);
+}
+
+/** How long a failed run waits before the next nudge, after `failures` in a row. */
+export function failureBackoffMs(failures) {
+  return Math.min(GOAL_MAX_FAILURE_BACKOFF_MS, GOAL_FAILURE_BACKOFF_MS * 2 ** Math.max(0, Math.min(20, failures - 1)));
+}
+
+/** Give `goals` (paused ones) to task `taskId`, in a transaction's draft: they are nudged again. */
+function adopt(doc, goals, taskId) {
+  for (const goal of goals) {
+    const entry = doc.loops[String(goal.number)];
+    entry.taskId = String(taskId);
+    delete entry.paused;
+    delete entry.pausedAt;
+  }
+}
+
+const createGoalTaskIn = (tx, task, conversationId, at) =>
+  tx.createTask(task, { conversationId, startedAt: at }, { ownership: { kind: "conversation" }, conversationId, background: true });
+
+/**
+ * Start a conversation's paused goals again, in a transaction: they join the task that nudges
+ * for its other goals, or get a new one. How many were paused.
+ */
+export async function resumeGoals(tx, task, conversationId, at) {
+  const doc = await tx.doc(LOOPS_DOC);
+  const paused = pausedGoals(doc, conversationId);
+  if (paused.length === 0) return 0;
+  const nudged = liveGoals(doc, conversationId).find((goal) => goal.paused === undefined);
+  adopt(doc, paused, nudged?.taskId ?? String(await createGoalTaskIn(tx, task, conversationId, at)));
+  return paused.length;
+}
+
 /**
  * The goal task: one per conversation with open goals, nudging for all of them. Input:
  * `{ conversationId?, startedAt }` (tasks from before several goals carry `{ number, goal }`);
@@ -76,7 +123,25 @@ export function createGoalTask({ now = () => Date.now(), timeZone } = {}) {
       if (mine(doc, runtime).length > 0) return next;
       return { status: "terminal", outcome };
     }, context);
-  /** End every goal of this task (an interruption, repeated failures, an abort). */
+  /**
+   * Keep this task's open goals without it (`reason`: why they are paused), and end it. They are
+   * nudged again by a new task (resumeGoals).
+   */
+  const pauseAll = (runtime, context, reason, result) =>
+    runtime.commit(async (tx) => {
+      const doc = await tx.doc(LOOPS_DOC);
+      const at = now();
+      for (const [number, entry] of Object.entries(doc.loops ?? {})) {
+        if (entry?.kind !== "goal" || String(entry.taskId) !== String(runtime.taskId)) continue;
+        if (entry.stopped === true) delete doc.loops[number];
+        else {
+          entry.paused = reason;
+          entry.pausedAt = at;
+        }
+      }
+      return { status: "terminal", outcome: { status: "completed", result } };
+    }, context);
+  /** End every goal of this task: the operator stopped them (an abort), or their conversation is gone. */
   const endAll = (runtime, context, outcome) =>
     runtime.commit(async (tx) => {
       const doc = await tx.doc(LOOPS_DOC);
@@ -119,23 +184,25 @@ export function createGoalTask({ now = () => Date.now(), timeZone } = {}) {
           const settled = await submission.wait(context);
           const reason = String(settled?.reason ?? "");
           if (settled?.status === "unanswered" && /abort|cancel|withdr/i.test(reason)) {
-            // The operator stopped the agent: the goals stop too, rather than restarting it. Pi 1.5's
-            // `interrupted` is not that: the host stopped while the model answered, so it counts as
-            // a failed run below and the goal tries again.
-            await endAll(runtime, context, { status: "completed", result: { nudges: nudges + 1, interrupted: true } });
+            // The operator stopped the agent: the goals wait, rather than restarting it at once,
+            // and stay. Pi 1.5's `interrupted` is not that: the host stopped while the model
+            // answered, so it counts as a failed run below and the goal tries again.
+            await pauseAll(runtime, context, "interrupted", { nudges: nudges + 1, paused: "interrupted" });
             return;
           }
           const failed = settled?.status !== "done";
           const failures = failed ? (Number(checkpoint.failures) || 0) + 1 : 0;
-          if (failures >= GOAL_MAX_FAILURES) {
-            await endAll(runtime, context, { status: "completed", result: { nudges: nudges + 1, failed: reason || "the agent's runs failed" } });
+          if (failed && typeof runtime.sleepUntil !== "function") {
+            // A host that cannot sleep between nudges: wait for a run that is answered instead.
+            await pauseAll(runtime, context, "a run failed", { nudges: nudges + 1, paused: "a run failed" });
             return;
           }
           const at = now();
-          const nudged = new Set(goals.map((goal) => String(goal.number)));
+          // A failed nudge does not count toward a goal's limit: a failure never ends a goal.
+          const nudged = new Set(failed ? [] : goals.map((goal) => String(goal.number)));
           const checkpointNext = { phase: "watch", nudges: nudges + 1, failures };
-          const next = failed && typeof runtime.sleepUntil === "function"
-            ? { status: "sleeping", until: at + GOAL_FAILURE_BACKOFF_MS, checkpoint: checkpointNext }
+          const next = failed
+            ? { status: "sleeping", until: at + failureBackoffMs(failures), checkpoint: checkpointNext }
             : { status: "running", checkpoint: checkpointNext };
           await runtime.commit(async (tx) => {
             const doc = await tx.doc(LOOPS_DOC);
@@ -160,6 +227,55 @@ export function createGoalTask({ now = () => Date.now(), timeZone } = {}) {
   };
 }
 
+/**
+ * The resume task (`goalTask`: the goal task it starts): a run of the conversation was answered,
+ * so its paused goals are nudged again. Input: `{ conversationId }`.
+ */
+export function createGoalResumeTask({ goalTask, now = () => Date.now() }) {
+  return {
+    definition: {
+      name: GOAL_RESUME_TASK,
+      version: 1,
+      initial: () => ({ phase: "resume" }),
+      phases: {
+        async resume(task, runtime, context) {
+          const conversationId = task.input?.conversationId ?? runtime.conversationId;
+          await runtime.commit(async (tx) => {
+            const resumed = await resumeGoals(tx, goalTask, conversationId, now());
+            return { status: "terminal", outcome: { status: "completed", result: { resumed } } };
+          }, context);
+        },
+      },
+      async abort(_task, runtime, context) {
+        await runtime.commit(async () => ({ status: "terminal", outcome: { status: "aborted", reason: "resume stopped" } }), context);
+      },
+    },
+  };
+}
+
+/**
+ * The hook that starts paused goals again: at a run's final answer (Durable's `onYield`), a
+ * conversation with paused goals asks for the resume task; the answer stands. Every other answer
+ * is left alone (the hook reads the registry and returns nothing).
+ */
+export function goalResumeHook({ resumeTask }) {
+  return {
+    task: GENERATION_TASK,
+    handlers: {
+      async onYield(_answer, api, context) {
+        let doc;
+        try {
+          doc = await api.snapshot(LOOPS_DOC, context);
+        } catch {
+          return undefined;
+        }
+        if (pausedGoals(doc, api.conversationId).length === 0) return undefined;
+        return { tasks: [{ task: resumeTask, input: { conversationId: api.conversationId } }] };
+      },
+    },
+  };
+}
+
 /** Goal operations over a Durable commit (a module command's harness, or a tool's api). */
 export function goalOperations({ task, now = () => Date.now() }) {
   return {
@@ -174,9 +290,11 @@ export function goalOperations({ task, now = () => Date.now() }) {
         if (open >= MAX_LOOPS) throw new Error(`at most ${MAX_LOOPS} loops and goals run at once; end one first`);
         const siblings = liveGoals(doc, conversationId);
         const at = now();
-        // A live goal of this conversation means its task is live: it ends only in a commit that
-        // finds no open goal of its own.
-        const taskId = siblings[0]?.taskId ?? String(await tx.createTask(task, { conversationId, startedAt: at }, { ownership: { kind: "conversation" }, conversationId, background: true }));
+        // A goal of this conversation that is not paused means its task is live: it ends only in
+        // a commit that finds no open goal of its own.
+        const taskId = siblings.find((goal) => goal.paused === undefined)?.taskId ?? String(await createGoalTaskIn(tx, task, conversationId, at));
+        // A new goal starts the conversation's paused goals again, with it.
+        adopt(doc, siblings.filter((goal) => goal.paused !== undefined), taskId);
         const number = (Number(doc.last) || 0) + 1;
         doc.last = number;
         doc.loops[String(number)] = { taskId: String(taskId), kind: "goal", prompt: goal, maxNudges, nudges: 0, startedAt: at, conversationId };
@@ -204,20 +322,35 @@ export function goalOperations({ task, now = () => Date.now() }) {
           targets = own;
         } else targets = liveGoals(doc).filter((goal) => goal.number === which);
         for (const goal of targets) {
+          // A paused goal has no task to drop it once it has ended.
+          if (goal.paused !== undefined) {
+            delete doc.loops[String(goal.number)];
+            continue;
+          }
           const entry = doc.loops[String(goal.number)];
           entry.stopped = true;
           if (done !== undefined) entry.done = { ...done, at: now() };
         }
-        const idle = [...new Set(targets.map((goal) => String(goal.taskId)))].filter((taskId) => liveGoals(doc, undefined, taskId).length === 0);
+        const idle = [...new Set(targets.filter((goal) => goal.paused === undefined).map((goal) => String(goal.taskId)))].filter(
+          (taskId) => liveGoals(doc, undefined, taskId).filter((goal) => goal.paused === undefined).length === 0,
+        );
         return { ended: targets.map((goal) => ({ number: goal.number, taskId: goal.taskId, prompt: goal.prompt })), idle };
       });
     },
-    /** Forget goals whose task is gone (it ended without cleaning up). */
+    /**
+     * Goals whose task is gone without having ended them (it was lost): an open one is paused, so
+     * it is nudged again later; one already ended is forgotten.
+     */
     async reconcile(commit, liveTaskIds) {
       return commit(async (tx) => {
         const doc = await tx.doc(LOOPS_DOC);
         for (const [number, entry] of Object.entries(doc.loops ?? {})) {
-          if (entry?.kind === "goal" && !liveTaskIds.has(String(entry.taskId))) delete doc.loops[number];
+          if (entry?.kind !== "goal" || entry.paused !== undefined || liveTaskIds.has(String(entry.taskId))) continue;
+          if (entry.stopped === true) delete doc.loops[number];
+          else {
+            entry.paused = "its task ended";
+            entry.pausedAt = now();
+          }
         }
       });
     },
@@ -229,7 +362,7 @@ export function describeGoal(goal, now = Date.now()) {
   const nudges = Number(goal.nudges) || 0;
   const running = Math.max(0, now - (Number(goal.startedAt) || now));
   const age = running >= 3_600_000 ? `${Math.floor(running / 3_600_000)}h` : running >= 60_000 ? `${Math.floor(running / 60_000)}m` : `${Math.floor(running / 1000)}s`;
-  return `#${goal.number}: goal — "${summarize(goal.prompt, 80)}" (${nudges} nudge${nudges === 1 ? "" : "s"} of ${Number(goal.maxNudges) || DEFAULT_GOAL_MAX_NUDGES}, running ${age})`;
+  return `#${goal.number}: goal — "${summarize(goal.prompt, 80)}" (${nudges} nudge${nudges === 1 ? "" : "s"} of ${Number(goal.maxNudges) || DEFAULT_GOAL_MAX_NUDGES}, running ${age})${pausedNote(goal)}`;
 }
 
 /** `N`, `#N` or `all` (or nothing): a goal selector, or `{ error }`. */
@@ -332,7 +465,7 @@ export function createGoalCommands({ task, now = () => Date.now() } = {}) {
           return ctx.notify(error?.message ?? String(error));
         }
         const others = started.open > 1 ? ` ${started.open} goals are open; each nudge lists them all.` : "";
-        ctx.notify(`Goal #${started.number} added: "${summarize(parsed.goal)}". The agent is nudged whenever it goes idle, at most ${parsed.maxNudges} times, until it calls goal_done.${others} /goal lists them; /goal done ${started.number} or /goal stop ${started.number} ends this one.`);
+        ctx.notify(`Goal #${started.number} added: "${summarize(parsed.goal)}". The agent is nudged whenever it goes idle, at most ${parsed.maxNudges} times, until it calls goal_done.${others} Esc pauses the nudges until your next message is answered; the goal stays. /goal lists them; /goal done ${started.number} or /goal stop ${started.number} ends this one.`);
       },
     },
   };

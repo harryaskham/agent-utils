@@ -6,7 +6,7 @@
 | --- | --- |
 | `/goal all tests pass on main and CI is green` | Adds a goal to this conversation. A conversation can have several, as it can have several loops. |
 | `/goal --max 20 ship the 3.6.5 release` | The same, with at most 20 nudges for this goal (default 50, up to 1000). |
-| `/goal` (`list`) | Lists the open goals: number, nudges so far, how long each has run. |
+| `/goal` (`list`) | Lists the open goals: number, nudges so far, how long each has run, and whether it is paused. |
 | `/goal done N` | Marks goal N done yourself. `/goal done all` marks all of this conversation's goals done. With one goal open, `/goal done` is enough. |
 | `/goal stop N` (`off`, `clear`) | Stops goal N, or `all`. With one goal open, `/goal stop` is enough; with several it asks which. `/loop stop N` also stops goal N. |
 
@@ -21,15 +21,23 @@ It lives in agent-utils' `loop.mjs` (pi-daemon profile extension), on the `/loop
 - A `goal` system prompt section lists the open goals on every request, so the agent knows them between nudges and after a compaction.
 - The task is durable: a daemon restart resumes it, and a nudge retried after a crash is the same submission, never a second one.
 
-## Bounds
+## What ends a goal, and what does not
 
-- **Nudge limit:** each goal has `--max` nudges at most (default 50). A goal at its limit ends; the others go on.
-- **Interruptions:** aborting a nudged run (Esc in a client, `conversation.abort`) ends the conversation's goals rather than restarting the agent.
-- **Failures:** a run that fails (a provider error, say) waits a minute before the next nudge; three failed runs in a row end the conversation's goals.
+A goal ends only when it is ended: the agent calls `goal_done`, you run `/goal done`, `/goal stop` or `/loop stop N`, or it reaches its nudge limit. Nothing else ends one.
+
+| What happens | The goal |
+| --- | --- |
+| **Its nudge limit** (`--max`, default 50; told when the goal is added) | Ends; the others go on. Only nudges whose run was answered count. |
+| **You interrupt a nudged run** (Esc in a client, `conversation.abort`) | Stays, **paused**: the agent is not restarted at once. `/goal` and the loops chip say so. It is nudged again once a later run of the conversation is answered, so your next message is answered first and then the goal goes on. Adding a goal also starts the paused ones again. |
+| **A message of yours while it runs** (steered or queued) | Stays, and is not paused. |
+| **A run fails** (a provider error, or the daemon restarted while the model answered) | Stays. The next nudge waits a minute, then twice as long after each further failure up to 30 minutes, for as long as it takes. |
+| **Its task is lost** (it ended without ending the goal) | Stays, paused, as after an interruption. `/goal` and `/loop list` find it. |
+
+How a pause ends: the module's `onYield` hook (Durable asks it at each final answer) reads the loops document, and for a conversation with paused goals asks for a small task that gives them a new goal task. Answers of conversations without paused goals are left alone.
 
 ## Where to see goals
 
 - In the session: `/goal`, `/loops`, and the loops chip.
 - Across the fleet: `ag loops` and the `ag dash` **Loops** tab list every live goal with its nudges.
 
-Needs pi-daemon 1.10 or later (1.14 or later for stored sleeps between failed nudges). TUI Pi has no `/goal`; its closest is `/endless`.
+Needs pi-daemon 1.10 or later (1.14 or later for stored sleeps between failed nudges; an earlier host pauses the goals at a failed run instead). TUI Pi has no `/goal`; its closest is `/endless`.
