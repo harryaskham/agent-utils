@@ -3,8 +3,9 @@
 // draws that session, so they work for remote sessions too and run no git of their own there.
 // It follows git.mjs's module state (pi-daemon's `pi-daemon.module-state` document, key "git")
 // through pi-client's ctx.chord.watchDocument: the focused session's, and any a consumer asks
-// for while drawing its pane. After /git wt fork, it opens a session in the new worktree,
-// carrying the conversation (pi-client's ctx.sessions). The focused session's repository shows in
+// for while drawing its pane. After /git wt fork, it opens the session git.mjs made in the new
+// worktree (or, from a host that could not make one, makes it, carrying the conversation, with
+// pi-client's ctx.sessions). The focused session's repository shows in
 // pi-client's sidebar (setWidget's placement "sidebar", where ctx.ui.hasSidebar); /repo switches
 // to another session in the same repository or one of its worktrees, on the same host. Sidebar rows
 // (pi-client's client.sidebar.rows) can show each followed session's "branch" and "repo". In TUI Pi
@@ -112,8 +113,9 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
     },
   });
 
-  // A /git wt fork in this session: a session in the worktree, with this conversation; on
-  // another node (`host`, bd-9fcd6a), there, through pi-daemon's cross-host clone (bd-cd7999).
+  // A /git wt fork in this session: the session git.mjs made in the worktree with this
+  // conversation, opened; from a module that made none, one made here, carrying it; on another
+  // node (`host`, bd-9fcd6a), there, through pi-daemon's cross-host clone (bd-cd7999).
   // `here`: the ctx of the pane showing the forking session (it opens there); without one, only
   // where to go, in `tell` (the pane the fork was typed in, which shows another session now).
   const openForked = async (forked, here, tell = here) => {
@@ -122,6 +124,22 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
     const cd = host === undefined ? `/cd ${forked.path}` : `/cd @${host} ${forked.path}`;
     // --rebase (bd-658ee5): the base it starts on, fetched just now (the conversation has a note of it).
     const base = typeof forked.base?.ref === "string" && typeof forked.base?.commit === "string" ? `, on ${forked.base.ref} ${forked.base.commit.slice(0, 12)}` : "";
+    // --no-session: the worktree only, as asked.
+    if (forked.noSession === true) return;
+    const made = typeof forked.session?.id === "string" && forked.session.id !== "" ? forked.session : undefined;
+    if (made !== undefined) {
+      const where = `${forked.branch}${host === undefined ? "" : ` on ${host}`}${base}`;
+      if (typeof sessionsApi?.open !== "function") {
+        tell?.ui?.notify?.(`Session ${made.title ?? forked.branch} is ready in ${where}: pick it in the session list.`, "info");
+        return;
+      }
+      try {
+        await sessionsApi.open({ id: made.id, ...(host === undefined ? {} : { host }) });
+      } catch (error) {
+        here.ui?.notify?.(`Cannot open the fork's session ${made.id}${host === undefined ? "" : ` on ${host}`}: ${error?.message ?? error} (pick it in the session list)`, "error");
+      }
+      return;
+    }
     if (typeof sessionsApi?.create !== "function") {
       tell?.ui?.notify?.(`Worktree ${forked.branch} ready${host === undefined ? "" : ` on ${host}`}${base}: ${cd} continues this conversation there.`, "info");
       return;

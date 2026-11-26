@@ -82,6 +82,10 @@ function commandCtx(cwd, { busy = false } = {}) {
 
 const worktreeBranches = (root) => git(root, "worktree", "list", "--porcelain").split("\n").filter((line) => line.startsWith("worktree ")).length;
 
+
+// These tests never reach a real pi-daemon: the fork's session is as a host before 1.14 answers.
+const noForkSession = async () => { throw Object.assign(new Error("no pi-daemon in tests"), { code: "unsupported" }); };
+
 test("--rebase[=BASE] is taken from /git's words: BASE after = or as the next word when NAME is there besides", () => {
   assert.deepEqual(takeRebase(["wt", "fork", "x"]), { words: ["wt", "fork", "x"] });
   assert.deepEqual(takeRebase(["wt", "fork", "x", "--rebase"]), { words: ["wt", "fork", "x"], rebase: { base: undefined } });
@@ -95,7 +99,7 @@ test("--rebase[=BASE] is taken from /git's words: BASE after = or as the next wo
 test("/git wt fork NAME --rebase: fetched first, the branch moved forward onto origin's main, its base noted in the conversation", async (t) => {
   const { dir, root, fresh, first } = await behindOrigin(t);
   const { ctx, writes, notices } = commandCtx(root);
-  const { git: command } = createGitCommands(createGitRefresher(), { root: join(dir, "worktrees"), tmp: dir });
+  const { git: command } = createGitCommands(createGitRefresher(), { forkSession: noForkSession, root: join(dir, "worktrees"), tmp: dir });
   assert.equal(git(root, "rev-parse", "origin/main"), first, "this checkout has not seen origin's main move");
 
   await command.run("wt fork try-x --rebase", ctx);
@@ -126,7 +130,7 @@ test("/git wt fork NAME --rebase: fetched first, the branch moved forward onto o
 test("--rebase=main replays this branch's own commits onto the fresh base; a conflict is reported and nothing is forked", async (t) => {
   const { dir, root, fresh } = await behindOrigin(t);
   const own = await commit(root, { "d.txt": "mine\n" }, "my own work");
-  const { git: command } = createGitCommands(createGitRefresher(), { root: join(dir, "worktrees"), tmp: dir });
+  const { git: command } = createGitCommands(createGitRefresher(), { forkSession: noForkSession, root: join(dir, "worktrees"), tmp: dir });
 
   const one = commandCtx(root);
   await command.run("wt fork mine --rebase=main", one.ctx);
@@ -165,7 +169,7 @@ test("--rebase onto a base that has this branch's changes already (squash-merged
   const fresh = await commit(other, { "f.txt": "f\n" }, "after the squash");
   git(other, "push", "-q", "origin", "HEAD:main");
   const { ctx, notices } = commandCtx(root);
-  const { git: command } = createGitCommands(createGitRefresher(), { root: join(dir, "worktrees"), tmp: dir });
+  const { git: command } = createGitCommands(createGitRefresher(), { forkSession: noForkSession, root: join(dir, "worktrees"), tmp: dir });
   await command.run("wt fork next --rebase", ctx);
   assert.equal(git(join(dir, "worktrees", "project", "next"), "rev-parse", "HEAD"), fresh);
   assert.match(notices.at(-1), /, on origin\/main at [0-9a-f]{40} "after the squash", which has its 2 commits merged already\.$/);
@@ -175,7 +179,7 @@ test("--rebase on an existing branch NAME moves it (its old tip noted); a fetch 
   const { dir, root, first, fresh } = await behindOrigin(t);
   git(root, "branch", "old-work", first);
   const { ctx, writes, notices } = commandCtx(root, { busy: true });
-  const { git: command } = createGitCommands(createGitRefresher(), { root: join(dir, "worktrees"), tmp: dir });
+  const { git: command } = createGitCommands(createGitRefresher(), { forkSession: noForkSession, root: join(dir, "worktrees"), tmp: dir });
   await command.run("wt fork old-work --rebase", ctx);
   assert.equal(git(root, "rev-parse", "old-work"), fresh);
   assert.equal(ctx.state.values.get("forked").created, false);
@@ -243,7 +247,7 @@ test("/git wt fork NAME @node --rebase: the node gets the branch on the base fet
   };
   const peerFor = () => (payload) => asNode(homeB, () => peer(payload));
   const { ctx, writes, notices } = commandCtx(root);
-  const { git: command } = createGitCommands(createGitRefresher(), { peerFor, tmp: dir });
+  const { git: command } = createGitCommands(createGitRefresher(), { forkSession: noForkSession, peerFor, tmp: dir });
 
   await asNode(homeA, () => command.run("wt fork try-n @aurora --rebase", ctx));
   const path = join(homeB, ".local", "state", "pi-daemon", "worktrees", "project", "try-n");
@@ -259,7 +263,7 @@ test("/git wt fork NAME @node --rebase: the node gets the branch on the base fet
   await commit(root, { "a.txt": "one\nmine\nthree\n" }, "clash");
   const two = commandCtx(root);
   const asked = [];
-  const { git: watched } = createGitCommands(createGitRefresher(), { peerFor: () => (payload) => (asked.push(payload.action), asNode(homeB, () => peer(payload))), tmp: dir });
+  const { git: watched } = createGitCommands(createGitRefresher(), { forkSession: noForkSession, peerFor: () => (payload) => (asked.push(payload.action), asNode(homeB, () => peer(payload))), tmp: dir });
   await asNode(homeA, () => watched.run("wt fork clash @aurora --rebase=main", two.ctx));
   assert.match(two.notices.at(-1), /^\/git wt fork clash @aurora --rebase: rebasing 2 commits of [0-9a-f]{12} onto origin\/main .* conflicts at .* in a\.txt\. Nothing was forked/);
   assert.deepEqual(asked, []);

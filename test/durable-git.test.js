@@ -41,6 +41,10 @@ function memoryState() {
   return { values, get: async (key) => values.get(key), set: async (key, value) => void (value === undefined ? values.delete(key) : values.set(key, value)) };
 }
 
+
+// These tests never reach a real pi-daemon: the fork's session is as a host before 1.14 answers.
+const noForkSession = async () => { throw Object.assign(new Error("no pi-daemon in tests"), { code: "unsupported" }); };
+
 test("git's porcelain status, numstat and worktree list are summarised", () => {
   const status = parseStatus(
     ["# branch.oid abc123", "# branch.head feature", "# branch.upstream origin/feature", "# branch.ab +2 -1", "1 M. N... 100644 100644 100644 a b x.txt", "1 .M N... 100644 100644 100644 a b y.txt", "2 R. N... 100644 100644 100644 a b R100 n.txt\to.txt", "u UU N... 1 2 3 4 a b c z.txt", "? new.txt", "? other.txt"].join("\n"),
@@ -131,7 +135,7 @@ test("/git status, /git wt fork NAME and /git wt list", async (t) => {
   const state = memoryState();
   const notices = [];
   const ctx = { sessionId: "s", cwd: root, state, notify: (text) => notices.push(text), env: { get: async () => ({}) } };
-  const { git: command } = createGitCommands(createGitRefresher(), { root: join(dir, "worktrees") });
+  const { git: command } = createGitCommands(createGitRefresher(), { forkSession: noForkSession, root: join(dir, "worktrees") });
   await command.run("", ctx);
   assert.equal(notices.at(-1), "main · clean");
   await command.run("wt fork feature/x", ctx);
@@ -315,7 +319,7 @@ test("the client part shows the focused session's repository in pi-client's side
 });
 
 test("/git completes its subcommands as Pi's commands do", () => {
-  const { git } = createGitCommands(createGitRefresher());
+  const { git } = createGitCommands(createGitRefresher(), { forkSession: noForkSession });
   assert.deepEqual(git.getArgumentCompletions("").map((item) => item.value), ["status", "wt list", "wt fork ", "@"]);
   assert.deepEqual(git.getArgumentCompletions("wt f").map((item) => item.value), ["wt fork "]);
   assert.deepEqual(git.getArgumentCompletions("nope"), []);
@@ -408,7 +412,7 @@ test("/git wt fork NAME @node and /git @node (bd-9fcd6a): the worktree on that n
   const state = memoryState();
   const notices = [];
   const ctx = { sessionId: "s", cwd: root, state, notify: (text) => notices.push(text), env: { get: async () => ({}) } };
-  const { git: command } = createGitCommands(createGitRefresher(), { peerFor });
+  const { git: command } = createGitCommands(createGitRefresher(), { forkSession: noForkSession, peerFor });
 
   await asNode(homeA, () => command.run("@aurora", ctx));
   assert.match(notices.at(-1), /^aurora: no .*\/b\/src\/project \(\/git wt fork NAME @aurora clones it there\)$/);
@@ -425,7 +429,7 @@ test("/git wt fork NAME @node and /git @node (bd-9fcd6a): the worktree on that n
   await asNode(homeA, () => command.run("wt fork try-y @aurora", ctx));
   assert.match(notices.at(-1), /uncommitted changes: commit them, or \/git wt fork try-y @aurora --dirty omit/);
   const { ForkError } = await import("../extensions/lib/session-fork/io.js");
-  const down = createGitCommands(createGitRefresher(), { peerFor: () => async () => { throw new ForkError("peer-output", "Remote pi-session did not return JSON"); } }).git;
+  const down = createGitCommands(createGitRefresher(), { forkSession: noForkSession, peerFor: () => async () => { throw new ForkError("peer-output", "Remote pi-session did not return JSON"); } }).git;
   await asNode(homeA, () => down.run("wt fork try-z @aurora --dirty omit", ctx));
   assert.match(notices.at(-1), /cannot reach pi-session on aurora over SSH/);
 });
