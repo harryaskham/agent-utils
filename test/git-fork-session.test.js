@@ -43,7 +43,12 @@ test("a fork on this host is pi-daemon's own sessions.create with fork, idempote
   const made = await createForkSession({ sessionId: "chord-src", conversationId: 3, fromCwd: "/w", path: "/wt/x", title: "x", at: 5 }, { env, settings, connect });
   assert.deepEqual(made, { id: "chord-new", title: "x", cwd: "/wt/x" });
   const create = calls.find((call) => call.method === "sessions.create");
-  assert.deepEqual(create.params, { requestId: forkRequestId(["local", "chord-src", 3, "/wt/x", "x", 5]), fork: { sessionId: "chord-src", conversationId: 3 }, cwd: "/wt/x", title: "x" });
+  // It is a fork (both sessions go on): pi-daemon marks the source with that, and nobody else is moved.
+  assert.deepEqual(create.params, { requestId: forkRequestId(["local", "chord-src", 3, "/wt/x", "x", 5]), fork: { sessionId: "chord-src", conversationId: 3, kind: "fork" }, cwd: "/wt/x", title: "x" });
+  // Told which command of a client asked, it says so, and the session is the same one (its own request id is not that).
+  const asked = fakeHosts({ aurora: { "host.info": () => ({ _meta: { [SESSION_FORK_META]: true } }), "sessions.create": (params) => ({ id: "chord-new", cwd: params.cwd }) } });
+  await createForkSession({ sessionId: "chord-src", conversationId: 3, fromCwd: "/w", path: "/wt/x", title: "x", at: 5, requestId: "ahp:culture:turn-7" }, { env, settings, connect: asked.connect });
+  assert.deepEqual(asked.calls.find((call) => call.method === "sessions.create").params, { ...create.params, fork: { sessionId: "chord-src", conversationId: 3, kind: "fork", requestId: "ahp:culture:turn-7" } });
   assert.equal(create.options.timeoutMs, 300_000, "copying a long conversation may take minutes");
   assert.deepEqual(closed, ["aurora"]);
   assert.match(forkRequestId(["a"]), /^pi-git-fork-[0-9a-f]{32}$/);
@@ -113,8 +118,9 @@ test("context pages, copy batches and the module's call", async () => {
   await assert.rejects(forkSessionFor({ sessionId: "s" }, { path: "/p", title: "x", at: 1 }), (error) => error.code === "unsupported");
   // The worker's own PI_DAEMON_URL wins over the session's variables.
   const seen = [];
-  const connect = async (host) => (seen.push(host.url), { call: async (method) => (method === "host.info" ? { _meta: { [SESSION_FORK_META]: true } } : { id: "n" }), close() {} });
-  const ctx = { sessionId: "s", conversationId: 1, cwd: "/w", harness: { conversation: async () => ({}) }, env: { all: async () => ({ PI_DAEMON_URL: "http://elsewhere:1" }) } };
+  const forks = [];
+  const connect = async (host) => (seen.push(host.url), { call: async (method, params) => (method === "host.info" ? { _meta: { [SESSION_FORK_META]: true } } : (forks.push(params.fork), { id: "n" })), close() {} });
+  const ctx = { sessionId: "s", conversationId: 1, cwd: "/w", requestId: "pi-client-abc", harness: { conversation: async () => ({}) }, env: { all: async () => ({ PI_DAEMON_URL: "http://elsewhere:1" }) } };
   const before = process.env.PI_DAEMON_URL;
   process.env.PI_DAEMON_URL = "http://127.0.0.1:7999";
   try {
@@ -124,6 +130,11 @@ test("context pages, copy batches and the module's call", async () => {
     else process.env.PI_DAEMON_URL = before;
   }
   assert.deepEqual(seen, ["http://127.0.0.1:7999"]);
+  // The command's own request id goes with it; a pi-daemon that tells the module none gets none.
+  assert.deepEqual(forks, [{ sessionId: "s", conversationId: 1, kind: "fork", requestId: "pi-client-abc" }]);
+  const { requestId: _none, ...older } = ctx;
+  await forkSessionFor(older, { path: "/p", title: "x", at: 1 }, { settings: { hosts: [] }, connect, env: { PI_DAEMON_URL: "http://127.0.0.1:7999" } });
+  assert.deepEqual(forks[1], { sessionId: "s", conversationId: 1, kind: "fork" });
 });
 
 async function gitRepo(t) {

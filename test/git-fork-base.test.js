@@ -287,6 +287,6 @@ test("the client part says the base a fork starts on as it opens it", async () =
   watches[0]({ values: { forked: { at: 0 } } });
   watches[0]({ values: { forked: { path: "/wt/x", branch: "x", at: 5, base: { ref: "origin/main", commit: "0123456789abcdef0123456789abcdef01234567" } } } });
   await Promise.resolve();
-  assert.deepEqual(created, [{ cwd: "/wt/x", title: "x", carry: true }]);
+  assert.deepEqual(created, [{ cwd: "/wt/x", title: "x", carry: true, kind: "fork" }]);
   assert.deepEqual(notices, ["Opening x, on origin/main 0123456789ab: copying this conversation into a session there…"]);
 });

@@ -147,7 +147,8 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
     // Copying a long conversation takes a while: say so at once, rather than nothing until it opens.
     here.ui?.notify?.(`Opening ${forked.branch}${host === undefined ? "" : ` on ${host}`}${base}: copying this conversation into a session there…`, "info");
     try {
-      await sessionsApi.create({ ...(host === undefined ? {} : { host }), cwd: forked.path, title: forked.branch, carry: true });
+      // A fork: both sessions go on, and pi-daemon marks this one so (a pi-client before that ignores `kind`).
+      await sessionsApi.create({ ...(host === undefined ? {} : { host }), cwd: forked.path, title: forked.branch, carry: true, kind: "fork" });
     } catch (error) {
       here.ui?.notify?.(`Cannot open a session in ${forked.path}${host === undefined ? "" : ` on ${host}`}: ${error?.message ?? error} (${cd} continues there)`, "error");
     }

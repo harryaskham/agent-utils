@@ -107,8 +107,14 @@ const refusedModel = (error) => error?.code === "invalid_argument" && /model|thi
  * other node, if any (`agent`: this conversation's model and thinking level for it). Throws
  * ForkSessionError "unsupported" when this pi-daemon cannot fork sessions, "unknown-host"
  * when `node` is not in client.hosts; anything else is a failure there.
+ *
+ * On this host the create says how the conversation goes on (`kind: "fork"`: both sessions go
+ * on) and which command of a client asked (`requestId`, when the module was told): pi-daemon
+ * marks this session with them, and the client that asked follows its own fork while no other
+ * is moved (pi-daemon bd-829c1f). A pi-daemon that does not mark ignores both. Across nodes
+ * this daemon learns nothing of the session made there, and marks nothing.
  */
-export async function createForkSession({ sessionId, conversationId, fromCwd, path, title, node, at, agent }, { env = process.env, settings, connect = connectHost } = {}) {
+export async function createForkSession({ sessionId, conversationId, fromCwd, path, title, node, at, agent, requestId }, { env = process.env, settings, connect = connectHost } = {}) {
   const hosts = settings ?? readClientSettings(agentDirOf(env));
   const here = resolveDaemonHost("", { settings: hosts, env });
   const local = await connect(here);
@@ -118,7 +124,12 @@ export async function createForkSession({ sessionId, conversationId, fromCwd, pa
       if (info?._meta?.[SESSION_FORK_META] !== true) throw new ForkSessionError("unsupported", "this pi-daemon cannot fork sessions (1.14 or later can)");
       const created = recordOf(await local.call("sessions.create", {
         requestId: forkRequestId(["local", sessionId, conversationId ?? null, path, title, at]),
-        fork: { sessionId, ...(conversationId === undefined ? {} : { conversationId }) },
+        fork: {
+          sessionId,
+          ...(conversationId === undefined ? {} : { conversationId }),
+          kind: "fork",
+          ...(typeof requestId === "string" && requestId !== "" ? { requestId } : {}),
+        },
         cwd: path,
         title,
       }, { timeoutMs: FORK_CREATE_TIMEOUT_MS }));
@@ -185,7 +196,9 @@ export async function forkSessionFor(ctx, { path, title, node, at }, options = {
   }
   // This worker's own variables win: PI_DAEMON_URL is its own host's, whatever the session sets.
   const env = typeof ctx.env?.all === "function" ? { ...(await ctx.env.all().catch(() => ({}))), ...process.env } : process.env;
-  return createForkSession({ sessionId: ctx.sessionId, conversationId: ctx.conversationId, fromCwd: ctx.cwd, path, title, node, at, agent }, { env, ...options });
+  // The id of the client's command that runs this (pi-daemon 1.15 tells module commands theirs).
+  const requestId = typeof ctx.requestId === "string" ? ctx.requestId : undefined;
+  return createForkSession({ sessionId: ctx.sessionId, conversationId: ctx.conversationId, fromCwd: ctx.cwd, path, title, node, at, agent, ...(requestId === undefined ? {} : { requestId }) }, { env, ...options });
 }
 
 export { localNodeName };

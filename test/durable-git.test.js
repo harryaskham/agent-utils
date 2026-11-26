@@ -178,7 +178,7 @@ test("the client part publishes each session's git state, and opens a session fo
   assert.deepEqual(created, []);
   watches[0].onValue({ values: { workspace: { repo: true, branch: "main" }, forked: { path: "/wt/x", branch: "x", at: 2 } } });
   await Promise.resolve();
-  assert.deepEqual(created, [{ cwd: "/wt/x", title: "x", carry: true }]);
+  assert.deepEqual(created, [{ cwd: "/wt/x", title: "x", carry: true, kind: "fork" }]);
   // A consumer drawing another session's pane: followed when the live ctx is that session's.
   events.emit(GIT_REQUEST, { sessionId: "b" });
   assert.equal(watches.length, 1);
@@ -451,7 +451,7 @@ test("the client part opens a fork made on another node there (ctx.sessions.crea
   watches[0]({ values: { forked: { at: 0 } } });
   watches[0]({ values: { forked: { path: "/home/b/wt/x", branch: "x", host: "aurora", at: 5 } } });
   await Promise.resolve();
-  assert.deepEqual(created, [{ host: "aurora", cwd: "/home/b/wt/x", title: "x", carry: true }]);
+  assert.deepEqual(created, [{ host: "aurora", cwd: "/home/b/wt/x", title: "x", carry: true, kind: "fork" }]);
   // Said at once: copying a long conversation takes a while.
   assert.deepEqual(notices, ["Opening x on aurora: copying this conversation into a session there…"]);
 });
@@ -486,7 +486,7 @@ test("a fork opens in the pane /git wt fork was typed in, wherever focus is when
   focused = "right";
   watches[0].onValue({ values: { forked: { path: "/wt/x", branch: "x", at: Date.now() + 1 } } });
   await Promise.resolve();
-  assert.deepEqual(panes.left.created, [{ cwd: "/wt/x", title: "x", carry: true }], "in the pane it was typed in");
+  assert.deepEqual(panes.left.created, [{ cwd: "/wt/x", title: "x", carry: true, kind: "fork" }], "in the pane it was typed in");
   assert.deepEqual(panes.right.created, []);
 
   // The left pane shows another session when the record comes: no session, but where to go.
@@ -507,7 +507,7 @@ test("a fork opens in the pane /git wt fork was typed in, wherever focus is when
   assert.equal(third.session, "d");
   third.onValue({ values: { forked: { path: "/wt/z", branch: "z", at: Date.now() + 3 } } });
   await Promise.resolve();
-  assert.deepEqual(panes.right.created, [{ cwd: "/wt/z", title: "z", carry: true }]);
+  assert.deepEqual(panes.right.created, [{ cwd: "/wt/z", title: "z", carry: true, kind: "fork" }]);
   // Other text is left alone, and an old record in a first value stays history.
   assert.equal(typed("/git status"), undefined);
   panes.right.session = "e";
