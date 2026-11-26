@@ -1753,3 +1753,15 @@ test("extension in pi-client: a pane follows the host's slot only while thoughts
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("settings: /thoughts style (or suffix) sets a house style; none clears it", async () => {
+  const { parseSettingChange } = await import("../extensions/lib/visual-thoughts/config.js");
+  const { normalizeImagePrompt, buildImagePromptRequest, createDigest } = await import("../extensions/lib/visual-thoughts/prompter.js");
+  assert.deepEqual(parseSettingChange("style", "lofi style, nord theme"), { key: "style", value: "lofi style, nord theme" });
+  assert.deepEqual(parseSettingChange("suffix", "lofi style, nord theme"), { key: "style", value: "lofi style, nord theme" });
+  for (const clear of ["none", "off", "clear", "-"]) assert.deepEqual(parseSettingChange("style", clear), { key: "style", value: "" });
+  assert.equal(normalizeImagePrompt("A quiet harbour at dusk", { style: "lofi style, nord theme" }), "A quiet harbour at dusk. lofi style, nord theme");
+  const digest = createDigest();
+  digest.add("text", "the harbour");
+  assert.match(buildImagePromptRequest({ digest: digest.snapshot(), style: "lofi style, nord theme" }).systemPrompt + JSON.stringify(buildImagePromptRequest({ digest: digest.snapshot(), style: "lofi style, nord theme" }).messages), /House style to keep to: lofi style, nord theme/);
+});

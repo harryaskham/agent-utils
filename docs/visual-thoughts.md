@@ -71,7 +71,7 @@ Only a terminal that shows kitty graphics paints: where pi-tui detects none, or 
 | `provider` | `litellm` | `litellm` or `mai` |
 | `imageModel` | `mai-image-2.7-flash` | a LiteLLM image model (`gpt-image-2.6-flare`, `mai-image-2.7`); with `provider: mai`, the deployment |
 | `size`, `quality` | `1536x1024`, `low` | MAI models: the aspect only (1152×768); no quality |
-| `style` | | appended to every prompt |
+| `style` | | a house style: the prompt model keeps to it and it ends every image prompt (`/thoughts style lofi, nord palette`, or `suffix`; `/thoughts style none` clears it) |
 | `opacity` | `0.3` | backdrop alpha |
 | `canvasOpacity` | `0.45` | backdrop alpha blended into `/gfx full`'s background (`canvas-opacity` at runtime) |
 | `canvasBlend` | `0.6` | on `/gfx full` (gfx-core): how much the painting's dark parts give way to the background (`canvas-blend`) |

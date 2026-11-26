@@ -97,7 +97,7 @@ const STRINGS = new Set(["promptModel", "clientPromptModel", "imageModel", "size
 /** Seconds-friendly aliases for the millisecond settings, and short names. */
 const ALIASES = Object.freeze({
   hold: ["holdMs", 1000], "canvas-opacity": ["canvasOpacity", 1], "canvas-blend": ["canvasBlend", 1], fade: ["fadeMs", 1000], interval: ["minIntervalMs", 1000], "min-show": ["minShowMs", 1000],
-  model: ["imageModel", 1], "image-model": ["imageModel", 1], "prompt-model": ["promptModel", 1], "per-hour": ["budgetPerHour", 1], "client-prompt-model": ["clientPromptModel", 1], "chat-models": ["clientPromptModel", 1],
+  model: ["imageModel", 1], "image-model": ["imageModel", 1], "prompt-model": ["promptModel", 1], "per-hour": ["budgetPerHour", 1], suffix: ["style", 1], "client-prompt-model": ["clientPromptModel", 1], "chat-models": ["clientPromptModel", 1],
   "max-images": ["maxImages", 1], images: ["slotImages", 1], "slot-images": ["slotImages", 1], "per-run": ["maxPerRun", 1], "per-minute": ["budgetPerMinute", 1], concurrent: ["budgetConcurrent", 1], "min-set": ["minSet", 1], pixels: ["transitionPixels", 1],
 });
 
@@ -168,6 +168,8 @@ export function parseSettingChange(name, value) {
   const key = alias ? alias[0] : name;
   const scale = alias ? alias[1] : 1;
   if (!(key in DEFAULTS) || key === "enabled") return { error: `unknown setting '${name}'` };
+  // `/thoughts style none` (or off, clear, -): no house style.
+  if (key === "style" && /^\s*(none|off|clear|-)\s*$/i.test(String(value ?? ""))) return { key, value: "" };
   const input = scale !== 1 && Number.isFinite(Number(value)) ? Number(value) * scale : value;
   const normalized = normalizeSetting(key, input);
   if (normalized === undefined) return { error: `invalid value for ${key}: '${value}'` };
