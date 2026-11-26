@@ -14,6 +14,7 @@ import { execFile } from "node:child_process";
 import { ForkBaseConflict, describeBase, forkBaseNote, forkOnBase } from "./git-fork-base.js";
 import { peerCall } from "./session-fork/core.js";
 import { forkWorktreeOnNode, repoStatusOnNode } from "./session-fork/worktree.js";
+import { forkSessionFor } from "./fork-session.js";
 import { mkdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -434,6 +435,31 @@ function noteSaid(noted) {
   return "";
 }
 
+/**
+ * The fork's session, made now on the worktree's host (./fork-session.js), so every client lists
+ * it: `{ made }`, `{ skipped }` with --no-session, or `{ error }` (the client part may still make
+ * one: pi-client's cross-host clone, or a host before pi-daemon 1.14).
+ */
+async function makeForkSession(forkSession, ctx, fork) {
+  if (fork.noSession) return { skipped: true };
+  try {
+    return { made: await forkSession(ctx, fork) };
+  } catch (error) {
+    return { error };
+  }
+}
+
+/** The fork record's part about its session, for the client part. */
+const sessionRecord = (session) => (session.made ? { session: { id: session.made.id, title: session.made.title, ...(session.made.host ? { host: session.made.host } : {}) } } : session.skipped ? { noSession: true } : {});
+
+/** What the notice says of the session: where it is, or why there is none ("unsupported" says nothing: pi-client makes one, as before). */
+function sessionSaid(session, cd) {
+  if (session.made) return ` Session "${session.made.title}" there has this conversation; every client lists it.`;
+  if (session.skipped) return ` No session (--no-session): ${cd} continues this conversation there.`;
+  if (session.error?.code === "unsupported") return "";
+  return ` No session was made there (${session.error?.message ?? session.error}): ${cd} continues this conversation there.`;
+}
+
 /** A rebase that could not be done, as /git wt fork says it: nothing forked. */
 function rebaseRefusal(name, node, error, existed) {
   const where = node === undefined ? "" : ` @${node}`;
@@ -478,18 +504,18 @@ export function nodeStatusText(node, status) {
 }
 
 /** The module's commands: /git (status), /git wt list, /git wt fork NAME [--rebase[=BASE]] [@node], /git @node. */
-export function createGitCommands(refresher, { run = runGit, root, tmp, peerFor = (node) => (payload) => peerCall({ remote: node }, payload) } = {}) {
+export function createGitCommands(refresher, { run = runGit, root, tmp, peerFor = (node) => (payload) => peerCall({ remote: node }, payload), forkSession = forkSessionFor } = {}) {
   const envOf = async (ctx) => gitEnv(typeof ctx.env?.get === "function" ? await ctx.env.get().catch(() => ({})) : {});
   return {
     git: {
-      description: "Git for this session's directory: /git (status, refreshed now), /git wt list, /git wt fork NAME (a worktree and branch NAME, under ~/.local/state/pi-daemon/worktrees), /git wt fork NAME @node (there, with this conversation), --rebase[=BASE] (the fork on freshly fetched BASE, default origin's default branch), /git @node",
+      description: "Git for this session's directory: /git (status, refreshed now), /git wt list, /git wt fork NAME (a worktree and branch NAME, under ~/.local/state/pi-daemon/worktrees, and a session there with this conversation), /git wt fork NAME @node (there), --rebase[=BASE] (the fork on freshly fetched BASE, default origin's default branch), --no-session (the worktree only), /git @node",
       // Pi's argument completions (pi-daemon reads them; older hosts ignore them).
       getArgumentCompletions(prefix) {
         const text = String(prefix ?? "").trimStart().toLowerCase();
         return [
           { value: "status", label: "status", description: "Refresh now and show the state" },
           { value: "wt list", label: "wt list", description: "The repository's worktrees" },
-          { value: "wt fork ", label: "wt fork NAME [--rebase[=BASE]] [@node]", description: "A worktree on a new branch, and a session there (on another node with @node; on freshly fetched BASE, else origin's default branch, with --rebase)" },
+          { value: "wt fork ", label: "wt fork NAME [--rebase[=BASE]] [--no-session] [@node]", description: "A worktree on a new branch, and a session there with this conversation (on another node with @node; on freshly fetched BASE, else origin's default branch, with --rebase; the worktree only with --no-session)" },
           { value: "@", label: "@node", description: "This repository on another node" },
         ].filter((item) => item.value.startsWith(text));
       },
@@ -502,6 +528,9 @@ export function createGitCommands(refresher, { run = runGit, root, tmp, peerFor 
         const dirtyAt = words.indexOf("--dirty");
         const dirty = dirtyAt >= 0 ? words[dirtyAt + 1] : undefined;
         if (dirtyAt >= 0) words.splice(dirtyAt, 2);
+        // `--no-session`: the worktree only; otherwise its session is made now, for every client.
+        const noSession = words.includes("--no-session");
+        words = words.filter((word) => word !== "--no-session");
         const taken = takeRebase(words);
         const rebase = taken.rebase;
         words = taken.words;
@@ -552,11 +581,13 @@ export function createGitCommands(refresher, { run = runGit, root, tmp, peerFor 
             }
             const at = Date.now();
             const noted = placed === undefined ? undefined : await keepForkNote(ctx, { name, path: forked.path, host: node, placed, at });
-            // The client part opens a session there with this conversation (pi-daemon's cross-host clone).
-            await ctx.state.set("forked", { path: forked.path, branch: forked.branch, created: forked.created, host: node, from: ctx.cwd, at, ...(placed ? { base: baseRecord(placed) } : {}) });
+            // Its session there, with this conversation (after the note, so the copy has it).
+            const session = await makeForkSession(forkSession, ctx, { path: forked.path, title: forked.branch, node, at, noSession });
+            // The client part opens that session (or, with none, makes one by pi-daemon's cross-host clone).
+            await ctx.state.set("forked", { path: forked.path, branch: forked.branch, created: forked.created, host: node, from: ctx.cwd, at, ...(placed ? { base: baseRecord(placed) } : {}), ...sessionRecord(session) });
             const sent = forked.sent ? (placed !== undefined && placed.how === "rebased" ? "with its rebased commits" : "with this repository's unpushed commits") : "";
             const how = [forked.cloned ? "cloned there" : "", sent].filter(Boolean).join(", ");
-            return ctx.notify(`Worktree ${forked.path} on ${node}, on ${forked.created ? "new " : ""}branch ${forked.branch}${placed ? `, ${describeBase(placed)}` : ""}${how ? ` (${how})` : ""}.${noteSaid(noted)}`);
+            return ctx.notify(`Worktree ${forked.path} on ${node}, on ${forked.created ? "new " : ""}branch ${forked.branch}${placed ? `, ${describeBase(placed)}` : ""}${how ? ` (${how})` : ""}.${noteSaid(noted)}${sessionSaid(session, `/cd @${node} ${forked.path}`)}`);
           }
           if (action === "fork") {
             if (!name) return ctx.notify("/git wt fork NAME: a name for the worktree and its branch.");
@@ -570,9 +601,11 @@ export function createGitCommands(refresher, { run = runGit, root, tmp, peerFor 
             const at = Date.now();
             const { placed, previous, ...made } = forked;
             const noted = placed === undefined ? undefined : await keepForkNote(ctx, { name, path: forked.path, placed, previous, at });
-            // The client part opens a session there (pi-client), from this record.
-            await ctx.state.set("forked", { ...made, from: ctx.cwd, at, ...(placed ? { base: baseRecord(placed) } : {}) });
-            return ctx.notify(`Worktree ${forked.path} on ${forked.created ? "new " : ""}branch ${forked.branch}${placed ? `, ${describeBase(placed)}` : ""}.${noteSaid(noted)}`);
+            // Its session, with this conversation (after the note, so the copy has it).
+            const session = await makeForkSession(forkSession, ctx, { path: forked.path, title: forked.branch, at, noSession });
+            // The client part opens that session (or, with none, makes one), from this record.
+            await ctx.state.set("forked", { ...made, from: ctx.cwd, at, ...(placed ? { base: baseRecord(placed) } : {}), ...sessionRecord(session) });
+            return ctx.notify(`Worktree ${forked.path} on ${forked.created ? "new " : ""}branch ${forked.branch}${placed ? `, ${describeBase(placed)}` : ""}.${noteSaid(noted)}${sessionSaid(session, `/cd ${forked.path}`)}`);
           }
         }
         return ctx.notify("/git: status, wt list, wt fork NAME [--rebase[=BASE]] [@node], @node");

@@ -37,13 +37,23 @@ No tool is wrapped to guess which repository the agent touched: the agent says s
 | --- | --- |
 | `/git` (or `/git status`) | Refresh now and show the state in one line |
 | `/git wt list` | The repository's worktrees |
-| `/git wt fork NAME` | A worktree on a new branch `NAME` from HEAD (or on `NAME` if it exists), under `$XDG_STATE_HOME/pi-daemon/worktrees/<project>/<NAME>` (default `~/.local/state/...`) |
+| `/git wt fork NAME` | A worktree on a new branch `NAME` from HEAD (or on `NAME` if it exists), under `$XDG_STATE_HOME/pi-daemon/worktrees/<project>/<NAME>` (default `~/.local/state/...`), and a session there with this conversation (below) |
+| `/git wt fork NAME --no-session` | The worktree only |
 | `/git wt fork NAME --rebase[=BASE]` | The same, with branch `NAME` on `BASE` fetched just now (below) |
 | `/git wt fork NAME @node [--dirty omit]` | The same on another pi-daemon node, and this conversation continued there (below); `--rebase[=BASE]` works there too |
 | `/git @node` | This repository on that node: its branch, HEAD, ahead/behind its upstream, worktrees, and whether it has this HEAD |
 | `/repo` | pi-client: pick another session in this repository or its worktrees, and open it |
 
-After `/git wt fork`, the client part opens a session in the new worktree, carrying the conversation, where pi-client lets plugins open sessions. Elsewhere it tells you to `/cd` there.
+### The fork's session
+
+`/git wt fork` makes the fork's session itself, before it answers, so every client lists it at once: pi-client, the web view, Culture and ag, with or without pi-git's client part. It is titled `NAME`, starts in the worktree, and has this conversation as of the command:
+
+- **This host:** pi-daemon's own `sessions.create` with `fork` (1.14 or later). pi-daemon copies the conversation, reasoning included, with its profile, model and thinking level, and adds its note that the directory changed.
+- **`@node`:** a session made on that node over its `/chord`, a host of Pi's `settings.json` `client.hosts` (bearer from `client.tokenFile` or the host's `tokenFile`). It is made with this session's profile where the node has it, and this conversation's model and thinking level, else the node's defaults. This conversation's model context is imported there (`conversation.import`) with the note pi-daemon's cross-host clone adds, that it moved. A failed import removes the session made there.
+
+The same fork asked again (a retried command) makes no second session: its request id comes from the session, conversation, worktree, title and time of the command.
+
+In pi-client, the client part then opens that session in the pane the fork was typed in. A client without the client part shows the notice: pick the session from the session list. When no session can be made (a pi-daemon before 1.14, a node not in `client.hosts`, or a failure, which the notice names), the fork's record says so and pi-client's client part makes one as before (`ctx.sessions.create` carrying the conversation). Elsewhere `/cd` (or `/cd @node DIR`) continues the conversation there. With `--no-session`, nothing opens.
 
 ### A fresh base: `/git wt fork NAME --rebase[=BASE]` (bd-658ee5)
 
@@ -56,7 +66,7 @@ The fork starts on the base as it is now, not as this checkout last saw it. Befo
    - HEAD contains the base already: HEAD as it is;
    - otherwise HEAD's own commits are replayed onto the base, in a temporary detached worktree that writes no refs and runs no hooks. This checkout, its branch and its working tree stay as they are.
 4. **A conflict** aborts that rebase and is reported, naming the commit it stopped at and the conflicted files. Nothing is forked: no worktree, no branch made or moved, and no session opens on the old base.
-5. **The base is said:** this conversation keeps a note (a user message written with no turn, as `/splice` writes them) of the worktree, the branch's commit, and the base: its ref, full commit, subject, and when it was fetched. The note is written before the fork's record, so the session the client part opens there carries it as its first new message, before pi-daemon's note that the directory changed. The notice says the same, and the client part says the base as it opens the fork. While this conversation is working the note lands when its turn ends, so a session opened before then lacks it (the notice says so).
+5. **The base is said:** this conversation keeps a note (a user message written with no turn, as `/splice` writes them) of the worktree, the branch's commit, and the base: its ref, full commit, subject, and when it was fetched. The note is written before the fork's session is made, so that session carries it as its first new message, before pi-daemon's note that the directory changed. The notice says the same, and the client part says the base as it opens the fork. While this conversation is working the note lands when its turn ends, so a session opened before then lacks it (the notice says so).
 
 An existing branch `NAME` is moved to its rebased commit (`git worktree add -B`), and the note says where it was.
 
@@ -69,7 +79,7 @@ With `@node`, the rebase is done here, and the node gets the rebased commit as i
 1. The repository at the same HOME-relative path on the node, cloned from this one's origin when it is missing there (fetched from origin when present). A repository outside HOME, or one missing there with no origin, is refused.
 2. The commits the node lacks, unpushed ones included, in a thin bundle (only what the node's origin heads do not reach). No refs are written here.
 3. A worktree on branch `NAME` at this HEAD under the node's `pi-daemon/worktrees/<project>/<NAME>`. A branch `NAME` there at another commit is refused, not moved. A dirty tree here is refused unless `--dirty omit` (the changes stay here).
-4. The session: the client part asks pi-client for one on that node in the worktree, carrying this conversation (`ctx.sessions.create({ host, cwd, title, carry })`, pi-daemon's cross-host clone, bd-cd7999), which adds a note that it moved. Without it, it says `/cd @node DIR`.
+4. The session on that node, as above. Where it cannot be made, pi-client's client part asks for one there carrying this conversation (`ctx.sessions.create({ host, cwd, title, carry })`, pi-daemon's cross-host clone, bd-cd7999). Without the client part, it says `/cd @node DIR`.
 
 Each fork has a request id from the repository, commit, branch and node: the same fork again reuses its worktree (a receipt on the node), and one that no longer matches fails rather than being redone.
 
