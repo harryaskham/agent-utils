@@ -648,7 +648,7 @@ also receive the daemon's `decision_resolution` DM.
         "speakOnPost": false,
         "timeoutMs": 0,
         "maxPending": 32,
-        "cacophony": { "enabled": true, "pollMs": 3000, "notifyFiler": false }
+        "cacophony": { "enabled": true, "pollMs": 3000, "maxPollMs": 60000, "notifyFiler": false }
       }
     }
   }
@@ -662,7 +662,18 @@ defaults to the `interactive_choice` mirror setting. Environment overrides:
 `PI_ASYNC_CHOICE_INDICATOR`, `PI_ASYNC_CHOICE_NOTIFY`,
 `PI_ASYNC_CHOICE_SPEAK_ON_POST`, `PI_ASYNC_CHOICE_TIMEOUT_MS`,
 `PI_ASYNC_CHOICE_MAX_PENDING`, `PI_ASYNC_CHOICE_CACO_ENABLED`,
-`PI_ASYNC_CHOICE_CACO_POLL_MS` and `PI_ASYNC_CHOICE_CACO_NOTIFY_FILER`.
+`PI_ASYNC_CHOICE_CACO_POLL_MS`, `PI_ASYNC_CHOICE_CACO_MAX_POLL_MS` and
+`PI_ASYNC_CHOICE_CACO_NOTIFY_FILER`.
+
+The Cacophony mirror reads the project's active decisions with one
+`caco decision list` per poll and matches them by id. An answer given in Pi
+settles at once; the poll only finds answers given on Cacophony's surfaces. A
+question is read every `pollMs` for its first minute, then about a tenth as
+often as it has waited (12 s at 2 minutes, 30 s at 5), at most every
+`maxPollMs`. A decision gone from the list is read once with `decision show`,
+which finds its answer. When the list fails, it is retried after a minute,
+doubling to 5 minutes, and each decision is read on its own at most every 5
+minutes; a decision `show` cannot find three times is let go with a warning.
 `/choice off` withdraws pending async questions (telling the agent) and hides
 all choice tools; `/choice on` restores them.
 

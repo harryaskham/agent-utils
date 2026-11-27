@@ -13,6 +13,31 @@ const FALSE_RE = /^(0|false|no|off|disabled)$/i;
 const TERMINAL_CANCELLED = new Set(["discarded", "timed_out", "unavailable"]);
 const MAX_CONTEXT_BYTES = 4096;
 
+// How often the bridge reads Cacophony (bd-831356, bd-fa99e4). Answers given in Pi settle
+// locally at once; the poll only finds answers given on Cacophony's own surfaces. So a question
+// is read every `pollMs` while it is fresh, then about a tenth as often as it has been waiting
+// (2 min: 12 s; 5 min: 30 s), never less often than `maxPollMs`: an answer reaches the agent
+// within about a tenth of the time it waited for one. Each poll is one `decision list`; a
+// decision gone from it is read once with `decision show` (that is how an answer is found).
+export const DEFAULT_DECISION_POLL_MS = 3_000;
+export const DEFAULT_DECISION_MAX_POLL_MS = 60_000;
+/** A question is fresh for this long after it is filed or re-attached. */
+export const DECISION_FRESH_MS = 60_000;
+/**
+ * When the list cannot be used (the call fails, or it leaves out a decision that `show` says is
+ * still active), each decision is read on its own at most this often, and a failing list is
+ * retried with the same backoff.
+ */
+export const DECISION_FALLBACK_MS = 5 * 60_000;
+/** A decision `show` cannot find this many times in a row is let go. */
+export const DECISION_MISSING_LIMIT = 3;
+
+/** The wait before the next poll, for questions waiting `ageMs` (the newest's). */
+export function decisionPollDelay(ageMs, { pollMs = DEFAULT_DECISION_POLL_MS, maxPollMs = DEFAULT_DECISION_MAX_POLL_MS } = {}) {
+  if (!(ageMs >= DECISION_FRESH_MS)) return pollMs;
+  return Math.max(pollMs, Math.min(maxPollMs, Math.round(ageMs / 10)));
+}
+
 function bool(value, fallback) {
   if (value == null || String(value).trim() === "") return fallback;
   if (TRUE_RE.test(String(value).trim())) return true;
@@ -23,8 +48,10 @@ function bool(value, fallback) {
 export function resolveCacophonyDecisionConfig(env = process.env, persisted = {}, syncPersisted = {}, scope) {
   const identity = getCacophonyRuntimeIdentity(env, scope);
   const discovered = Boolean(identity.agentId && identity.project);
-  const pollRaw = env.PI_ASYNC_CHOICE_CACO_POLL_MS ?? persisted.pollMs ?? syncPersisted.pollMs ?? 3000;
-  const pollMs = Number.isFinite(Number(pollRaw)) ? Math.max(500, Math.min(60_000, Math.trunc(Number(pollRaw)))) : 3000;
+  const pollRaw = env.PI_ASYNC_CHOICE_CACO_POLL_MS ?? persisted.pollMs ?? syncPersisted.pollMs ?? DEFAULT_DECISION_POLL_MS;
+  const pollMs = Number.isFinite(Number(pollRaw)) ? Math.max(500, Math.min(60_000, Math.trunc(Number(pollRaw)))) : DEFAULT_DECISION_POLL_MS;
+  const maxRaw = env.PI_ASYNC_CHOICE_CACO_MAX_POLL_MS ?? persisted.maxPollMs ?? DEFAULT_DECISION_MAX_POLL_MS;
+  const maxPollMs = Number.isFinite(Number(maxRaw)) ? Math.max(pollMs, Math.min(15 * 60_000, Math.trunc(Number(maxRaw)))) : Math.max(pollMs, DEFAULT_DECISION_MAX_POLL_MS);
   // Async mirroring follows the sync choice mirror switch unless configured
   // separately, so one operator decision disables both Cacophony surfaces.
   const syncEnabled = bool(env.PI_CHOICE_CACO_ENABLED, bool(syncPersisted.enabled, discovered));
@@ -34,6 +61,7 @@ export function resolveCacophonyDecisionConfig(env = process.env, persisted = {}
     agentId: identity.agentId,
     project: identity.project,
     pollMs,
+    maxPollMs,
     notifyFiler: bool(env.PI_ASYNC_CHOICE_CACO_NOTIFY_FILER, bool(persisted.notifyFiler, false)),
   };
 }
@@ -101,14 +129,17 @@ export function createCacophonyDecisionBridge({
   execFileImpl = execFile,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
+  now = Date.now,
 } = {}) {
   const config = resolveCacophonyDecisionConfig(env, persisted, syncPersisted, scope);
   const handles = new Map(); // decision id -> handle
   let timer = null;
   let polling = false;
-  let listUnreliable = false;
   let discardUnsupported = false;
   let stopped = false;
+  // A failing `decision list` is retried after this long (doubling up to the fallback); 0: it works.
+  let listBackoffMs = 0;
+  let listRetryAt = 0;
 
   const refreshIdentity = () => {
     Object.assign(config, resolveCacophonyDecisionConfig(env, persisted, syncPersisted, scope));
@@ -117,8 +148,14 @@ export function createCacophonyDecisionBridge({
   const call = (args) => execJson(execFileImpl, config.command, [...args, "--json"]);
 
   const armPoll = () => {
-    if (stopped || timer || polling || ![...handles.values()].some((handle) => !handle.stopped)) return;
-    timer = setTimer(poll, config.pollMs);
+    if (stopped || timer || polling) return;
+    const live = [...handles.values()].filter((handle) => !handle.stopped);
+    if (!live.length) return;
+    // The newest question decides: a fresh one is read often even beside old ones.
+    const age = Math.min(...live.map((handle) => now() - (handle.trackedAt ?? now())));
+    let delay = decisionPollDelay(age, config);
+    if (listBackoffMs > 0) delay = Math.max(delay, Math.min(listBackoffMs, listRetryAt - now()));
+    timer = setTimer(poll, Math.max(config.pollMs, delay));
     timer?.unref?.();
   };
 
@@ -130,18 +167,27 @@ export function createCacophonyDecisionBridge({
   };
 
   const showOne = async (handle) => {
+    handle.shownAt = now();
     const decision = data(await call(["decision", "show", "--id", handle.decisionId]));
     if (decision?.found === false) {
-      if (!handle.warnedMissing) {
-        handle.warnedMissing = true;
-        handle.warn?.(`Cacophony decision ${handle.decisionId} is not visible from this node`);
+      handle.missing = (handle.missing ?? 0) + 1;
+      if (handle.missing >= DECISION_MISSING_LIMIT) {
+        // Never invent an answer: stop reading it, and say so.
+        handle.stopped = true;
+        handles.delete(handle.decisionId);
+        handle.warn?.(`Cacophony decision ${handle.decisionId} is not visible from this node; no longer following it there`);
       }
       return "missing";
     }
+    handle.missing = 0;
     const outcome = decisionOutcome(decision, handle.choiceCount);
     if (outcome) deliver(handle, outcome);
     return outcome ? "terminal" : "active";
   };
+
+  // A decision read on its own: at once when the list just lost it (its answer), else at most
+  // once per fallback period.
+  const dueForShow = (handle) => handle.shownAt === undefined || now() - handle.shownAt >= DECISION_FALLBACK_MS;
 
   async function poll() {
     timer = null;
@@ -150,23 +196,34 @@ export function createCacophonyDecisionBridge({
     try {
       const live = [...handles.values()].filter((handle) => !handle.stopped && !handle.settling);
       if (!live.length) return;
+      // One list of the project's active decisions, matched by id: never by filer, which the
+      // daemon may store under another form of this agent's id than the one it was given.
       let active = null;
-      if (!listUnreliable) {
+      if (listBackoffMs === 0 || now() >= listRetryAt) {
         try {
-          const listed = data(await call(["decision", "list", "--status", "active", "--project", config.project, "--filer", config.agentId, "--limit", "500"]));
+          const listed = data(await call(["decision", "list", "--status", "active", "--project", config.project, "--limit", "500"]));
           active = new Set((Array.isArray(listed?.decisions) ? listed.decisions : []).map((decision) => String(decision?.id || "")));
+          listBackoffMs = 0;
         } catch (error) {
-          live[0]?.warn?.(error?.message || String(error));
+          listBackoffMs = Math.min(DECISION_FALLBACK_MS, Math.max(config.maxPollMs, listBackoffMs * 2));
+          listRetryAt = now() + listBackoffMs;
+          live[0]?.warn?.(`caco decision list failed (retrying in ${Math.round(listBackoffMs / 1000)}s): ${error?.message || String(error)}`);
         }
       }
       for (const handle of live) {
         if (handle.stopped || handle.settling) continue;
-        if (active && active.has(handle.decisionId)) continue;
+        if (active?.has(handle.decisionId)) {
+          handle.unlisted = false;
+          continue;
+        }
+        // Gone from a good list: most likely answered, so read it now; a decision the list
+        // keeps leaving out while it is still active, or any decision while the list fails,
+        // is read at the fallback pace only.
+        const listedAway = active !== null && !handle.unlisted;
+        if (!listedAway && !dueForShow(handle)) continue;
         try {
           const state = await showOne(handle);
-          // The decision is still active but the filtered list omitted it: the
-          // daemon normalised our filer differently. Fall back to per-ID reads.
-          if (active && state === "active") listUnreliable = true;
+          handle.unlisted = active !== null && state === "active";
         } catch (error) { handle.warn?.(error?.message || String(error)); }
       }
     } finally {
@@ -202,6 +259,7 @@ export function createCacophonyDecisionBridge({
   };
 
   const track = (handle) => {
+    handle.trackedAt = now();
     handles.set(handle.decisionId, handle);
     if (handle.localResult) void settle(handle, handle.localResult);
     else armPoll();
@@ -217,7 +275,7 @@ export function createCacophonyDecisionBridge({
       if (!config.enabled || stopped) return null;
       const mirrored = choices.filter((choice) => !choice.appended);
       if (mirrored.length < 1) return null;
-      const handle = { decisionId: null, choiceCount: mirrored.length, stopped: false, settling: false, localResult: null, onResolution, warnedMissing: false };
+      const handle = { decisionId: null, choiceCount: mirrored.length, stopped: false, settling: false, localResult: null, onResolution };
       let warned = false;
       handle.warn = (message) => {
         if (warned) return;
@@ -245,7 +303,7 @@ export function createCacophonyDecisionBridge({
     attach({ decisionId, choices, onResolution, onWarning }) {
       refreshIdentity();
       if (!config.enabled || stopped || !decisionId) return null;
-      const handle = { decisionId: String(decisionId), choiceCount: choices.filter((choice) => !choice.appended).length, stopped: false, settling: false, localResult: null, onResolution, warnedMissing: false };
+      const handle = { decisionId: String(decisionId), choiceCount: choices.filter((choice) => !choice.appended).length, stopped: false, settling: false, localResult: null, onResolution };
       let warned = false;
       handle.warn = (message) => { if (warned) return; warned = true; try { onWarning?.(message); } catch {} };
       track(handle);

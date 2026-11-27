@@ -10,7 +10,14 @@ import {
   formatAsyncDelivery,
   renderAsyncChoicesView,
 } from "../extensions/lib/async-choice.js";
-import { createCacophonyDecisionBridge, decisionContext, decisionOutcome } from "../extensions/lib/cacophony-decision.js";
+import {
+  DECISION_FALLBACK_MS,
+  createCacophonyDecisionBridge,
+  decisionContext,
+  decisionOutcome,
+  decisionPollDelay,
+  resolveCacophonyDecisionConfig,
+} from "../extensions/lib/cacophony-decision.js";
 import { ChoiceStateMachine, CHOICE_SESSION_EVENT, INPUT_ACTION_EVENT, INPUT_ACTIONS, normalizeChoices } from "../extensions/lib/choice.js";
 import { ChoiceView, choiceTextWidth } from "../extensions/lib/choice-layout.js";
 import { DURABLE_QUESTION_DONE_EVENT, DURABLE_QUESTION_EVENT } from "../extensions/lib/ahp-choice.js";
@@ -420,4 +427,149 @@ test("async_choice questions reach pi-durable-adaptor's bus and its answer steer
   assert.ok(steer, "the answer is delivered to the agent");
   assert.equal(steer.options.deliverAs, "steer");
   assert.deepEqual(h.events.emitted.filter((event) => event.name === DURABLE_QUESTION_DONE_EVENT).map((event) => event.value.id), [region.id]);
+});
+
+// bd-831356, bd-fa99e4: the bridge was the largest client of Cacophony's decision API (a CLI per
+// 3 s per question, and a `show` per decision per poll once its list was left unused).
+function decisionHarness({ listFails = false, listOmits = new Set(), project = "proj" } = {}) {
+  const calls = [];
+  const remote = new Map();
+  let clock = 1_000_000;
+  const state = { listFails, listOmits };
+  const execFileImpl = (_command, args, _options, callback) => {
+    calls.push(args);
+    const [, verb] = args;
+    const value = (flag) => args[args.indexOf(flag) + 1];
+    if (verb === "file") {
+      const id = `decision-${remote.size + 1}`;
+      remote.set(id, { id, status: "active" });
+      return callback(null, JSON.stringify({ data: { decision_id: id } }), "");
+    }
+    if (verb === "list") {
+      if (state.listFails) return callback(Object.assign(new Error("exit 1"), { code: 1 }), "", "error: daemon unavailable");
+      return callback(null, JSON.stringify({ data: { decisions: [...remote.values()].filter((item) => item.status === "active" && !state.listOmits.has(item.id)) } }), "");
+    }
+    if (verb === "show") return callback(null, JSON.stringify({ data: remote.get(value("--id")) || { found: false } }), "");
+    callback(null, JSON.stringify({ data: {} }), "");
+  };
+  const delays = [];
+  const bridge = createCacophonyDecisionBridge({
+    env: { CACO_AGENT_ID: "agent-1", CACO_PROJECT: project },
+    execFileImpl,
+    setTimer: (_fn, ms) => { delays.push(ms); return { unref() {} }; },
+    clearTimer() {},
+    now: () => clock,
+  });
+  return {
+    bridge, calls, remote, delays, state,
+    advance(ms) { clock += ms; },
+    verbs() { return calls.map((args) => args[1]); },
+    async file(onResolution = () => {}, warnings = []) {
+      const started = bridge.start({ asyncId: `ac-${remote.size + 1}`, question: "Q?", choices: normalizeChoices(choices), onResolution, onWarning: (message) => warnings.push(message) });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return started;
+    },
+  };
+}
+
+test("decision polling slows as a question waits: 3 s while fresh, then a tenth of its age, at most a minute", async () => {
+  assert.equal(decisionPollDelay(0), 3_000);
+  assert.equal(decisionPollDelay(59_000), 3_000);
+  assert.equal(decisionPollDelay(2 * 60_000), 12_000);
+  assert.equal(decisionPollDelay(5 * 60_000), 30_000);
+  assert.equal(decisionPollDelay(3 * 60 * 60_000), 60_000);
+  assert.equal(resolveCacophonyDecisionConfig({ CACO_AGENT_ID: "a", CACO_PROJECT: "p" }).maxPollMs, 60_000);
+  assert.equal(resolveCacophonyDecisionConfig({ CACO_AGENT_ID: "a", CACO_PROJECT: "p", PI_ASYNC_CHOICE_CACO_MAX_POLL_MS: "300000" }).maxPollMs, 300_000);
+
+  const h = decisionHarness();
+  await h.file();
+  assert.deepEqual(h.delays, [3_000]);
+  h.advance(20 * 60_000);
+  await h.bridge.pollNow();
+  assert.equal(h.delays.at(-1), 60_000, "an old question is read once a minute");
+  // A new question brings the pace back to 3 s for itself.
+  await h.file();
+  h.advance(3_000);
+  await h.bridge.pollNow();
+  assert.equal(h.delays.at(-1), 3_000);
+});
+
+test("each poll is one list of the project's active decisions, matched by id, never by filer", async () => {
+  const h = decisionHarness();
+  await h.file();
+  await h.file();
+  await h.file();
+  h.calls.length = 0;
+  for (let i = 0; i < 5; i += 1) await h.bridge.pollNow();
+  assert.deepEqual(h.verbs(), ["list", "list", "list", "list", "list"], "no show while the list holds every decision");
+  const list = h.calls[0];
+  assert.equal(list.includes("--filer"), false, "a filer the daemon stores in another form must not hide our decisions");
+  assert.equal(list[list.indexOf("--project") + 1], "proj");
+});
+
+test("a decision the list leaves out while still active is read once, then only every 5 minutes; no latch", async () => {
+  const h = decisionHarness();
+  await h.file();
+  await h.file();
+  h.state.listOmits.add("decision-1");
+  h.calls.length = 0;
+  await h.bridge.pollNow();
+  assert.deepEqual(h.verbs(), ["list", "show"]);
+  for (let i = 0; i < 10; i += 1) { h.advance(3_000); await h.bridge.pollNow(); }
+  assert.equal(h.verbs().filter((verb) => verb === "show").length, 1, "not shown again within the fallback period");
+  h.advance(DECISION_FALLBACK_MS);
+  await h.bridge.pollNow();
+  assert.equal(h.verbs().filter((verb) => verb === "show").length, 2);
+  // Its answer is still found, and the list is used again for the other.
+  Object.assign(h.remote.get("decision-1"), { status: "resolved", resolution: { selected_index: 0 } });
+  h.state.listOmits.clear();
+  h.calls.length = 0;
+  h.advance(DECISION_FALLBACK_MS);
+  await h.bridge.pollNow();
+  assert.deepEqual(h.verbs(), ["list", "show"]);
+  assert.equal(h.bridge.pendingCount, 1);
+});
+
+test("a failing list backs off to a minute, then up to 5 minutes, with no show per decision per poll", async () => {
+  const h = decisionHarness({ listFails: true });
+  const warnings = [];
+  await h.file(() => {}, warnings);
+  await h.file(() => {}, warnings);
+  h.calls.length = 0;
+  await h.bridge.pollNow();
+  assert.deepEqual(h.verbs(), ["list", "show", "show"], "each decision is read once when the list first fails");
+  assert.match(warnings[0], /caco decision list failed \(retrying in 60s\): error: daemon unavailable/);
+  assert.equal(h.delays.at(-1), 60_000);
+  h.calls.length = 0;
+  for (let i = 0; i < 20; i += 1) { h.advance(3_000); await h.bridge.pollNow(); }
+  assert.deepEqual(h.verbs(), ["list"], "one retry after a minute, no shows");
+  assert.equal(h.delays.at(-1) >= 60_000, true);
+  // The retries double to the fallback period; the decisions are read at that pace.
+  h.calls.length = 0;
+  h.advance(5 * 60_000);
+  await h.bridge.pollNow();
+  assert.deepEqual(h.verbs(), ["list", "show", "show"]);
+  // When the list works again, polling is as before.
+  h.state.listFails = false;
+  h.calls.length = 0;
+  h.advance(5 * 60_000);
+  await h.bridge.pollNow();
+  await h.bridge.pollNow();
+  assert.deepEqual(h.verbs(), ["list", "list"]);
+});
+
+test("a decision show cannot find is let go after three tries, with one warning", async () => {
+  const h = decisionHarness();
+  const warnings = [];
+  const resolutions = [];
+  await h.file((value) => resolutions.push(value), warnings);
+  h.remote.delete("decision-1");
+  for (let i = 0; i < 3; i += 1) { h.advance(DECISION_FALLBACK_MS); await h.bridge.pollNow(); }
+  assert.equal(h.bridge.pendingCount, 0);
+  assert.deepEqual(resolutions, [], "no answer is invented");
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /not visible from this node; no longer following it/);
+  h.calls.length = 0;
+  await h.bridge.pollNow();
+  assert.deepEqual(h.verbs(), [], "nothing left to read");
 });
