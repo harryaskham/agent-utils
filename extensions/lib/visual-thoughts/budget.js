@@ -14,7 +14,7 @@ export function isTransientPaintError(error) {
 
 export function createPaintBudget({
   concurrent = 1,
-  perMinute = 4,
+  perMinute = 1,
   perHour = Infinity,
   now = () => Date.now(),
   timers = { setTimeout, clearTimeout },

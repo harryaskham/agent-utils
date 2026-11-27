@@ -646,7 +646,7 @@ test("extension in pi-client: each pane paints its own session; prompts over the
     return new Response(JSON.stringify({ data: [{ b64_json: solidPng(16, 9, [requests.length * 20, 40, 60]).toString("base64") }] }));
   };
   const extension = createVisualThoughtsExtension({
-    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minIntervalMs: 0, fadeMs: 0 } } },
+    settings: { agentUtils: { visualThoughts: { enabled: true, firstChars: 5, minIntervalMs: 0, fadeMs: 0, budgetPerMinute: 60 } } },
     env: { PI_VISUAL_THOUGHTS_DIR: dir, LITELLM_BASE_URL: "http://proxy:4000", LITELLM_MASTER_KEY: "k" },
     fetchImpl,
   });

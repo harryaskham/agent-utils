@@ -64,7 +64,7 @@ export const DEFAULTS = Object.freeze({
   // One budget for every painting of a process (a pi-daemon worker's sessions, a pi-client's
   // panes): at most this many at once, and started per minute; struggling providers pause all.
   budgetConcurrent: 1,
-  budgetPerMinute: 4,
+  budgetPerMinute: 1,
   budgetPerHour: 12,
   // Raise it (any larger number) to drop every session's own `/thoughts <setting>` changes, once.
   overridesEpoch: 0,
