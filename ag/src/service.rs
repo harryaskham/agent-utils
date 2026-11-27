@@ -6,7 +6,10 @@ use crate::{
     store, transport,
 };
 use mcp_cli::{JsonError, McpServer, StdioServerConfig, ToolRouter};
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tokio::{runtime::Runtime, sync::mpsc, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 
@@ -379,6 +382,7 @@ pub async fn local_tail(
     tx: &mpsc::Sender<TailEvent>,
     cancel: &CancellationToken,
 ) -> Result<()> {
+    let mut wake = FeedWake::new(&path);
     let mut reader = store::TailReader::new(path, lines, *cursor)?;
     loop {
         let (next_reader, events) = blocking(move || {
@@ -396,7 +400,163 @@ pub async fn local_tail(
                 result = tx.send(event) => result.map_err(|_| Error::Transport("tail consumer closed".into()))?,
             }
         }
-        tokio::select! { _ = cancel.cancelled() => return Ok(()), _ = tokio::time::sleep(Duration::from_millis(poll_ms)) => () }
+        if wake.wait(poll_ms, cancel).await {
+            return Ok(());
+        }
+    }
+}
+
+/// A follower whose feed is watched still rereads it this often, for changes no event reports.
+pub const FEED_BACKSTOP: Duration = Duration::from_secs(30);
+
+/// What wakes a tail to read its feed again (bd-ae7e2b). On Linux, inotify on the feed's
+/// directory: an idle follower then sleeps until the feed changes (or, at most,
+/// [`FEED_BACKSTOP`]), instead of rereading it every `poll_ms`. Elsewhere, or while the
+/// directory cannot be watched (not created yet), the `poll_ms` timer.
+pub struct FeedWake {
+    #[cfg(target_os = "linux")]
+    path: PathBuf,
+    #[cfg(target_os = "linux")]
+    watch: Option<feed_watch::Watch>,
+}
+
+impl FeedWake {
+    pub fn new(path: &Path) -> Self {
+        #[cfg(not(target_os = "linux"))]
+        let _ = path;
+        Self {
+            #[cfg(target_os = "linux")]
+            path: path.to_path_buf(),
+            #[cfg(target_os = "linux")]
+            watch: None,
+        }
+    }
+
+    /// Whether the feed is watched for changes (else read every `poll_ms`).
+    pub fn watching(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        return self.watch.is_some();
+        #[cfg(not(target_os = "linux"))]
+        false
+    }
+
+    /// Wait until the feed may have changed; true when cancelled.
+    pub async fn wait(&mut self, poll_ms: u64, cancel: &CancellationToken) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            if self.watch.is_none() {
+                self.watch = feed_watch::Watch::new(&self.path).ok();
+            }
+            if let Some(watch) = &mut self.watch {
+                let backstop = tokio::time::sleep(FEED_BACKSTOP);
+                tokio::pin!(backstop);
+                loop {
+                    tokio::select! {
+                        _ = cancel.cancelled() => return true,
+                        _ = &mut backstop => return false,
+                        changed = watch.changed() => match changed {
+                            Ok(true) => return false,
+                            Ok(false) => continue,
+                            // The directory went away, or the watch failed: read now, then watch
+                            // again (or fall back to the timer while that cannot be done).
+                            Err(_) => { self.watch = None; return false; }
+                        },
+                    }
+                }
+            }
+        }
+        tokio::select! {
+            _ = cancel.cancelled() => true,
+            _ = tokio::time::sleep(Duration::from_millis(poll_ms)) => false,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod feed_watch {
+    use nix::sys::inotify::{AddWatchFlags, InitFlags, Inotify};
+    use std::{
+        ffi::OsString,
+        io,
+        os::fd::{AsFd, AsRawFd, RawFd},
+        path::Path,
+    };
+    use tokio::io::unix::AsyncFd;
+
+    struct Fd(Inotify);
+    impl AsRawFd for Fd {
+        fn as_raw_fd(&self) -> RawFd {
+            self.0.as_fd().as_raw_fd()
+        }
+    }
+
+    /// inotify on the directory of one file: a rotated or recreated feed is still seen.
+    pub struct Watch {
+        fd: AsyncFd<Fd>,
+        name: OsString,
+    }
+
+    impl Watch {
+        pub fn new(path: &Path) -> io::Result<Self> {
+            let name = path
+                .file_name()
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "feed path has no file name")
+                })?
+                .to_os_string();
+            let dir = path
+                .parent()
+                .filter(|dir| !dir.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            let inotify = Inotify::init(InitFlags::IN_NONBLOCK | InitFlags::IN_CLOEXEC)?;
+            inotify.add_watch(
+                dir,
+                AddWatchFlags::IN_MODIFY
+                    | AddWatchFlags::IN_CLOSE_WRITE
+                    | AddWatchFlags::IN_CREATE
+                    | AddWatchFlags::IN_DELETE
+                    | AddWatchFlags::IN_MOVED_FROM
+                    | AddWatchFlags::IN_MOVED_TO
+                    | AddWatchFlags::IN_ATTRIB
+                    | AddWatchFlags::IN_DELETE_SELF
+                    | AddWatchFlags::IN_MOVE_SELF,
+            )?;
+            Ok(Self {
+                fd: AsyncFd::new(Fd(inotify))?,
+                name,
+            })
+        }
+
+        /// Wait for events: true when one is about the feed (or events were lost), false when
+        /// all were about other files. An error when the directory itself went away.
+        pub async fn changed(&mut self) -> io::Result<bool> {
+            let mut guard = self.fd.readable().await?;
+            match guard.get_inner().0.read_events() {
+                Ok(events) => {
+                    let mut feed = false;
+                    for event in &events {
+                        if event.mask.intersects(
+                            AddWatchFlags::IN_IGNORED
+                                | AddWatchFlags::IN_DELETE_SELF
+                                | AddWatchFlags::IN_MOVE_SELF,
+                        ) {
+                            return Err(io::Error::other("feed directory is gone"));
+                        }
+                        if event.mask.contains(AddWatchFlags::IN_Q_OVERFLOW)
+                            || event.name.as_ref().is_none_or(|name| *name == self.name)
+                        {
+                            feed = true;
+                        }
+                    }
+                    Ok(feed)
+                }
+                Err(nix::errno::Errno::EAGAIN) => {
+                    guard.clear_ready();
+                    Ok(false)
+                }
+                Err(error) => Err(error.into()),
+            }
+        }
     }
 }
 fn media_root(kind: MediaKind, host: &Host) -> Result<PathBuf> {

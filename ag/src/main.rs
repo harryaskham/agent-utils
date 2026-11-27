@@ -449,6 +449,9 @@ enum NodeCommand {
         poll_ms: u64,
         #[arg(long)]
         watch_stdin: bool,
+        /// With --watch-stdin: end this long after the reader's last heartbeat, once it has sent one.
+        #[arg(long, default_value_t = ag::transport::FOLLOW_SILENCE_MS, hide = true)]
+        heartbeat_timeout_ms: u16,
     },
     ImageList {
         #[arg(long)]
@@ -910,6 +913,7 @@ fn node(command: NodeCommand) -> Result<u8> {
             cursor,
             poll_ms,
             watch_stdin,
+            heartbeat_timeout_ms,
         } => {
             if !(100..=60000).contains(&poll_ms) {
                 return Err(Error::Invalid("poll-ms must be 100–60000".into()));
@@ -939,25 +943,37 @@ fn node(command: NodeCommand) -> Result<u8> {
                         }
                         Ok(())
                     });
+                    // The reader's stdin (bd-ae7e2b): its end (EOF) ends the follow, and so does
+                    // silence once it has sent heartbeats (`ag dash` writes a byte every
+                    // FOLLOW_HEARTBEAT_SECONDS): a follower whose reader is gone without closing
+                    // the pipe (tailscale ssh keeps it open) ends instead of running for days. A
+                    // reader that never sends one keeps the follow until EOF, as before. The
+                    // thread sleeps in poll() until input or the heartbeat window ends; it is a
+                    // plain thread, so a follow ending another way never waits for it.
                     let stdin_cancel = cancel.clone();
-                    let stdin_watcher = watch_stdin.then(|| tokio::task::spawn_blocking(move || {
-                        use std::{io::Read, os::fd::AsFd};
-                        let mut stdin = io::stdin();
-                        let mut byte = [0u8; 1];
-                        while !stdin_cancel.is_cancelled() {
-                            let mut fds = [nix::poll::PollFd::new(stdin.as_fd(), nix::poll::PollFlags::POLLIN)];
-                            match nix::poll::poll(&mut fds, 100u16) {
-                                Ok(0) => (),
-                                Ok(_) => if stdin.read(&mut byte).unwrap_or(0) == 0 { stdin_cancel.cancel(); break; },
-                                Err(nix::errno::Errno::EINTR) => (),
-                                Err(_) => { stdin_cancel.cancel(); break; }
+                    if watch_stdin {
+                        std::thread::spawn(move || {
+                            use std::{io::Read, os::fd::AsFd};
+                            let mut stdin = io::stdin();
+                            let mut buffer = [0u8; 64];
+                            let mut heartbeats = false;
+                            while !stdin_cancel.is_cancelled() {
+                                let mut fds = [nix::poll::PollFd::new(stdin.as_fd(), nix::poll::PollFlags::POLLIN)];
+                                match nix::poll::poll(&mut fds, heartbeat_timeout_ms.max(100)) {
+                                    Ok(0) => if heartbeats { stdin_cancel.cancel(); break; },
+                                    Ok(_) => match stdin.read(&mut buffer) {
+                                        Ok(0) | Err(_) => { stdin_cancel.cancel(); break; }
+                                        Ok(_) => heartbeats = true,
+                                    },
+                                    Err(nix::errno::Errno::EINTR) => (),
+                                    Err(_) => { stdin_cancel.cancel(); break; }
+                                }
                             }
-                        }
-                    }));
+                        });
+                    }
                     let work = service::local_tail(path, lines, &mut cursor, poll_ms, &tx, &cancel);
                     let result = tokio::select! { value = work => value, _ = tokio::signal::ctrl_c() => Ok(()) };
                     cancel.cancel(); drop(tx);
-                    if let Some(watcher) = stdin_watcher { let _ = watcher.await; }
                     let written = writer.await.map_err(|e| Error::Transport(e.to_string()))?;
                     result.and(written)
                 })?;

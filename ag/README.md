@@ -415,6 +415,8 @@ reconnect_seconds: 3
 poll_ms: 500
 ```
 
+`poll_ms` is how often a follower rereads a TTS feed it cannot watch. On Linux a follower watches the feed's directory with inotify instead and sleeps until the feed changes, rereading it at most every 30 s as a backstop. `ag dash` sends each node follower a heartbeat on stdin every 15 s, and a follower that has had heartbeats ends after 60 s without one, so one whose collector has gone does not keep running even while the ssh session holds its stdin open.
+
 Without a config, only the local machine is selected. With one, all enabled nodes are selected unless `--host NAME` is supplied. `--local` bypasses SSH/fleet selection. `--tts-feed` / `--image-dir` / `--audio-dir` override selected reader paths. `~/` resolves on the **target** machine, never on the collector. A remote node must have `ag` installed (or set its absolute `command`). SSH initializes the **remote account's login shell** (`$SHELL -lc`) before resolving that executable; the collector's PATH is never copied onto another node. Login-profile output is diverted to bounded SSH stderr so JSON and binary stdout stay clean. PATH configured only in interactive shell files should be moved to the login environment, or use an absolute `command`.
 
 Running `cltv-run ag` or `nix run .#ag` on the collector does **not** install `ag` on remote nodes. If it is still unavailable after login initialization, apply each node's updated Collective configuration (operator-run switch) or point `hosts[].command` at an already installed executable. The transport reports this explicitly and never runs a remote build/install or system switch on your behalf.
