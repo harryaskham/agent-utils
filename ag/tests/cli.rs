@@ -670,6 +670,101 @@ fn peer_stops_on_stdin_eof_even_when_feed_does_not_exist() {
     wait_exit(&mut child.0, 5);
 }
 
+/// bd-ae7e2b: a follower whose reader has sent heartbeats ends when they stop, though its stdin
+/// stays open (tailscale ssh keeps the pipe after the collector has gone); one whose reader never
+/// sent any (an older `ag dash`) keeps following until EOF.
+#[test]
+fn peer_ends_when_heartbeats_stop_and_not_before_any() {
+    let f = Fixture::new();
+    f.append("hello");
+    let mut child = OwnedChild(
+        f.command()
+            .args([
+                "node",
+                "tts",
+                "--path",
+                f.feed.to_str().unwrap(),
+                "--follow",
+                "--watch-stdin",
+                "--poll-ms",
+                "100",
+                "--heartbeat-timeout-ms",
+                "400",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let mut stdin = child.0.stdin.take().unwrap();
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(
+        child.0.try_wait().unwrap().is_none(),
+        "no heartbeat yet: still following"
+    );
+    // Heartbeats keep it going past the timeout.
+    let mut last = Instant::now();
+    for _ in 0..8 {
+        stdin.write_all(b"\n").unwrap();
+        stdin.flush().unwrap();
+        last = Instant::now();
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    assert!(
+        child.0.try_wait().unwrap().is_none(),
+        "heartbeats keep the follow"
+    );
+    // Silence with the pipe still open: it ends.
+    wait_exit(&mut child.0, 5);
+    assert!(
+        last.elapsed() >= Duration::from_millis(350),
+        "ended only after the timeout"
+    );
+    drop(stdin);
+}
+
+/// bd-ae7e2b: on Linux a follower sleeps until its feed changes (inotify on the feed's
+/// directory), so a new line arrives at once even with a minute-long poll, and a rotated feed
+/// is still followed.
+#[cfg(target_os = "linux")]
+async fn next_speech(rx: &mut tokio::sync::mpsc::Receiver<TailEvent>) -> String {
+    loop {
+        match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
+            Ok(Some(TailEvent::Speech { record, .. })) => return record.text,
+            Ok(Some(_)) => continue,
+            other => panic!("no speech within 3 s: {other:?}"),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_tail_wakes_on_feed_changes_not_on_a_timer() {
+    let f = Fixture::new();
+    f.append("first");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let path = f.feed.clone();
+    let task_cancel = cancel.clone();
+    let task = tokio::spawn(async move {
+        let mut cursor = None;
+        ag::service::local_tail(path, 10, &mut cursor, 60_000, &tx, &task_cancel).await
+    });
+    assert_eq!(next_speech(&mut rx).await, "first");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    f.append("second");
+    assert_eq!(next_speech(&mut rx).await, "second");
+    fs::rename(&f.feed, f.temp.path().join("old.jsonl")).unwrap();
+    f.append("rotated");
+    assert_eq!(next_speech(&mut rx).await, "rotated");
+    // Other files in the directory do not wake it into reading anything new.
+    fs::write(f.temp.path().join("other.txt"), "x").unwrap();
+    f.append("third");
+    assert_eq!(next_speech(&mut rx).await, "third");
+    cancel.cancel();
+    task.await.unwrap().unwrap();
+}
+
 #[test]
 fn mute_cli_defaults_to_all_nodes_and_types_and_reports_partial_failure() {
     let f = Fixture::new();

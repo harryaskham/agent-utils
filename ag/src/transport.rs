@@ -166,6 +166,11 @@ async fn line(reader: &mut (impl AsyncBufRead + Unpin)) -> Result<Option<Vec<u8>
     }
 }
 
+/// `ag dash` writes one byte to a node follower's stdin this often (bd-ae7e2b).
+pub const FOLLOW_HEARTBEAT_SECONDS: u64 = 15;
+/// A follower that has had heartbeats ends after this long without one: its reader is gone.
+pub const FOLLOW_SILENCE_MS: u16 = 60_000;
+
 pub async fn stream(
     config: &Config,
     host: &Host,
@@ -197,6 +202,21 @@ pub async fn stream(
         .spawn()?;
     let mut reader = BufReader::new(child.stdout.take().expect("piped stdout"));
     let errors = tokio::spawn(drain_error(child.stderr.take().expect("piped stderr")));
+    // Heartbeats to the follower's --watch-stdin: when they stop, it ends, even where the ssh
+    // session outlives this end of it.
+    let heartbeat = child.stdin.take().map(|mut stdin| {
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let mut tick = tokio::time::interval(Duration::from_secs(FOLLOW_HEARTBEAT_SECONDS));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                if stdin.write_all(b"\n").await.is_err() || stdin.flush().await.is_err() {
+                    break;
+                }
+            }
+        })
+    });
     let work = async {
         let mut started = false;
         loop {
@@ -225,6 +245,9 @@ pub async fn stream(
         Err(Error::Transport("node stream disconnected".into()))
     };
     let result = tokio::select! { _ = cancel.cancelled() => Ok(()), value = work => value };
+    if let Some(heartbeat) = heartbeat {
+        heartbeat.abort();
+    }
     stop(&mut child).await;
     let stderr = errors.await.ok().and_then(|v| v.ok()).unwrap_or_default();
     result.map_err(|error| {
