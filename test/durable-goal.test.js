@@ -1,8 +1,8 @@
 // /goal for pi-daemon sessions (extensions/lib/durable-goal.js through loop.mjs): goals share the
 // loops document and numbers; /goal adds one (a conversation may have several); one task per
 // conversation nudges for all its open goals in one message until goal_done ends each. A goal ends
-// only when it is ended (goal_done, the operator, its nudge limit): an interruption pauses it
-// until a later run is answered, and failed runs are tried again, further apart.
+// only when it is ended (goal_done, the operator): an interruption pauses it until a later run
+// is answered, its nudge limit until /goal resume, and failed runs are tried again, further apart.
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -73,6 +73,10 @@ test("/goal arguments: add one (with --max), list, and done or stop one, all, or
   assert.deepEqual(parseGoalArgs("done 3"), { verb: "done", which: 3 });
   assert.deepEqual(parseGoalArgs("stop #12"), { verb: "stop", which: 12 });
   assert.match(parseGoalArgs("done three").error, /Not a goal number/);
+  assert.deepEqual(parseGoalArgs("resume"), { verb: "resume", which: undefined });
+  assert.deepEqual(parseGoalArgs("resume #3"), { verb: "resume", which: 3 });
+  assert.deepEqual(parseGoalArgs("Resume all"), { verb: "resume", which: "all" });
+  assert.deepEqual(parseGoalArgs("resume the migration"), { goal: "resume the migration", maxNudges: 50 }, "a goal that begins with the word");
   assert.deepEqual(parseGoalArgs("all tests pass on main"), { goal: "all tests pass on main", maxNudges: 50 });
   assert.deepEqual(parseGoalArgs("--max 5 ship the release"), { goal: "ship the release", maxNudges: 5 });
   assert.deepEqual(parseGoalArgs("ship it --max=7"), { goal: "ship it", maxNudges: 7 });
@@ -90,7 +94,7 @@ test("/goal adds goals as /loop adds loops: one task per conversation, listed, e
 
   await loop.run("5m Check the inbox", ctx);
   await goal.run("--max 20 all tests pass on main", ctx);
-  assert.match(notices.at(-1), /^Goal #2 added: "all tests pass on main"\. .*at most 20 times.*\/goal done 2 or \/goal stop 2/);
+  assert.match(notices.at(-1), /^Goal #2 added: "all tests pass on main"\. .*after 20 nudges the goal pauses until \/goal resume 2\..*\/goal done 2 or \/goal stop 2/);
   await goal.run("docs updated", ctx);
   assert.match(notices.at(-1), /^Goal #3 added: "docs updated"\..* 2 goals are open; each nudge lists them all\./);
   const goalTasks = store.tasks.filter((entry) => entry.record.kind === GOAL_TASK);
@@ -216,9 +220,10 @@ test("one nudge lists every open goal, counts a nudge for each, and the task end
   assert.equal(store.registry().loops["1"].nudges, 1);
   assert.equal(store.registry().loops["2"].nudges, 1);
 
-  // #2 reaches its limit of 2 and ends; #1 goes on, alone.
+  // #2 reaches its limit of 2 and is paused, kept; #1 goes on, alone.
   await task.definition.phases.watch(watch(task, { phase: "watch", nudges: 1, failures: 0 }), run.runtime, {});
-  assert.equal(store.registry().loops["2"], undefined);
+  assert.deepEqual(store.registry().loops["2"], { taskId: "1", kind: "goal", prompt: "docs updated", maxNudges: 2, nudges: 2, startedAt: 1, conversationId: 1, lastAt: at, paused: "its nudge limit", pausedAt: at });
+  assert.deepEqual(run.results.at(-1), { status: "running", checkpoint: { phase: "watch", nudges: 2, failures: 0 } }, "the task goes on for #1");
   assert.equal(store.registry().loops["1"].nudges, 2);
   await task.definition.phases.watch(watch(task, { phase: "watch", nudges: 2, failures: 0 }), run.runtime, {});
   assert.equal(run.submitted.at(-1).content, `[2026-11-08 12:00:00 UTC] ${goalNudge([{ number: 1, prompt: "all tests pass" }])}`);
@@ -234,7 +239,101 @@ test("one nudge lists every open goal, counts a nudge for each, and the task end
   });
   await task.definition.phases.watch(watch(task, { phase: "watch", nudges: 3, failures: 0 }), done.runtime, {});
   assert.equal(done.results.at(-1).status, "terminal");
-  assert.deepEqual(store.registry().loops, {});
+  assert.deepEqual(Object.keys(store.registry().loops), ["2"], "the paused goal waits without a task");
+  assert.equal(store.registry().loops["2"].nudges, 2, "and was not nudged again");
+});
+
+test("a goal at its nudge limit is paused until the operator resumes it: no answered run or new goal starts it again", async () => {
+  const { store, task } = await goals(["--max 2 ship it"]);
+  let run = goalRuntime(store);
+  await task.definition.phases.watch(watch(task), run.runtime, {});
+  await task.definition.phases.watch(watch(task, { phase: "watch", nudges: 1, failures: 0 }), run.runtime, {});
+  // Its second nudge was its last: it is kept, paused, and its task ends (no other goal).
+  assert.deepEqual(run.results.at(-1), { status: "terminal", outcome: { status: "completed", result: { nudges: 2 } } });
+  assert.deepEqual(store.registry().loops["1"], { taskId: "1", kind: "goal", prompt: "ship it", maxNudges: 2, nudges: 2, startedAt: 1, conversationId: 1, lastAt: at, paused: "its nudge limit", pausedAt: at });
+  store.aborted.push(1); // the goal task has ended
+  // A task that runs once more (a crash before its end was stored) nudges for nothing.
+  await task.definition.phases.watch(watch(task, { phase: "watch", nudges: 2, failures: 0 }), run.runtime, {});
+  assert.equal(run.submitted.length, 2);
+
+  // Listed with how to go on; the chip says paused; the agent is told it is not nudged for it.
+  const { goal } = createGoalCommands({ task, now: () => 61_000 });
+  const { ctx, notices } = commandContext(store);
+  await goal.run("", ctx);
+  assert.equal(notices.at(-1), '#1: goal — "ship it" (2 nudges of 2, running 1m) — paused at its nudge limit: /goal resume 1 continues it');
+  assert.match(loopStatus(store.registry(), 0), /^⟳ 1 loop · #1 goal \(paused\)$/);
+  const section = await goalSection().render({ conversationId: 1, read: { snapshot: async () => store.registry() } }, {});
+  assert.match(section, /^The operator set a goal for this conversation:\n- #1: ship it \(paused at its nudge limit: no more nudges for it until the operator resumes it\)\n/);
+
+  // An answered run does not start it again (any run would: a loop's tick, a job's notice).
+  const resumeTask = createGoalResumeTask({ goalTask: task, now: () => 70_000 });
+  const hook = goalResumeHook({ resumeTask });
+  const hookApi = { conversationId: 1, snapshot: async () => store.registry() };
+  assert.equal(await hook.handlers.onYield({}, hookApi, {}), undefined);
+  const resume = goalRuntime(store, { taskId: 9 });
+  await resumeTask.definition.phases.resume({ input: { conversationId: 1 }, state: { checkpoint: { phase: "resume" } } }, resume.runtime, {});
+  assert.deepEqual(resume.results.at(-1).outcome.result, { resumed: 0 });
+  assert.equal(store.registry().loops["1"].paused, "its nudge limit");
+
+  // Nor does a new goal, which gets a task of its own; an interrupted one beside it still does.
+  await goal.run("write the notes", ctx);
+  const second = store.tasks.at(-1).record.id;
+  assert.equal(store.registry().loops["2"].taskId, String(second));
+  assert.equal(store.registry().loops["1"].paused, "its nudge limit");
+  run = goalRuntime(store, { taskId: second });
+  await task.definition.phases.watch(watch(task), run.runtime, {});
+  assert.match(run.submitted[0].content, /\[goal #2\] Keep working toward this goal: write the notes/, "the nudge is for the new goal alone");
+  run = goalRuntime(store, { taskId: second, settle: () => ({ status: "unanswered", reason: "aborted" }) });
+  await task.definition.phases.watch(watch(task, { phase: "watch", nudges: 1, failures: 0 }), run.runtime, {});
+  assert.equal(store.registry().loops["2"].paused, "interrupted");
+  assert.deepEqual(await hook.handlers.onYield({}, hookApi, {}), { tasks: [{ task: resumeTask, input: { conversationId: 1 } }] });
+  await resumeTask.definition.phases.resume({ input: { conversationId: 1 }, state: { checkpoint: { phase: "resume" } } }, resume.runtime, {});
+  assert.deepEqual(resume.results.at(-1).outcome.result, { resumed: 1 });
+  const third = store.tasks.at(-1).record.id;
+  assert.deepEqual([store.registry().loops["2"].paused, store.registry().loops["2"].taskId], [undefined, String(third)]);
+  assert.equal(store.registry().loops["1"].paused, "its nudge limit");
+
+  // /goal resume N: it joins the conversation's live task and its count starts again.
+  await goal.run("resume 7", ctx);
+  assert.equal(notices.at(-1), "No paused goal #7.");
+  await goal.run("resume 1", ctx);
+  assert.equal(notices.at(-1), 'Goal #1 resumed: "ship it".');
+  assert.deepEqual(store.registry().loops["1"], { taskId: String(third), kind: "goal", prompt: "ship it", maxNudges: 2, nudges: 0, startedAt: 1, conversationId: 1, lastAt: at });
+  await goal.run("resume", ctx);
+  assert.equal(notices.at(-1), "No paused goal to resume.");
+  run = goalRuntime(store, { taskId: third });
+  await task.definition.phases.watch(watch(task), run.runtime, {});
+  assert.match(run.submitted[0].content, /\[goals\] Keep working toward these 2 goals:\n- #1: ship it\n- #2: write the notes\n/);
+  assert.equal(store.registry().loops["1"].nudges, 1);
+
+  // /goal resume (or all) starts every paused goal here at once: an interrupted one keeps its
+  // count, and with no live task they get a new one. Another conversation's are left alone.
+  run = goalRuntime(store, { taskId: third, settle: () => ({ status: "unanswered", reason: "aborted" }) });
+  await task.definition.phases.watch(watch(task, { phase: "watch", nudges: 1, failures: 0 }), run.runtime, {});
+  assert.deepEqual([store.registry().loops["1"].paused, store.registry().loops["2"].paused], ["interrupted", "interrupted"]);
+  const other = commandContext(store, 7);
+  await goal.run("resume all", other.ctx);
+  assert.equal(other.notices.at(-1), "No paused goal to resume.");
+  const before = store.tasks.length;
+  await goal.run("resume", ctx);
+  assert.equal(notices.at(-1), 'Goal #1 resumed: "ship it".\nGoal #2 resumed: "write the notes".');
+  assert.equal(store.tasks.length, before + 1, "one new task for both");
+  const fourth = String(store.tasks.at(-1).record.id);
+  assert.deepEqual([store.registry().loops["1"].taskId, store.registry().loops["2"].taskId], [fourth, fourth]);
+  assert.deepEqual([store.registry().loops["1"].paused, store.registry().loops["1"].nudges], [undefined, 1]);
+  // A goal named by number is resumed from any conversation, on its own conversation's task.
+  store.registry().loops["2"].paused = "its nudge limit";
+  await goal.run("resume 2", other.ctx);
+  assert.equal(other.notices.at(-1), 'Goal #2 resumed: "write the notes".');
+  assert.deepEqual([store.registry().loops["2"].taskId, store.registry().loops["2"].nudges, store.tasks.length], [fourth, 0, before + 1]);
+
+  // Its completions offer the paused goals.
+  store.registry().loops["1"].paused = "its nudge limit";
+  assert.deepEqual(
+    (await goal.getArgumentCompletions("resume ", ctx)).map((item) => item.value),
+    ["resume all", "resume 1"],
+  );
+  assert.ok((await goal.getArgumentCompletions("re", ctx)).some((item) => item.value === "resume "));
 });
 
 test("a goal added after the others ended gets a task of its own; a task with nothing open ends", async () => {

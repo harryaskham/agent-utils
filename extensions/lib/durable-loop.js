@@ -502,9 +502,14 @@ export function loopOperations({ task, now = () => Date.now() }) {
   };
 }
 
+/** Why a goal at its nudge limit is paused (`paused`): only the operator starts it again. */
+export const GOAL_LIMIT_PAUSE = "its nudge limit";
+
 /** What a list says after a paused goal ("" for one that is being nudged). */
 export function pausedNote(goal) {
-  return goal?.paused === undefined ? "" : ` — paused (${goal.paused}): nudged again once a message is answered`;
+  if (goal?.paused === undefined) return "";
+  if (goal.paused === GOAL_LIMIT_PAUSE) return ` — paused at its nudge limit: /goal resume ${goal.number} continues it`;
+  return ` — paused (${goal.paused}): nudged again once a message is answered`;
 }
 
 function describeLoop(loop, now) {
