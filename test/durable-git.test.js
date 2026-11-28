@@ -199,7 +199,7 @@ test("pi-client's sidebar rows can show a followed session's branch and repo (pi
     ui: { notify() {}, requestRender: () => { renders += 1; } },
   };
   gitClient({ on: (type, handler) => handlers.set(type, handler), events: { on() {}, emit() {} }, registerSidebarSegment: (name, segment) => segments.set(name, segment) });
-  assert.deepEqual([...segments.keys()], ["branch", "repo"]);
+  assert.deepEqual([...segments.keys()], ["branch", "repo", "lane"]);
   await handlers.get("session_start")({}, ctx);
   await Promise.resolve();
   const branch = segments.get("branch");
@@ -320,7 +320,8 @@ test("the client part shows the focused session's repository in pi-client's side
 
 test("/git completes its subcommands as Pi's commands do", () => {
   const { git } = createGitCommands(createGitRefresher(), { forkSession: noForkSession });
-  assert.deepEqual(git.getArgumentCompletions("").map((item) => item.value), ["status", "wt list", "wt fork ", "@"]);
+  assert.deepEqual(git.getArgumentCompletions("").map((item) => item.value), ["status", "wt list", "wt fork ", "fork ", "lane", "@"]);
+  assert.deepEqual(git.getArgumentCompletions("f").map((item) => item.value), ["fork "]);
   assert.deepEqual(git.getArgumentCompletions("wt f").map((item) => item.value), ["wt fork "]);
   assert.deepEqual(git.getArgumentCompletions("nope"), []);
 });

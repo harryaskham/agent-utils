@@ -41,6 +41,9 @@ No tool is wrapped to guess which repository the agent touched: the agent says s
 | `/git wt fork NAME --no-session` | The worktree only |
 | `/git wt fork NAME --rebase[=BASE]` | The same, with branch `NAME` on `BASE` fetched just now (below) |
 | `/git wt fork NAME @node [--dirty omit]` | The same on another pi-daemon node, and this conversation continued there (below); `--rebase[=BASE]` works there too |
+| `/git wt fork NAME focus=TEXT mode=work\|qa` | The same, with the fork in its own lane: it gets a role note, this session a notice, its chip shows the lane, and `mode=qa` makes it without the edit and write tools ([fork lanes](fork-lanes.md)) |
+| `/git fork [NAME] [focus=TEXT] [mode=work\|qa]` | A session in this same directory with this conversation (no worktree), with a lane when given; pi-client's client part opens it |
+| `/git lane` | This session's fork lane, if it has one |
 | `/git @node` | This repository on that node: its branch, HEAD, ahead/behind its upstream, worktrees, and whether it has this HEAD |
 | `/repo` | pi-client: pick another session in this repository or its worktrees, and open it |
 
@@ -51,6 +54,8 @@ No tool is wrapped to guess which repository the agent touched: the agent says s
 - **This host:** pi-daemon's own `sessions.create` with `fork` (1.14 or later). pi-daemon copies the conversation, reasoning included, with its profile, model and thinking level, and adds its note that the directory changed.
   - The create says it is a fork (`kind: "fork"`) and, where pi-daemon tells the module (1.15), which command of a client asked (`fork.requestId`). pi-daemon marks this session with where its conversation went on: both sessions go on, no other client is moved, and the client that typed the command knows the session as its own, so Culture follows its own fork. A pi-daemon that marks nothing ignores both.
 - **`@node`:** a session made on that node over its `/chord`, a host of Pi's `settings.json` `client.hosts` (bearer from `client.tokenFile` or the host's `tokenFile`). It is made with this session's profile where the node has it, and this conversation's model and thinking level, else the node's defaults. This conversation's model context is imported there (`conversation.import`) with the note pi-daemon's cross-host clone adds, that it moved. A failed import removes the session made there.
+
+With `focus=` or `mode=` ([fork lanes](fork-lanes.md), bd-fd98a3), the session made is given its lane: a qa fork is made with this session's built-in tools less `edit` and `write`, then pi-git's own `/git lane apply` runs in it (its role note and its lane, for the chips), and this conversation keeps a notice of the fork, written after the copy. On another node the role note ends the imported context. A lane needs the session, so `--no-session` with one is refused.
 
 The same fork asked again (a retried command) makes no second session: its request id comes from the session, conversation, worktree, title and time of the command.
 

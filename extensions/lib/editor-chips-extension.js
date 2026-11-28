@@ -4,6 +4,9 @@ import { LOOPS_EVENT, LOOPS_REQUEST, nextLoopIn, shortDuration } from "./loop-in
 import { GIT_EVENT, GIT_REQUEST } from "./git-indicator.js";
 import { CONTEXT_LIMIT_DOC, CONTEXT_LIMIT_KEY, branchContextLimit, storedLimit } from "./context-limit.js";
 import { CACOPHONY_STATE_ADDRESS, runtimeAgentChip, stateAgentChip } from "./agent-chip.js";
+import { GIT_STATE_DOC } from "./git-indicator.js";
+import { LANE_STATE_KEY, normalizeLane } from "./fork-lane.js";
+import { createLaneReader } from "./fork-lane-extension.js";
 import { onCacophonyRuntimeIdentity } from "./cacophony-runtime.js";
 import { readAgentSettings, agentSettingsPath } from "../pi-graphics/agent-io.js";
 import { clampRenderedLineToWidth, clampRenderedRowsToWidth } from "../pi-graphics/ansi-width.js";
@@ -104,6 +107,9 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       // its pane is drawn. TUI Pi: a registration redraws the chips.
       agents: new Map(),
       agentUnsubscribe: null,
+      // Each session's fork lane (bd-fd98a3): pi-client follows pi-git's module state; TUI Pi
+      // reads its branch's role note.
+      lanes: new Map(),
       statusCtx: null,
       reportedStatusFailures: new Set(),
     };
@@ -299,6 +305,38 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
       return stateAgentChip(entry.doc, sessionId);
     };
 
+    // The lane chip's lane for the session this ctx draws: TUI Pi's branch (its role note), or
+    // (pi-client) what pi-git keeps in the session's module state, followed from its first draw.
+    const showsLane = configuredFields.has("lane");
+    const branchLane = createLaneReader();
+    const laneFor = (ctx) => {
+      if (!showsLane) return undefined;
+      if (typeof ctx?.chord?.watchDocument !== "function") return branchLane(ctx);
+      const sessionId = sessionIdOf(ctx);
+      if (!sessionId) return undefined;
+      let entry = state.lanes.get(sessionId);
+      if (entry === undefined) {
+        const followed = (entry = { lane: undefined, stop: undefined, stopped: false });
+        state.lanes.set(sessionId, followed);
+        while (state.lanes.size > GIT_DIRECTORIES) {
+          const [oldest, gone] = state.lanes.entries().next().value;
+          state.lanes.delete(oldest);
+          gone.stopped = true;
+          try { gone.stop?.(); } catch {}
+        }
+        Promise.resolve(ctx.chord.watchDocument({ ...GIT_STATE_DOC }, (value) => {
+          if (followed.stopped) return;
+          const lane = normalizeLane(value?.values?.[LANE_STATE_KEY]);
+          if (JSON.stringify(lane) === JSON.stringify(followed.lane)) return;
+          followed.lane = lane;
+          try { state.tui?.requestRender?.(); } catch {}
+        })).then((stop) => {
+          if (followed.stopped) { try { stop?.(); } catch {} } else followed.stop = stop;
+        }, () => {});
+      }
+      return entry.lane;
+    };
+
     const valuesFor = (ctx) => {
       // The session's git as its host reads it (pi-git), else this ctx's directory's, refreshed
       // when missing or stale.
@@ -356,6 +394,7 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         // else this machine's.
         directory: prettyDirectory(ctx.cwd || process.cwd(), ctx.home || env.HOME || env.USERPROFILE),
         agent: agentFor(ctx),
+        lane: laneFor(ctx),
         branch: footerBranch || git?.branch || "",
         inGitRepo: Boolean(git?.inGitRepo) || Boolean(footerBranch),
         additions: git?.additions || 0,
@@ -516,6 +555,11 @@ export function createEditorChipsExtension({ settings, env = process.env, host }
         try { entry.stop?.(); } catch {}
       }
       state.agents.clear();
+      for (const entry of state.lanes.values()) {
+        entry.stopped = true;
+        try { entry.stop?.(); } catch {}
+      }
+      state.lanes.clear();
       try { state.gitUnsubscribe?.(); } catch {}
       state.gitUnsubscribe = null;
       state.loopsUnsubscribe = null;

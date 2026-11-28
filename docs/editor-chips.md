@@ -35,12 +35,13 @@ Available fields are:
 - `directory` — the session's working directory, under `~` by its host's home (pi-client's `ctx.home` for a session on another machine, else this machine's).
   Where a directory is shown and `agent` is not placed, a Cacophony agent's chip goes just before `branch` (else before `directory`), beside it and never in its place.
 - `agent` — a Cacophony agent's project and name, `cacophony▌router`. A native agent's name is the one its configuration declares (`CACOPHONY_AGENT_NAME`), else its full id (`CACO_AGENT_ID`, `CACOPHONY_AGENT`); a visiting agent's (`/caco-agent-register`) is its id, `pi-daemon▌visiting-abcdef`. TUI Pi reads its own identity; pi-client reads each pane's session's from agent-utils' cacophony module (`extensions/durable/cacophony.mjs`), which records a native agent's identity from the session's variables (pi-daemon 1.15's `env.all()`; clients never receive the variables). None when Cacophony is disabled (`DISABLE_PI_CACO`, incognito).
+- `lane` — a fork's lane (bd-fd98a3, [fork lanes](fork-lanes.md)): `⑂ qa▌harbour-qs` (qa, read-only, in the warning colour) or `⑂ work▌docs` (green), its focus cut at 28 characters; none for a session that is not a lane fork. TUI Pi reads it from the session branch's role note; pi-client from pi-git's module state (`pi-daemon.module-state`, key `git`, value `lane`). Unless placed, it goes just after the `working` chip (top left by default).
 - `branch` — current Git branch.
 - `diff` — tracked additions and deletions relative to `HEAD`.
 - `speech` — `/ptt`, `/stt` and `/rt` microphone state: a grey dot when no voice mode is enabled, blue when armed/listening, red on air, amber while transcribing, green after a send. See [the speech indicator](realtime-agent.md#speech-indicator).
 - `meter` — input level, dBFS and a `✎` transcription mark; present only while audio is being captured.
 
-`cwd` aliases `directory`, `caco`/`cacophony` alias `agent`, `thinking` aliases `effort`, `stt`/`ptt`/`mic`/`recording` alias `speech`, and `volume`/`level`/`db` alias `meter`. Unknown and duplicate field names are ignored. `PI_EDITOR_CHIPS_ENABLED` can provide process-local startup enable/disable policy without changing the settings file.
+`cwd` aliases `directory`, `caco`/`cacophony` alias `agent`, `fork` aliases `lane`, `thinking` aliases `effort`, `stt`/`ptt`/`mic`/`recording` alias `speech`, and `volume`/`level`/`db` alias `meter`. Unknown and duplicate field names are ignored. `PI_EDITOR_CHIPS_ENABLED` can provide process-local startup enable/disable policy without changing the settings file.
 
 `hideFooter` defaults to `true`. The extension replaces the ordinary footer because the configured values now live on the editor rails. Extension statuses not represented by the `mcp` chip remain visible on a residual footer line.
 
@@ -77,7 +78,7 @@ Configured `topLeft`, `topCenter` and `topRight` groups share the top rail. The 
 
 When space is constrained, fitting proceeds deterministically:
 
-1. Drop the agent chip's project, leaving its name.
+1. Drop the lane chip's focus, leaving its mode, then the agent chip's project, leaving its name.
 2. Shorten the directory: every component but the last to its first character, a dot-directory keeping its dot (`/home/me/.herdr/worktrees/pi-daemon/pi-client` becomes `/h/m/.h/w/p/pi-client`), then the last component alone. Once shortened it stays so until the longer form has 4 cells to spare, so a ticking working status does not flip it.
 3. Drop the speech hint and the meter's dB label, but only on the row that carries them.
 4. Collapse the branch chip to its Git icon.

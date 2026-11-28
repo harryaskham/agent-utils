@@ -15,6 +15,7 @@ import { ForkBaseConflict, describeBase, forkBaseNote, forkOnBase } from "./git-
 import { peerCall } from "./session-fork/core.js";
 import { forkWorktreeOnNode, repoStatusOnNode } from "./session-fork/worktree.js";
 import { forkSessionFor } from "./fork-session.js";
+import { LANE_STATE_KEY, forkRoleNote, laneSummary, normalizeLane, originalNotice, splitWords, takeLane } from "./fork-lane.js";
 import { mkdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -452,6 +453,51 @@ async function makeForkSession(forkSession, ctx, fork) {
 /** The fork record's part about its session, for the client part. */
 const sessionRecord = (session) => (session.made ? { session: { id: session.made.id, title: session.made.title, ...(session.made.host ? { host: session.made.host } : {}) } } : session.skipped ? { noSession: true } : {});
 
+/**
+ * A fork's lane as it is sent (bd-fd98a3): the lane asked for, with where it came from (this
+ * session's title and directory) and where the fork is. Undefined without one.
+ */
+async function forkLane(ctx, asked, { cwd, branch, host, shared = false, at }) {
+  if (asked === undefined) return undefined;
+  const metadata = typeof ctx.getSessionMetadata === "function" ? await ctx.getSessionMetadata().catch(() => undefined) : undefined;
+  return normalizeLane({ ...asked, from: { sessionId: ctx.sessionId, title: metadata?.name ?? metadata?.title, cwd: ctx.cwd }, cwd, branch, host, shared, at });
+}
+
+/**
+ * After a fork with a lane was made: this conversation's notice of it (keepNote: no turn, and
+ * written after the fork's copy, so the fork has none), and what the command says of it.
+ */
+async function noticeLane(ctx, lane, session, { title, cwd, host, at }) {
+  if (lane === undefined) return "";
+  if (!session.made) return ` Its lane (${laneSummary(lane)}) needs the fork's session, which was not made: nothing was noted.`;
+  const outcome = session.made.lane ?? {};
+  const kept = { ...lane, ...(outcome.restricted ? { restricted: true } : {}) };
+  const noted = await keepNote(ctx, originalNotice(kept, { title, cwd, host }), { forkNotice: { lane: kept, session: session.made.id, ...(host ? { host } : {}) } }, `pi-git.fork-notice:${session.made.id}:${at}`).catch(() => "failed");
+  const rights = lane.mode === "qa" ? (outcome.restricted ? "read-only, without edit and write tools" : "read-only by its note (this host could not take its edit tools)") : "it may edit";
+  const applied =
+    outcome.applied === "applied" ? "it has its role note"
+    : outcome.applied === "no-module" ? "its role note is in its context, but that session has no pi-git to keep its lane for the chips"
+    : outcome.error ? `its role note could not be written there (${outcome.error})`
+    : "its role note is in its context";
+  const told = noted === "written" ? "this session has a notice of it" : noted === "queued" ? "this session's notice of it lands when its turn ends" : "this session could not keep a notice of it";
+  return ` Lane ${laneSummary(lane)} (${rights}): ${applied}; ${told}.`;
+}
+
+/** `/git lane apply LANE` in a fork just made: its role note (unless an import carried it) and its lane, for the chips. */
+async function applyLane(ctx, json) {
+  let raw;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    raw = undefined;
+  }
+  const lane = normalizeLane(raw);
+  if (lane === undefined) return ctx.notify("/git lane apply: not a lane (mode work or qa).");
+  const noted = raw.noted === true ? "carried" : await keepNote(ctx, forkRoleNote(lane), { lane }, `pi-git.lane:${ctx.sessionId}:${lane.at ?? ""}`).catch(() => "failed");
+  await ctx.state.set(LANE_STATE_KEY, lane);
+  return ctx.notify(`Lane ${laneSummary(lane)}${lane.mode === "qa" ? " (read-only)" : ""}${noted === "failed" ? "; its role note could not be written" : ""}.`);
+}
+
 /** What the notice says of the session: where it is, or why there is none ("unsupported" says nothing: pi-client makes one, as before). */
 function sessionSaid(session, cd) {
   if (session.made) return ` Session "${session.made.title}" there has this conversation; every client lists it.`;
@@ -503,26 +549,41 @@ export function nodeStatusText(node, status) {
   return lines.join("\n");
 }
 
-/** The module's commands: /git (status), /git wt list, /git wt fork NAME [--rebase[=BASE]] [@node], /git @node. */
+/**
+ * The module's commands: /git (status), /git wt list, /git wt fork NAME [--rebase[=BASE]] [@node],
+ * /git fork [NAME] (a session in this directory), focus=TEXT mode=work|qa on either (the fork's
+ * lane, bd-fd98a3), /git lane, /git @node.
+ */
 export function createGitCommands(refresher, { run = runGit, root, tmp, peerFor = (node) => (payload) => peerCall({ remote: node }, payload), forkSession = forkSessionFor } = {}) {
   const envOf = async (ctx) => gitEnv(typeof ctx.env?.get === "function" ? await ctx.env.get().catch(() => ({})) : {});
   return {
     git: {
-      description: "Git for this session's directory: /git (status, refreshed now), /git wt list, /git wt fork NAME (a worktree and branch NAME, under ~/.local/state/pi-daemon/worktrees, and a session there with this conversation), /git wt fork NAME @node (there), --rebase[=BASE] (the fork on freshly fetched BASE, default origin's default branch), --no-session (the worktree only), /git @node",
+      description: "Git for this session's directory: /git (status, refreshed now), /git wt list, /git wt fork NAME (a worktree and branch NAME, under ~/.local/state/pi-daemon/worktrees, and a session there with this conversation), /git wt fork NAME @node (there), --rebase[=BASE] (the fork on freshly fetched BASE, default origin's default branch), --no-session (the worktree only), /git fork [NAME] (a session in this directory with this conversation), focus=TEXT mode=work|qa (the fork's lane: it gets a role note, this session a notice; qa refuses edits), /git lane, /git @node",
       // Pi's argument completions (pi-daemon reads them; older hosts ignore them).
       getArgumentCompletions(prefix) {
         const text = String(prefix ?? "").trimStart().toLowerCase();
         return [
           { value: "status", label: "status", description: "Refresh now and show the state" },
           { value: "wt list", label: "wt list", description: "The repository's worktrees" },
-          { value: "wt fork ", label: "wt fork NAME [--rebase[=BASE]] [--no-session] [@node]", description: "A worktree on a new branch, and a session there with this conversation (on another node with @node; on freshly fetched BASE, else origin's default branch, with --rebase; the worktree only with --no-session)" },
+          { value: "wt fork ", label: "wt fork NAME [focus=TEXT] [mode=work|qa] [--rebase[=BASE]] [--no-session] [@node]", description: "A worktree on a new branch, and a session there with this conversation (on another node with @node; on freshly fetched BASE, else origin's default branch, with --rebase; the worktree only with --no-session; a lane with focus=/mode=)" },
+          { value: "fork ", label: "fork [NAME] [focus=TEXT] [mode=work|qa]", description: "A session in this same directory with this conversation, in its own lane: it gets a role note, this session a notice; qa refuses edits" },
+          { value: "lane", label: "lane", description: "This session's fork lane, if it has one" },
           { value: "@", label: "@node", description: "This repository on another node" },
         ].filter((item) => item.value.startsWith(text));
       },
       async run(args, ctx) {
         // `@node` (bd-9fcd6a): another pi-daemon node, reached over SSH by its name; `--dirty omit`;
         // `--rebase[=BASE]` (bd-658ee5): the fork's branch on freshly fetched BASE.
-        let words = String(args ?? "").trim().split(/\s+/).filter(Boolean);
+        // `/git lane apply LANE`: a fork's lane, sent by the command that made it (bd-fd98a3).
+        const applying = /^lane\s+apply\s+(\{[\s\S]*\})\s*$/.exec(String(args ?? "").trim());
+        if (applying) return applyLane(ctx, applying[1]);
+        // Words split at whitespace outside quotes (`focus="a b"` is one).
+        let words = splitWords(args);
+        // `focus=TEXT` and `mode=work|qa` (bd-fd98a3): the fork's lane.
+        const laned = takeLane(words);
+        if (laned.error) return ctx.notify(`/git: ${laned.error}`);
+        const lane = laned.lane;
+        words = laned.words;
         const node = words.find((word) => word.startsWith("@"))?.slice(1);
         words = words.filter((word) => !word.startsWith("@"));
         const dirtyAt = words.indexOf("--dirty");
@@ -538,6 +599,27 @@ export function createGitCommands(refresher, { run = runGit, root, tmp, peerFor 
         if (!ctx.cwd) return ctx.notify("/git: this session's directory is not known.");
         if (node !== undefined && !/^[a-zA-Z0-9_][a-zA-Z0-9_.@:%-]*$/.test(node)) return ctx.notify(`/git: not a node name: @${node}`);
         if (rebase !== undefined && !((sub === "wt" || sub === "worktree") && rest[0] === "fork")) return ctx.notify("/git: --rebase[=BASE] is for /git wt fork NAME.");
+        const forking = sub === "fork" || ((sub === "wt" || sub === "worktree") && rest[0] === "fork");
+        if (lane !== undefined && !forking) return ctx.notify("/git: focus= and mode= are for /git wt fork NAME and /git fork.");
+        if (lane !== undefined && noSession) return ctx.notify("/git: a lane (focus=, mode=) is the fork's session's: drop --no-session.");
+        if (sub === "lane") {
+          const current = normalizeLane(await ctx.state.get(LANE_STATE_KEY));
+          return ctx.notify(current ? `Lane ${laneSummary(current)}${current.mode === "qa" ? " (read-only)" : ""}${current.from?.title ? `, forked from ${current.from.title}` : ""}.` : "This session has no fork lane (/git fork or /git wt fork with focus= and mode= make one).");
+        }
+        if (sub === "fork") {
+          if (node !== undefined) return ctx.notify("/git fork stays in this directory, on this host: /git wt fork NAME @node forks to another node.");
+          if (noSession || dirty !== undefined) return ctx.notify("/git fork: a session in this directory; --no-session and --dirty are for /git wt fork.");
+          const at = Date.now();
+          const metadata = typeof ctx.getSessionMetadata === "function" ? await ctx.getSessionMetadata().catch(() => undefined) : undefined;
+          const title = rest.join(" ").trim() || lane?.focus || `${metadata?.name ?? metadata?.title ?? "session"} (${lane?.mode ?? "fork"})`;
+          const sent = await forkLane(ctx, lane, { cwd: ctx.cwd, shared: true, at });
+          const session = await makeForkSession(forkSession, ctx, { path: ctx.cwd, title, at, ...(sent ? { lane: sent } : {}) });
+          if (!session.made) return ctx.notify(`/git fork: no session was made (${session.error?.message ?? session.error}).`);
+          const said = await noticeLane(ctx, sent, session, { title, cwd: ctx.cwd, at });
+          // The client part opens it, from this record.
+          await ctx.state.set("forked", { path: ctx.cwd, title, here: true, from: ctx.cwd, at, ...(sent ? { lane: sent } : {}), ...sessionRecord(session) });
+          return ctx.notify(`Session "${title}" has this conversation, in this directory; every client lists it.${said}`);
+        }
         if (node !== undefined && (sub === "status" || sub === "st")) {
           try {
             return ctx.notify(nodeStatusText(node, await repoStatusOnNode(ctx.cwd, node, { call: peerFor(node) })));
@@ -581,13 +663,15 @@ export function createGitCommands(refresher, { run = runGit, root, tmp, peerFor 
             }
             const at = Date.now();
             const noted = placed === undefined ? undefined : await keepForkNote(ctx, { name, path: forked.path, host: node, placed, at });
+            const laneSent = await forkLane(ctx, lane, { cwd: forked.path, branch: forked.branch, host: node, at });
             // Its session there, with this conversation (after the note, so the copy has it).
-            const session = await makeForkSession(forkSession, ctx, { path: forked.path, title: forked.branch, node, at, noSession });
+            const session = await makeForkSession(forkSession, ctx, { path: forked.path, title: forked.branch, node, at, noSession, ...(laneSent ? { lane: laneSent } : {}) });
+            const laneSaid = await noticeLane(ctx, laneSent, session, { title: forked.branch, cwd: forked.path, host: node, at });
             // The client part opens that session (or, with none, makes one by pi-daemon's cross-host clone).
-            await ctx.state.set("forked", { path: forked.path, branch: forked.branch, created: forked.created, host: node, from: ctx.cwd, at, ...(placed ? { base: baseRecord(placed) } : {}), ...sessionRecord(session) });
+            await ctx.state.set("forked", { path: forked.path, branch: forked.branch, created: forked.created, host: node, from: ctx.cwd, at, ...(placed ? { base: baseRecord(placed) } : {}), ...(laneSent ? { lane: laneSent } : {}), ...sessionRecord(session) });
             const sent = forked.sent ? (placed !== undefined && placed.how === "rebased" ? "with its rebased commits" : "with this repository's unpushed commits") : "";
             const how = [forked.cloned ? "cloned there" : "", sent].filter(Boolean).join(", ");
-            return ctx.notify(`Worktree ${forked.path} on ${node}, on ${forked.created ? "new " : ""}branch ${forked.branch}${placed ? `, ${describeBase(placed)}` : ""}${how ? ` (${how})` : ""}.${noteSaid(noted)}${sessionSaid(session, `/cd @${node} ${forked.path}`)}`);
+            return ctx.notify(`Worktree ${forked.path} on ${node}, on ${forked.created ? "new " : ""}branch ${forked.branch}${placed ? `, ${describeBase(placed)}` : ""}${how ? ` (${how})` : ""}.${noteSaid(noted)}${sessionSaid(session, `/cd @${node} ${forked.path}`)}${laneSaid}`);
           }
           if (action === "fork") {
             if (!name) return ctx.notify("/git wt fork NAME: a name for the worktree and its branch.");
@@ -601,14 +685,16 @@ export function createGitCommands(refresher, { run = runGit, root, tmp, peerFor 
             const at = Date.now();
             const { placed, previous, ...made } = forked;
             const noted = placed === undefined ? undefined : await keepForkNote(ctx, { name, path: forked.path, placed, previous, at });
+            const laneSent = await forkLane(ctx, lane, { cwd: forked.path, branch: forked.branch, at });
             // Its session, with this conversation (after the note, so the copy has it).
-            const session = await makeForkSession(forkSession, ctx, { path: forked.path, title: forked.branch, at, noSession });
+            const session = await makeForkSession(forkSession, ctx, { path: forked.path, title: forked.branch, at, noSession, ...(laneSent ? { lane: laneSent } : {}) });
+            const laneSaid = await noticeLane(ctx, laneSent, session, { title: forked.branch, cwd: forked.path, at });
             // The client part opens that session (or, with none, makes one), from this record.
-            await ctx.state.set("forked", { ...made, from: ctx.cwd, at, ...(placed ? { base: baseRecord(placed) } : {}), ...sessionRecord(session) });
-            return ctx.notify(`Worktree ${forked.path} on ${forked.created ? "new " : ""}branch ${forked.branch}${placed ? `, ${describeBase(placed)}` : ""}.${noteSaid(noted)}${sessionSaid(session, `/cd ${forked.path}`)}`);
+            await ctx.state.set("forked", { ...made, from: ctx.cwd, at, ...(placed ? { base: baseRecord(placed) } : {}), ...(laneSent ? { lane: laneSent } : {}), ...sessionRecord(session) });
+            return ctx.notify(`Worktree ${forked.path} on ${forked.created ? "new " : ""}branch ${forked.branch}${placed ? `, ${describeBase(placed)}` : ""}.${noteSaid(noted)}${sessionSaid(session, `/cd ${forked.path}`)}${laneSaid}`);
           }
         }
-        return ctx.notify("/git: status, wt list, wt fork NAME [--rebase[=BASE]] [@node], @node");
+        return ctx.notify("/git: status, wt list, wt fork NAME [focus=TEXT] [mode=work|qa] [--rebase[=BASE]] [@node], fork [NAME] [focus=TEXT] [mode=work|qa], lane, @node");
       },
     },
   };

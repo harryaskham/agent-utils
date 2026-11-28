@@ -437,10 +437,10 @@ const speechConfig = resolveEditorChipsConfig({ agentUtils: { editorChips: {
 } } }, {});
 
 test("speech and meter chips resolve into topLeft/bottomLeft with aliases and hidden statuses", () => {
-  assert.deepEqual(speechConfig.topLeft, ["working", "speech"]);
+  assert.deepEqual(speechConfig.topLeft, ["working", "lane", "speech"]);
   assert.deepEqual(speechConfig.bottomLeft, ["meter", "directory"]);
   assert.deepEqual(speechConfig.hiddenStatuses, ["jev"]);
-  assert.deepEqual(config.topLeft, ["working"], "existing layouts gain only the working chip top-left");
+  assert.deepEqual(config.topLeft, ["working", "lane"], "existing layouts gain only the working chip top-left, and a fork's lane after it");
   assert.deepEqual(config.hiddenStatuses, []);
 });
 
@@ -567,7 +567,7 @@ test("what the editor writes into its borders becomes chips, and top and bottom 
 
   // Placed explicitly, a border field stays where it was put.
   const placed = resolveEditorChipsConfig({ editorChips: { enabled: true, bottomLeft: ["working", "directory"] } }, {});
-  assert.deepEqual(placed.bottomLeft, ["working", "directory"]);
+  assert.deepEqual(placed.bottomLeft, ["working", "lane", "directory"], "the lane chip follows the working chip where it is");
   assert.equal(placed.topLeft.includes("working"), false);
 });
 

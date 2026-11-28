@@ -10,13 +10,13 @@ const DEFAULT_FIELDS = Object.freeze({
   bottomLeft: ["directory"],
   bottomCenter: ["branch", "diff"],
 });
-const KNOWN_FIELDS = new Set(["model", "effort", "mcp", "loops", "cost", "context", "directory", "agent", "branch", "diff", "speech", "meter", "working", "scrollUp", "scrollDown"]);
+const KNOWN_FIELDS = new Set(["model", "effort", "mcp", "loops", "cost", "context", "directory", "agent", "lane", "branch", "diff", "speech", "meter", "working", "scrollUp", "scrollDown"]);
 // What the editor itself writes into its borders (pi-client's embedded working status, the
 // "↑ N more" / "↓ N more" scroll markers) becomes chips; unless placed explicitly, they go here.
 const BORDER_FIELDS = Object.freeze([["working", "topLeft", "start"], ["scrollUp", "topRight", "end"], ["scrollDown", "bottomRight", "end"]]);
 const BORDER_RE = /^[─━═]/;
 const SCROLL_RE = /([↑↓])\s*(\d+)\s*more/;
-const FIELD_ALIASES = Object.freeze({ cwd: "directory", caco: "agent", cacophony: "agent", thinking: "effort", stt: "speech", ptt: "speech", mic: "speech", recording: "speech", volume: "meter", level: "meter", db: "meter" });
+const FIELD_ALIASES = Object.freeze({ cwd: "directory", caco: "agent", cacophony: "agent", fork: "lane", thinking: "effort", stt: "speech", ptt: "speech", mic: "speech", recording: "speech", volume: "meter", level: "meter", db: "meter" });
 // Chip text that display aliases may rewrite (view only: colours, compaction and logic keep the
 // real values). "provider" and "model" are the model chip's two halves.
 const ALIAS_FIELDS = Object.freeze(["provider", "model", "effort", "directory", "branch"]);
@@ -56,6 +56,12 @@ export function resolveEditorChipsConfig(settings = {}, env = process.env) {
     const group = CHIP_GROUPS.find((name) => config[name].includes(before));
     const at = config[group].indexOf(before);
     config[group] = [...config[group].slice(0, at), "agent", ...config[group].slice(at)];
+  }
+  // A fork's lane (bd-fd98a3) has a place of its own unless placed: just after the working chip.
+  if (!placed.has("lane")) {
+    const group = CHIP_GROUPS.find((name) => config[name].includes("working")) ?? "topLeft";
+    const at = config[group].indexOf("working") + 1;
+    config[group] = [...config[group].slice(0, at), "lane", ...config[group].slice(at)];
   }
   return config;
 }
@@ -322,6 +328,8 @@ function chipFor(field, values, theme) {
     // A Cacophony agent's chip is its own (by default just before the branch): see resolveEditorChipsConfig.
     case "directory": return renderParts([part("", p.blue), part(values.directory || ".", p.nord3)], { divider: "rounded" });
     case "agent": return values.agent ? agentChip(values, p) : "";
+    // A fork's lane (bd-fd98a3): `⑂ qa▌harbour-qs`, qa (read-only) in the warning colour, work in green.
+    case "lane": return values.lane ? laneChip(values, p) : "";
     case "branch": return values.inGitRepo ? renderParts([part("", p.blue), ...(values.branchCollapsed ? [] : [part(values.branch, p.nord3)])], { divider: "rounded" }) : "";
     case "diff": return values.inGitRepo ? renderParts([part(`+${values.additions || 0}`, p.green), part(`-${values.deletions || 0}`, p.red)], { divider: "vertical" }) : "";
     // No MCP servers: no chip (a 0 only takes room).
@@ -422,6 +430,18 @@ function agentChip(values, p) {
   return renderParts([...(project && !values.agentCompact ? [part(project, p.blue)] : []), part(name, p.nord3)], { divider: "vertical" });
 }
 
+/** Longest focus a lane chip shows before it is cut with "…". */
+export const LANE_FOCUS_CELLS = 28;
+
+/** The lane chip: its mode, then its focus (dropped once compacted), cut to LANE_FOCUS_CELLS. */
+function laneChip(values, p) {
+  const { mode, focus } = values.lane;
+  const chars = [...String(focus || "")];
+  const shown = chars.length > LANE_FOCUS_CELLS ? `${chars.slice(0, LANE_FOCUS_CELLS - 1).join("")}…` : chars.join("");
+  const color = mode === "qa" ? p.orange : darken(p.green);
+  return renderParts([part(`⑂ ${mode}`, color, mode === "qa" ? [0, 0, 0] : [248, 248, 248]), ...(shown && !values.laneCompact ? [part(shown, p.nord3)] : [])], { divider: "vertical" });
+}
+
 function groupFor(fieldNames, values, theme, separator) {
   return fieldNames.map((field) => chipFor(field, values, theme)).filter(Boolean).join(separator);
 }
@@ -449,7 +469,8 @@ function fitValues(width, config, initialValues, theme, separator, memo) {
   const exceeds = () => rows.some((row) => totalWidth(...row) > width);
   // Only the row that actually carries a chip may compact it.
   const exceedsFor = (field) => rows.some((row) => row.some((group) => group.includes(field)) && totalWidth(...row) > width);
-  // An agent chip sheds its project first; a directory shortens step by step.
+  // A lane chip sheds its focus first, an agent chip its project; a directory shortens step by step.
+  if (values.lane && exceedsFor("lane")) values.laneCompact = true;
   if (values.agent && exceedsFor("agent")) values.agentCompact = true;
   while (exceeds() && candidateIndex + 1 < candidates.length) {
     candidateIndex += 1;

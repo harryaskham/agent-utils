@@ -8,10 +8,14 @@
 // pi-client's ctx.sessions). The focused session's repository shows in
 // pi-client's sidebar (setWidget's placement "sidebar", where ctx.ui.hasSidebar); /repo switches
 // to another session in the same repository or one of its worktrees, on the same host. Sidebar rows
-// (pi-client's client.sidebar.rows) can show each followed session's "branch" and "repo". In TUI Pi
+// (pi-client's client.sidebar.rows) can show each followed session's "branch", "repo" and fork
+// "lane". /git fork (a session in the same directory) opens as /git wt fork does. Where pi-client
+// lets a plugin take its /clone (`pi.replaceableCommands` names it), /clone with focus= or mode=
+// is /git fork with that lane (bd-fd98a3), and /clone without them is pi-client's own. In TUI Pi
 // (no ctx.chord) it does nothing.
 import { GIT_EVENT, GIT_REQUEST, GIT_STATE_DOC } from "../lib/git-indicator.js";
 import { workspacePanel } from "../lib/durable-git.js";
+import { laneSummary, normalizeLane, quoteWord, splitWords, takeLane } from "../lib/fork-lane.js";
 
 /** The sidebar panel's key. */
 export const GIT_PANEL = "pi-git";
@@ -84,6 +88,11 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
     return `⎇ ${workspace.branch || (workspace.oid ? `detached ${String(workspace.oid).slice(0, 8)}` : "no commits")}`;
   });
   pi.registerSidebarSegment?.("repo", (session) => repository(session)?.project || undefined);
+  // A fork's lane (bd-fd98a3): `⑂ qa`, as its editor chip says it.
+  pi.registerSidebarSegment?.("lane", (session) => {
+    const lane = sessions.get(String(session?.id ?? ""))?.lane;
+    return lane ? `⑂ ${lane.mode}` : undefined;
+  });
 
   // /repo: another session in this repository (its worktrees too), on the same host.
   pi.registerCommand?.("repo", {
@@ -124,31 +133,40 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
     const cd = host === undefined ? `/cd ${forked.path}` : `/cd @${host} ${forked.path}`;
     // --rebase (bd-658ee5): the base it starts on, fetched just now (the conversation has a note of it).
     const base = typeof forked.base?.ref === "string" && typeof forked.base?.commit === "string" ? `, on ${forked.base.ref} ${forked.base.commit.slice(0, 12)}` : "";
+    // A lane (bd-fd98a3): said as it opens.
+    const lane = normalizeLane(forked.lane);
+    const laneSaid = lane ? ` · lane ${laneSummary(lane)}${lane.mode === "qa" ? " (read-only)" : ""}` : "";
+    // /git wt fork names its branch; /git fork, in the same directory, its session.
+    const label = forked.branch ?? forked.title ?? forked.path;
     // --no-session: the worktree only, as asked.
     if (forked.noSession === true) return;
     const made = typeof forked.session?.id === "string" && forked.session.id !== "" ? forked.session : undefined;
     if (made !== undefined) {
-      const where = `${forked.branch}${host === undefined ? "" : ` on ${host}`}${base}`;
+      const where = `${label}${host === undefined ? "" : ` on ${host}`}${base}`;
       if (typeof sessionsApi?.open !== "function") {
-        tell?.ui?.notify?.(`Session ${made.title ?? forked.branch} is ready in ${where}: pick it in the session list.`, "info");
+        tell?.ui?.notify?.(`Session ${made.title ?? label} is ready in ${where}${laneSaid}: pick it in the session list.`, "info");
         return;
       }
       try {
         await sessionsApi.open({ id: made.id, ...(host === undefined ? {} : { host }) });
+        if (lane) here.ui?.notify?.(`Opened the fork ${made.title ?? label}${laneSaid}; the original has a notice of it.`, "info");
       } catch (error) {
         here.ui?.notify?.(`Cannot open the fork's session ${made.id}${host === undefined ? "" : ` on ${host}`}: ${error?.message ?? error} (pick it in the session list)`, "error");
       }
       return;
     }
+    // /git fork makes its session or nothing: there is no worktree to open one in.
+    if (forked.here === true) return;
+    const without = lane ? ` (without its lane ${laneSummary(lane)}: its host made no session to give it to)` : "";
     if (typeof sessionsApi?.create !== "function") {
-      tell?.ui?.notify?.(`Worktree ${forked.branch} ready${host === undefined ? "" : ` on ${host}`}${base}: ${cd} continues this conversation there.`, "info");
+      tell?.ui?.notify?.(`Worktree ${label} ready${host === undefined ? "" : ` on ${host}`}${base}: ${cd} continues this conversation there${without}.`, "info");
       return;
     }
     // Copying a long conversation takes a while: say so at once, rather than nothing until it opens.
-    here.ui?.notify?.(`Opening ${forked.branch}${host === undefined ? "" : ` on ${host}`}${base}: copying this conversation into a session there…`, "info");
+    here.ui?.notify?.(`Opening ${label}${host === undefined ? "" : ` on ${host}`}${base}: copying this conversation into a session there${without}…`, "info");
     try {
       // A fork: both sessions go on, and pi-daemon marks this one so (a pi-client before that ignores `kind`).
-      await sessionsApi.create({ ...(host === undefined ? {} : { host }), cwd: forked.path, title: forked.branch, carry: true, kind: "fork" });
+      await sessionsApi.create({ ...(host === undefined ? {} : { host }), cwd: forked.path, title: label, carry: true, kind: "fork" });
     } catch (error) {
       here.ui?.notify?.(`Cannot open a session in ${forked.path}${host === undefined ? "" : ` on ${host}`}: ${error?.message ?? error} (${cd} continues there)`, "error");
     }
@@ -161,8 +179,7 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
   const EXPECT_MS = 10 * 60_000;
   // A record this much older than the typed command (clock skew between hosts) is still its own.
   const SKEW_MS = 60_000;
-  pi.on("input", (event, ctx) => {
-    if (!/^\/git\s+(?:wt|worktree)\s+fork(?:\s|$)/.test(String(event?.text ?? "").trim())) return undefined;
+  const expect = (ctx) => {
     const sessionId = sessionIdOf(ctx);
     if (!sessionId) return undefined;
     expected.delete(sessionId);
@@ -170,8 +187,55 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
     while (expected.size > 32) expected.delete(expected.keys().next().value);
     // Followed from now: its record is then a change, not history.
     follow(ctx, sessionId);
+    return sessionId;
+  };
+  pi.on("input", (event, ctx) => {
+    if (!/^\/git\s+(?:(?:wt|worktree)\s+)?fork(?:\s|$)/.test(String(event?.text ?? "").trim())) return undefined;
+    expect(ctx);
     return undefined;
   });
+
+  // /clone, where pi-client lets a plugin take it (bd-fd98a3): with focus= or mode=, /git fork
+  // with that lane, which the module makes and this part opens; without, as pi-client's own: this
+  // conversation copied into a new session (here, or on @host), titled NAME or "… (clone)".
+  const replaceable = Array.isArray(pi.replaceableCommands) ? pi.replaceableCommands : [];
+  if (replaceable.includes("clone")) {
+    pi.registerCommand?.("clone", {
+      description: "Copy this conversation into a new session and switch to it: /clone [@host] [NAME]; focus=TEXT mode=work|qa give the fork a lane (a role note; the original a notice; qa refuses edits)",
+      handler: async (args, ctx) => {
+        const notify = (text, level = "info") => ctx?.ui?.notify?.(text, level);
+        const laned = takeLane(splitWords(args));
+        if (laned.error) return notify(`/clone: ${laned.error}`, "error");
+        const words = [...laned.words];
+        const host = words[0]?.startsWith("@") ? words.shift().slice(1) : undefined;
+        const name = words.join(" ").trim();
+        if (laned.lane) {
+          if (host !== undefined) return notify("/clone @host with a lane: /git wt fork NAME @host focus=… mode=… forks to another node.", "error");
+          if (typeof ctx?.chord?.call !== "function") return notify("/clone with a lane needs a pi-daemon session.", "error");
+          if (!expect(ctx)) return notify("/clone: this pane shows no session.", "error");
+          const lane = `mode=${laned.lane.mode}${laned.lane.focus ? ` ${quoteWord(`focus=${laned.lane.focus}`)}` : ""}`;
+          const text = `/git fork${name ? ` ${quoteWord(name)}` : ""} ${lane}`;
+          try {
+            await ctx.chord.call("conversation.submit", { requestId: `pi-git-clone-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, content: text, wait: true });
+          } catch (error) {
+            notify(`/clone failed: ${error?.message ?? error}`, "error");
+          }
+          return undefined;
+        }
+        if (typeof ctx?.sessions?.create !== "function") return notify("/clone needs pi-client.", "error");
+        const id = sessionIdOf(ctx);
+        const row = typeof ctx.sessions.list === "function" ? ctx.sessions.list().find((candidate) => candidate.id === id) : undefined;
+        const title = name || `${row?.title || "session"} (clone)`;
+        try {
+          await ctx.sessions.create({ ...(host === undefined ? {} : { host }), title, carry: true, kind: "copy" });
+          notify(`Cloned into ${title}${host === undefined ? "" : ` on ${host}`}`);
+        } catch (error) {
+          notify(`/clone failed: ${error?.message ?? error}`, "error");
+        }
+        return undefined;
+      },
+    });
+  }
 
   // Follow a session's git state; `ctx` refers to that session now (pi-client binds the watch to
   // the pane the ctx refers to when it is called).
@@ -191,6 +255,12 @@ export default function gitClient(pi, { maxSessions = 32 } = {}) {
         const values = value?.values ?? {};
         if (values.workspace && typeof values.workspace === "object") entry.workspace = values.workspace;
         if (Array.isArray(values.tracked)) entry.tracked = values.tracked;
+        // A fork's lane (bd-fd98a3), for the sidebar's "lane" segment.
+        const lane = normalizeLane(values.lane);
+        if (Boolean(lane) !== Boolean(entry.lane) || (lane && laneSummary(lane) !== laneSummary(entry.lane))) {
+          entry.lane = lane;
+          live?.ui?.requestRender?.();
+        }
         if (entry.workspace || entry.tracked) publish(sessionId);
         const forked = values.forked;
         const at = Number.isFinite(Number(forked?.at)) ? Number(forked.at) : 0;

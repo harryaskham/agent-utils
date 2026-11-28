@@ -7,9 +7,14 @@
 
 import { createHash } from "node:crypto";
 import { connectHost, localNodeName, readClientSettings, agentDirOf, resolveDaemonHost } from "./daemon-chord.js";
+import { forkRoleNote, qaToolNames } from "./fork-lane.js";
 
 /** pi-daemon's host.info capability for `sessions.create`'s `fork` (1.14+). */
 export const SESSION_FORK_META = "pi-daemon/sessionFork";
+/** pi-daemon's host.info capability for a session's own configuration (its `tools`, bd-a171a8). */
+export const SESSION_PROFILE_META = "pi-daemon/sessionProfile";
+/** Applying a fork's lane there (pi-git's own command in that session) takes no longer. */
+export const LANE_APPLY_TIMEOUT_MS = 60_000;
 /** Copying a long conversation takes a while. */
 export const FORK_CREATE_TIMEOUT_MS = 5 * 60_000;
 const MAX_CONTEXT_PAGES = 1_000;
@@ -100,6 +105,42 @@ export async function findSessionRow(client, sessionId) {
 
 const recordOf = (created) => (created && typeof created === "object" && created.session && typeof created.session === "object" ? created.session : created);
 const refusedModel = (error) => error?.code === "invalid_argument" && /model|thinking/i.test(String(error.message));
+const refusedTools = (error) => /invalid/.test(String(error?.code ?? "")) && /tools/i.test(String(error?.message));
+/** Whether a host's sessions.create takes a session's own `tools` (host.info's `_meta`). */
+const takesTools = (info) => Array.isArray(info?._meta?.[SESSION_PROFILE_META]?.config) && info._meta[SESSION_PROFILE_META].config.includes("tools");
+
+/** The fork's role note, as a message of its model context (a fork made by import carries it so). */
+export function laneMessage(lane) {
+  return { role: "user", content: [{ type: "text", text: forkRoleNote(lane) }], timestamp: Date.now() };
+}
+
+/**
+ * Give a session made just now its lane (bd-fd98a3), by pi-git's own command in it, run there
+ * instead of a turn: `/git lane apply LANE` writes the role note (unless `noted`: an import
+ * carried it) and keeps the lane for the editor chips. Only when that session has pi-git's
+ * `git` command: otherwise the text would be a prompt. "applied", or "no-module".
+ */
+export async function applyLaneThere(client, sessionId, lane, { requestId, noted = false } = {}) {
+  const listed = await client.call("session.commands", { sessionId });
+  const items = Array.isArray(listed?.items) ? listed.items : [];
+  if (!items.some((command) => command?.name === "git" && command.kind === "extension")) return "no-module";
+  const result = await client.call(
+    "conversation.submit",
+    { sessionId, requestId, content: `/git lane apply ${JSON.stringify({ ...lane, ...(noted ? { noted: true } : {}) })}`, whenBusy: "reject", wait: true },
+    { timeoutMs: LANE_APPLY_TIMEOUT_MS },
+  );
+  if (result && typeof result === "object" && result.command !== undefined && result.command !== "git") throw new Error(`that session ran /${result.command}, not pi-git's /git`);
+  return "applied";
+}
+
+/** A lane applied there: `{ restricted, applied }`, or `{ restricted, error }` (the session stays). */
+async function laneOutcome(client, sessionId, lane, restricted, { requestId, noted }) {
+  try {
+    return { restricted, applied: await applyLaneThere(client, sessionId, { ...lane, ...(restricted ? { restricted: true } : {}) }, { requestId, noted }) };
+  } catch (error) {
+    return { restricted, error: error?.message ?? String(error) };
+  }
+}
 
 /**
  * Make the fork's session now and return `{ id, title, cwd, host? }`: in `path`, titled `title`,
@@ -113,8 +154,13 @@ const refusedModel = (error) => error?.code === "invalid_argument" && /model|thi
  * marks this session with them, and the client that asked follows its own fork while no other
  * is moved (pi-daemon bd-829c1f). A pi-daemon that does not mark ignores both. Across nodes
  * this daemon learns nothing of the session made there, and marks nothing.
+ *
+ * With a `lane` (bd-fd98a3, fork-lane.js) the session is given it once made (applyLaneThere;
+ * across nodes its role note also ends the imported context), and the result says how
+ * (`lane: { restricted, applied | error }`). `tools`, for a qa lane, are the built-in tools the
+ * session is made with (its own configuration: no edit or write), where its host takes them.
  */
-export async function createForkSession({ sessionId, conversationId, fromCwd, path, title, node, at, agent, requestId }, { env = process.env, settings, connect = connectHost } = {}) {
+export async function createForkSession({ sessionId, conversationId, fromCwd, path, title, node, at, agent, requestId, lane, tools }, { env = process.env, settings, connect = connectHost } = {}) {
   const hosts = settings ?? readClientSettings(agentDirOf(env));
   const here = resolveDaemonHost("", { settings: hosts, env });
   const local = await connect(here);
@@ -122,6 +168,7 @@ export async function createForkSession({ sessionId, conversationId, fromCwd, pa
     if (node === undefined || node === here.name) {
       const info = await local.call("host.info", {}).catch(() => undefined);
       if (info?._meta?.[SESSION_FORK_META] !== true) throw new ForkSessionError("unsupported", "this pi-daemon cannot fork sessions (1.14 or later can)");
+      const restricted = Array.isArray(tools) && takesTools(info);
       const created = recordOf(await local.call("sessions.create", {
         requestId: forkRequestId(["local", sessionId, conversationId ?? null, path, title, at]),
         fork: {
@@ -132,9 +179,12 @@ export async function createForkSession({ sessionId, conversationId, fromCwd, pa
         },
         cwd: path,
         title,
+        ...(restricted ? { tools } : {}),
       }, { timeoutMs: FORK_CREATE_TIMEOUT_MS }));
       if (typeof created?.id !== "string") throw new Error("the host did not return the new session");
-      return { id: created.id, title, cwd: typeof created.cwd === "string" ? created.cwd : path };
+      const made = { id: created.id, title, cwd: typeof created.cwd === "string" ? created.cwd : path };
+      if (lane === undefined) return made;
+      return { ...made, lane: await laneOutcome(local, created.id, lane, restricted, { requestId: forkRequestId(["lane", created.id, at]) }) };
     }
     let target;
     try {
@@ -151,16 +201,39 @@ export async function createForkSession({ sessionId, conversationId, fromCwd, pa
       const model = agent?.model && typeof agent.model.provider === "string" ? `${agent.model.provider}/${agent.model.modelId ?? agent.model.id}` : undefined;
       const thinking = typeof agent?.thinkingLevel === "string" ? agent.thinkingLevel : undefined;
       const requestId = forkRequestId(["across", here.name, sessionId, conversationId ?? null, read.at ?? read.messages.length, node, path, title, at]);
-      const base = { requestId, cwd: path, title, ...(profile === undefined ? {} : { profile }) };
-      const withModel = { ...base, ...(model === undefined ? {} : { model }), ...(thinking === undefined ? {} : { thinking }) };
-      const created = recordOf(await there.call("sessions.create", withModel).catch((error) => {
-        if (!refusedModel(error) || withModel === base) throw error;
-        // That host lacks this model: its default then.
-        return there.call("sessions.create", base);
-      }));
+      let params = {
+        requestId,
+        cwd: path,
+        title,
+        ...(profile === undefined ? {} : { profile }),
+        ...(model === undefined ? {} : { model }),
+        ...(thinking === undefined ? {} : { thinking }),
+        ...(Array.isArray(tools) ? { tools } : {}),
+      };
+      let created;
+      for (;;) {
+        try {
+          created = recordOf(await there.call("sessions.create", params));
+          break;
+        } catch (error) {
+          // That host lacks this model (its default then), or takes no such tools (its profile's then).
+          if (refusedModel(error) && (params.model !== undefined || params.thinking !== undefined)) {
+            const { model: _model, thinking: _thinking, ...rest } = params;
+            params = rest;
+          } else if (refusedTools(error) && params.tools !== undefined) {
+            // A tool that host's profile lacks is left out; one it cannot name, all of them.
+            const named = /tools: "([^"]+)"/.exec(String(error.message))?.[1];
+            const kept = named !== undefined && params.tools.includes(named) ? params.tools.filter((tool) => tool !== named) : [];
+            const { tools: _tools, ...rest } = params;
+            params = kept.length > 0 ? { ...rest, tools: kept } : rest;
+          } else throw error;
+        }
+      }
+      const restricted = params.tools !== undefined;
       if (typeof created?.id !== "string") throw new Error(`${node} did not return the new session`);
       const cwd = typeof created.cwd === "string" && created.cwd !== "" ? created.cwd : path;
       const messages = [...read.messages, relocationNote({ host: here.name, cwd: fromCwd }, { host: node, cwd })];
+      if (lane !== undefined) messages.push(laneMessage({ ...lane, ...(restricted ? { restricted: true } : {}) }));
       try {
         const batches = copyBatches(messages);
         for (const [index, batch] of batches.entries()) {
@@ -177,7 +250,9 @@ export async function createForkSession({ sessionId, conversationId, fromCwd, pa
         await there.call("sessions.dispose", { sessionId: created.id }).catch(() => undefined);
         throw new Error(`copying this conversation to ${node} failed: ${error.message}`);
       }
-      return { id: created.id, title, cwd, host: node };
+      const made = { id: created.id, title, cwd, host: node };
+      if (lane === undefined) return made;
+      return { ...made, lane: await laneOutcome(there, created.id, lane, restricted, { requestId: forkRequestId(["lane", node, created.id, at]), noted: true }) };
     } finally {
       there.close();
     }
@@ -186,19 +261,38 @@ export async function createForkSession({ sessionId, conversationId, fromCwd, pa
   }
 }
 
-/** The pi-git module's call: this command's conversation, or "unsupported" without pi-daemon's harness. */
-export async function forkSessionFor(ctx, { path, title, node, at }, options = {}) {
+/**
+ * The pi-git module's call: this command's conversation, or "unsupported" without pi-daemon's
+ * harness. A qa `lane` makes the session with this one's built-in tools less edit and write.
+ */
+export async function forkSessionFor(ctx, { path, title, node, at, lane }, options = {}) {
   if (!ctx?.sessionId || typeof ctx.harness?.conversation !== "function") throw new ForkSessionError("unsupported", "this pi-daemon gives module commands no harness");
   let agent;
-  if (node !== undefined) {
+  if (node !== undefined || lane?.mode === "qa") {
     const conversation = await ctx.harness.conversation(ctx.conversationId, ctx.context).catch(() => undefined);
     agent = await conversation?.agent?.(ctx.context).catch(() => undefined);
   }
+  const tools = lane?.mode === "qa" ? qaToolNames(agent) : undefined;
   // This worker's own variables win: PI_DAEMON_URL is its own host's, whatever the session sets.
   const env = typeof ctx.env?.all === "function" ? { ...(await ctx.env.all().catch(() => ({}))), ...process.env } : process.env;
   // The id of the client's command that runs this (pi-daemon 1.15 tells module commands theirs).
   const requestId = typeof ctx.requestId === "string" ? ctx.requestId : undefined;
-  return createForkSession({ sessionId: ctx.sessionId, conversationId: ctx.conversationId, fromCwd: ctx.cwd, path, title, node, at, agent, ...(requestId === undefined ? {} : { requestId }) }, { env, ...options });
+  return createForkSession(
+    {
+      sessionId: ctx.sessionId,
+      conversationId: ctx.conversationId,
+      fromCwd: ctx.cwd,
+      path,
+      title,
+      node,
+      at,
+      agent,
+      ...(requestId === undefined ? {} : { requestId }),
+      ...(lane === undefined ? {} : { lane }),
+      ...(tools === undefined ? {} : { tools }),
+    },
+    { env, ...options },
+  );
 }
 
 export { localNodeName };
